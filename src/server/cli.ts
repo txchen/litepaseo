@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { serve } from "@hono/node-server";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   mkdirSync,
@@ -18,13 +18,10 @@ import { createServer, connect } from "node:net";
 import { Store } from "./store.ts";
 import { Hosts } from "./hosts.ts";
 import { createApp } from "./app.ts";
+import { resolveDataDirectory } from "./data-dir.ts";
 const command = process.argv[2] ?? "help";
-const directory = resolve(
-  process.env.LITEPASEO_DATA_DIR ??
-    (process.platform === "darwin"
-      ? join(homedir(), "Library/Application Support/LitePaseo")
-      : join(process.env.XDG_DATA_HOME ?? join(homedir(), ".local/share"), "litepaseo")),
-);
+const { directory, notice } = await resolveDataDirectory(process.env, homedir(), process.platform);
+if (notice) console.error(notice);
 mkdirSync(directory, { recursive: true, mode: 0o700 });
 process.umask(0o077);
 const socket = join(directory, "control.sock"),
@@ -50,7 +47,8 @@ async function main() {
         "  token        print the access token (sign-in fallback)",
         "  totp-reset   turn off authenticator sign-in (lost phone)",
         "  signout-all  revoke every signed-in browser and its notifications",
-        "Environment: LITEPASEO_DATA_DIR, LITEPASEO_PORT (8787), LITEPASEO_BIND (127.0.0.1),",
+        `Data: ${directory}`,
+        "Environment: LITEPASEO_HOME (default ~/.litepaseo), LITEPASEO_PORT (8787), LITEPASEO_BIND (127.0.0.1),",
         "  LITEPASEO_PUSH_SUBJECT (mailto: or https: contact for push services)",
       ].join("\n"),
     );

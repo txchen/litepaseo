@@ -11,6 +11,7 @@ import { parseHostTarget } from "@getpaseo/client/node";
 import { Store, type LoginSession } from "./store.ts";
 import { Auth, SESSION_TTL_MS } from "./auth.ts";
 import { Notifier, vapidKeys, webPushSender, type PushSender } from "./notifier.ts";
+import { UsageService } from "./usage.ts";
 import { Hosts, UnknownHostError } from "./hosts.ts";
 import type {
   CreateSessionRequest,
@@ -118,6 +119,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
     hostLabel: (id) => hosts.label(id) || store.hosts().find((h) => h.id === id)?.label || "",
   });
   hosts.onTransition((previous, next) => notifier.transition(previous, next));
+  const usage = new UsageService(hosts);
   store.pruneSessions(Date.now());
   const secure = (c: { req: { url: string; header: (name: string) => string | undefined } }) =>
     c.req.header("x-forwarded-proto") === "https" || c.req.url.startsWith("https:");
@@ -516,6 +518,41 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
     await agent.respondToPermission({ requestId: c.req.param("permission"), response });
     return c.json({ status: "acknowledged" });
   });
+  // ---- Task board actions ----------------------------------------------------------------------
+  /** Marks a settled turn as seen (Paseo's attention flag), moving it out of "review". */
+  app.post("/api/hosts/:host/agents/:agent/read", async (c) => {
+    await hosts.get(c.req.param("host")).driver.clearAgentAttention(c.req.param("agent"));
+    return c.json({ ok: true });
+  });
+  app.post("/api/hosts/:host/agents/:agent/archive", async (c) => {
+    await hosts.get(c.req.param("host")).api.agents.ref(c.req.param("agent")).archive();
+    return c.json({ ok: true });
+  });
+
+  // ---- Plugins whose daemon side LitePaseo drives ------------------------------------------------
+  /**
+   * next-input: the daemon appends a placeholder row after a completed turn; prediction runs only
+   * when a client that shows the row asks. Only this one plugin method is reachable from here.
+   */
+  app.post("/api/hosts/:host/agents/:agent/suggestion", async (c) => {
+    const { token } = z.object({ token: z.string().min(1).max(200) }).parse(await c.req.json());
+    try {
+      const output = (await hosts
+        .get(c.req.param("host"))
+        .driver.invokePluginRpc("next-input", "suggestions.predict", { agentId: c.req.param("agent"), token })) as {
+        status?: string;
+        text?: string;
+      };
+      return c.json({ status: String(output?.status ?? "error"), text: String(output?.text ?? "") });
+    } catch (error) {
+      if (error instanceof UnknownHostError) throw error;
+      return c.json({ status: "unavailable", text: "" });
+    }
+  });
+
+  // ---- Usage across hosts ------------------------------------------------------------------------
+  app.get("/api/usage", async (c) => c.json(await usage.report(c.req.query("refresh") === "1")));
+
   app.get("/api/board", (c) => c.json(store.board()));
   app.put("/api/board", async (c) => {
     const b = z

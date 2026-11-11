@@ -52,6 +52,9 @@ const agents = Array.from({ length: 64 }, (_, i) => {
     projectKey: projects[i % projects.length],
     activityAt: 1_000_000 - i,
     attention: pending.length > 0,
+    state: pending.length ? "needs_input" : i === 0 || i === 4 ? "running" : i === 7 ? "failed" : i % 5 === 2 ? "unread" : "done",
+    unread: !pending.length && (i === 7 || i % 5 === 2),
+    lastError: i === 7 ? "codex exited with code 1: rate limit reached for gpt-5-codex" : null,
     pendingPermissions: pending,
   };
 });
@@ -75,7 +78,10 @@ const rows = [
   row({ type: "tool_call", callId: "c3", name: "edit", status: "completed", error: null, detail: { type: "edit", filePath: "src/server/host-directory.ts" } }),
   row({ type: "tool_call", callId: "c4", name: "shell", status: "failed", error: "exit code 1", detail: { type: "shell", command: "npm test" } }),
   row({ type: "assistant_message", text: "One test failed because the fixture used the old paging API. Fixing it now and re-running the suite." }),
-  row({ type: "tool_call", callId: "c5", name: "shell", status: "running", error: null, detail: { type: "shell", command: "npm test" } }),
+  row({ type: "tool_call", callId: "c5", name: "shell", status: "completed", error: null, detail: { type: "shell", command: "npm test" } }),
+  row({ type: "assistant_message", text: "All 32 tests pass now." }),
+  row({ type: "plugin", pluginId: "turn-speed", id: "t1", kind: "turn-speed", version: 1, data: { provider: "codex", outputTokens: 18432, generationMs: 211000, requests: 14, tokensPerSecond: 87.4 } }),
+  row({ type: "plugin", pluginId: "next-input", id: "s1", kind: "next-input", version: 1, data: { agentId: "a1", workspaceId: "w", token: "tok", status: "idle", text: "" } }),
 ];
 const sse = (...events) => ({
   status: 200,
@@ -95,6 +101,28 @@ try {
     );
     await page.route("**/timeline/stream", (route) =>
       route.fulfill(sse({ type: "ops", ops: [{ type: "reset", epoch: "e", rows, hasOlder: true, startCursor: { epoch: "e", seq: 1 } }] })),
+    );
+    await page.route("**/suggestion", (route) =>
+      route.fulfill({ json: { status: "ready", text: "Great — now wire the board into the sidebar and add a test for it." } }),
+    );
+    await page.route("**/api/usage**", (route) =>
+      route.fulfill({
+        json: {
+          fetchedAt: new Date().toISOString(),
+          unavailableHosts: [],
+          accounts: [
+            { key: "c", providerId: "codex", name: "Codex", plan: "Pro", source: null, status: "available", error: null, hosts: ["MacBook Pro", "build-01"], windows: [
+              { id: "5h", label: "5-hour", shortLabel: "5h", remainingPct: 72, resetsAt: new Date(Date.now() + 2.4 * 3600e3).toISOString(), tone: null },
+              { id: "wk", label: "Weekly", shortLabel: "wk", remainingPct: 23, resetsAt: new Date(Date.now() + 4.2 * 86400e3).toISOString(), tone: null },
+            ] },
+            { key: "a", providerId: "claude", name: "Claude", plan: "Max", source: null, status: "available", error: null, hosts: ["MacBook Pro"], windows: [
+              { id: "5h", label: "5-hour", shortLabel: "5h", remainingPct: 96, resetsAt: new Date(Date.now() + 4.1 * 3600e3).toISOString(), tone: null },
+              { id: "wk", label: "Weekly", shortLabel: "wk", remainingPct: 61, resetsAt: new Date(Date.now() + 2.2 * 86400e3).toISOString(), tone: null },
+              { id: "op", label: "Weekly · Opus", shortLabel: "Opus", remainingPct: 7, resetsAt: new Date(Date.now() + 2.2 * 86400e3).toISOString(), tone: null },
+            ] },
+          ],
+        },
+      }),
     );
     await page.route("**/providers", (route) =>
       route.fulfill({
@@ -126,6 +154,7 @@ try {
     await login(page);
     await page.getByRole("button", { name: /Fix flaky websocket/ }).first().click();
     await page.locator(".row-todo").waitFor();
+    await page.locator(".row-suggestion.is-ready").waitFor();
   };
   const desktop = { viewport: { width: 1440, height: 900 } };
   const mobile = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 };
@@ -140,6 +169,22 @@ try {
   await shoot("desktop-board", desktop, async (page) => {
     await login(page);
     await page.getByRole("button", { name: /Kanban/ }).click();
+    await page.locator(".task-card").first().waitFor();
+  });
+  await shoot("desktop-board-dark", { ...desktop, colorScheme: "dark" }, async (page) => {
+    await login(page);
+    await page.getByRole("button", { name: /Kanban/ }).click();
+    await page.locator(".task-card").first().waitFor();
+  });
+  await shoot("mobile-board", mobile, async (page) => {
+    await login(page);
+    await page.getByRole("button", { name: /Kanban/ }).click();
+    await page.locator(".task-card").first().waitFor();
+  });
+  await shoot("usage-open", desktop, async (page) => {
+    await login(page);
+    await page.locator(".usage-summary").click();
+    await page.getByText("Usage left").waitFor();
   });
   await shoot("desktop-host-filter", desktop, async (page) => {
     await login(page);

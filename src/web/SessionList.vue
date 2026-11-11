@@ -103,6 +103,7 @@ onUnmounted(() => {
           v-else
           class="session"
           :class="{
+            unread: row.agent.unread,
             chosen: selectedKey === row.agent.key,
             offline: hostStates.get(row.agent.hostId) !== 'connected',
             nested: mode === 'projects',
@@ -112,7 +113,18 @@ onUnmounted(() => {
         >
           <span
             class="status-dot"
-            :class="'is-' + (row.agent.pendingPermissions.length ? 'attention' : row.agent.status)"
+            :class="
+              'is-' +
+              (row.agent.attention
+                ? 'attention'
+                : row.agent.state === 'failed'
+                  ? 'error'
+                  : row.agent.state === 'running'
+                    ? 'running'
+                    : row.agent.unread
+                      ? 'unread'
+                      : 'idle')
+            "
           ></span>
           <span class="session-text">
             <span class="session-title">{{ row.agent.title || "Untitled session" }}</span>
@@ -130,6 +142,7 @@ onUnmounted(() => {
           </span>
           <span v-if="row.agent.pendingPermissions.length" class="pill pill-attention">Approve</span>
           <span v-else-if="row.agent.attention" class="pill pill-attention">Needs you</span>
+          <span v-else-if="row.agent.unread" class="unread-mark" title="Finished, not viewed yet"></span>
         </button>
       </template>
     </div>

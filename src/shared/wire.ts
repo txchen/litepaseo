@@ -9,6 +9,18 @@ export interface Permission {
   actions?: { id: string; label?: string }[];
 }
 
+/**
+ * Where an agent stands from the user's side, per Paseo's own `deriveAgentStateBucket`:
+ * needs_input (a permission or question), running, failed, unread (a finished turn not yet
+ * looked at), done. `initializing` counts as running: work in flight, not a finished task.
+ */
+export type AgentState = "needs_input" | "running" | "failed" | "unread" | "done";
+/** Task-board lanes. Failed and unread share "review": both want a look. */
+export type Lane = "needs_input" | "running" | "review" | "done";
+export const LANES: Lane[] = ["needs_input", "running", "review", "done"];
+export const laneOf = (state: AgentState): Lane =>
+  state === "failed" || state === "unread" ? "review" : state;
+
 /** The subset of a daemon agent snapshot the console renders. */
 export interface AgentSummary {
   key: string;
@@ -23,9 +35,18 @@ export interface AgentSummary {
   projectKey: string | null;
   /** Milliseconds: when the session's latest turn ended (held while a turn runs). Sort key. */
   activityAt: number;
+  /** Needs the user's input: a pending permission or question (drives push and the badge). */
   attention: boolean;
+  state: AgentState;
+  /** A settled turn the user has not looked at yet (Paseo's requiresAttention). */
+  unread: boolean;
+  lastError: string | null;
   pendingPermissions: Permission[];
 }
+
+/** "Run npm test" → "run npm test", for use mid-sentence ("wants to run npm test"). */
+export const midSentence = (text: string) =>
+  /^[A-Z][a-z]/.test(text) ? text[0].toLowerCase() + text.slice(1) : text;
 
 export interface HostState {
   id: string;

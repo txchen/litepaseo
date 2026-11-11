@@ -1,5 +1,5 @@
 import webpush from "web-push";
-import type { AgentSummary } from "../shared/wire.ts";
+import { midSentence, type AgentSummary } from "../shared/wire.ts";
 import type { PushPrefs, PushSubscriptionRecord, Store } from "./store.ts";
 
 export type NotificationKind = "attention" | "turn-done" | "turn-failed";
@@ -97,7 +97,7 @@ export class Notifier {
       const what = permission
         ? permission.kind === "question"
           ? `asks: ${permission.title || permission.name}`
-          : `wants to ${permission.title || permission.name}`
+          : `wants to ${midSentence(permission.title || permission.name)}`
         : "is waiting for you";
       this.emit("attention", next, `${next.project} · needs your input`, `${next.title || "Session"} ${what}`);
     } else if (previous.status === "running" && next.status !== "running") {

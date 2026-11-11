@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, onUnmounted, provide, ref, shallowRef, watch } from "vue";
 import type { DirectoryMessage, HostState, Permission, TimelineMessage } from "../shared/wire.ts";
 import { DirectoryStore } from "./directory-store.ts";
 import { TimelineStore } from "./timeline-store.ts";
@@ -11,6 +11,10 @@ import type { ProjectGroup } from "./directory-store.ts";
 import Icon from "./Icon.vue";
 import { cycleTheme, theme } from "./theme.ts";
 import Settings from "./Settings.vue";
+import AgentBoard from "./AgentBoard.vue";
+import UsagePanel, { type UsageReport } from "./UsagePanel.vue";
+import { SUGGESTIONS } from "./suggestions.ts";
+import type { AgentSummary } from "../shared/wire.ts";
 import { registerServiceWorker, setBadge } from "./pwa.ts";
 
 type Card = {
@@ -197,6 +201,9 @@ async function enter() {
   board.value = await api("/board");
   openDirectory();
   void registerServiceWorker();
+  void loadUsage();
+  clearInterval(usageTimer);
+  usageTimer = setInterval(() => void loadUsage(), 5 * 60_000);
   // A notification tap opens /?session=<key>; select it once and clean the address.
   const wanted = new URLSearchParams(location.search).get("session");
   if (wanted) {
@@ -315,8 +322,79 @@ function onCreated(key: string) {
   select(key);
 }
 const pendingSelection = computed(() => !!selectedKey.value && !active.value);
+
+// Kanban: live agent lanes (default) or the hand-made plan.
+const boardMode = ref<"agents" | "plan">(localStorage.getItem("litepaseo-board-mode") === "plan" ? "plan" : "agents");
+watch(boardMode, (mode) => localStorage.setItem("litepaseo-board-mode", mode));
+async function stopAgent(a: AgentSummary) {
+  await action(async () => void (await api(path(a) + "/stop", "POST")));
+}
+async function markRead(a: AgentSummary) {
+  await action(async () => void (await api(path(a) + "/read", "POST", {})));
+}
+async function archiveAgent(a: AgentSummary) {
+  if (!confirm(`Archive “${a.title || "this session"}”? It leaves the board and sidebar; the host keeps its history.`)) return;
+  await action(async () => void (await api(path(a) + "/archive", "POST", {})));
+}
+
+// Opening a finished-but-unseen conversation marks it read, as the official app does.
+let readSent = "";
+watch(
+  () => (active.value && active.value.unread && timeline.value.membership.value >= 0 && timeline.value.ready ? active.value : null),
+  (a) => {
+    if (!a || document.hidden) return;
+    const marker = `${a.key}@${a.activityAt}`;
+    if (readSent === marker) return;
+    readSent = marker;
+    void api(path(a) + "/read", "POST", {}).catch(() => (readSent = ""));
+  },
+);
+
+// next-input suggestions: rows ask through these; the newest ready one is the Tab completion.
+const suggestion = ref<{ key: string; seqStart: number; text: string } | null>(null);
+provide(SUGGESTIONS, {
+  predict: (token) => {
+    const a = active.value;
+    if (!a) return Promise.resolve({ status: "expired", text: "" });
+    return api(path(a) + "/suggestion", "POST", { token }, 65_000);
+  },
+  use: (text) => {
+    prompt.value = text;
+    void nextTick(() => {
+      autosize();
+      composerElement.value?.focus();
+    });
+  },
+  send: (text) => void sendText(text),
+  offer: (seqStart, text) => {
+    const a = active.value;
+    if (!a) return;
+    if (!suggestion.value || suggestion.value.key !== a.key || seqStart >= suggestion.value.seqStart)
+      suggestion.value = { key: a.key, seqStart, text };
+  },
+});
+const composerSuggestion = computed(() =>
+  suggestion.value && suggestion.value.key === active.value?.key && !prompt.value ? suggestion.value.text : "",
+);
+
+// Usage across hosts, read while the app is visible (the server caches each host for 5 min).
+const usage = shallowRef<UsageReport | null>(null);
+const usageLoading = ref(false);
+let usageTimer: ReturnType<typeof setInterval> | undefined;
+async function loadUsage(refresh = false) {
+  if (!authenticated.value || document.hidden) return;
+  usageLoading.value = true;
+  try {
+    usage.value = await api("/usage" + (refresh ? "?refresh=1" : ""));
+  } catch {
+    // keep the last report
+  } finally {
+    usageLoading.value = false;
+  }
+}
 watch(selectedKey, () => {
   uncertain.value = null;
+  suggestion.value = null;
 });
 // The timeline stream follows the selected agent while it exists in the directory, so a
 // just-created session opens when it arrives and an archived one releases its subscription.
@@ -379,6 +457,12 @@ function autosize() {
   el.style.height = Math.min(el.scrollHeight, Math.round(window.innerHeight * 0.4)) + "px";
 }
 function onComposerKey(event: KeyboardEvent) {
+  if (event.key === "Tab" && !event.shiftKey && composerSuggestion.value) {
+    event.preventDefault();
+    prompt.value = composerSuggestion.value;
+    void nextTick(autosize);
+    return;
+  }
   if (event.key !== "Enter" || event.isComposing) return;
   // Desktop: Enter sends, Shift+Enter breaks. Touch keyboards keep Enter for new lines.
   if ((!coarsePointer && !event.shiftKey) || event.metaKey || event.ctrlKey) {
@@ -387,13 +471,17 @@ function onComposerKey(event: KeyboardEvent) {
   }
 }
 async function send() {
+  await sendText(prompt.value, true);
+}
+async function sendText(text: string, fromComposer = false) {
   const a = active.value;
-  if (!a || !prompt.value.trim() || uncertain.value || busy.value) return;
-  const sent = { text: prompt.value, messageId: crypto.randomUUID() };
+  if (!a || !text.trim() || uncertain.value || busy.value) return;
+  const sent = { text, messageId: crypto.randomUUID() };
   await action(async () => {
     try {
       await api(path(a) + "/messages", "POST", { ...sent, behavior: behavior.value });
-      prompt.value = "";
+      suggestion.value = null;
+      if (fromComposer) prompt.value = "";
       void nextTick(autosize);
       scrollToBottom();
     } catch (e) {
@@ -476,7 +564,11 @@ watch(waiting, (count) => {
   setBadge(count);
   document.title = count ? `(${count}) LitePaseo` : "LitePaseo";
 });
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) void loadUsage();
+});
 onUnmounted(() => {
+  clearInterval(usageTimer);
   window.removeEventListener("popstate", onPopState);
   window.removeEventListener("keydown", onGlobalKey);
   directoryStream?.close();
@@ -617,6 +709,7 @@ onUnmounted(() => {
         @select="select"
         @new="startNew"
       />
+      <UsagePanel :report="usage" :loading="usageLoading" @refresh="loadUsage(true)" />
     </aside>
 
     <main class="main">
@@ -690,10 +783,31 @@ onUnmounted(() => {
           </button>
           <div>
             <h1>Kanban</h1>
-            <p class="subtle">Planning only. Moving a card never changes an agent.</p>
+            <p class="subtle">
+              {{
+                boardMode === "agents"
+                  ? "Every agent by state, live. Follows the host filter and search."
+                  : "Your own plan. Moving a card never changes an agent."
+              }}
+            </p>
+          </div>
+          <div class="segmented head-toggle" role="radiogroup" aria-label="Board">
+            <button :class="{ chosen: boardMode === 'agents' }" @click="boardMode = 'agents'">Agents</button>
+            <button :class="{ chosen: boardMode === 'plan' }" @click="boardMode = 'plan'">Plan</button>
           </div>
         </header>
         <div class="page-body wide">
+          <AgentBoard
+            v-if="boardMode === 'agents'"
+            :store="directory"
+            :host-labels="hostLabels"
+            :busy="busy"
+            @open="select"
+            @stop="stopAgent"
+            @read="markRead"
+            @archive="archiveAgent"
+          />
+          <template v-else>
           <form class="add-card" @submit.prevent="addCard">
             <input v-model="cardTitle" placeholder="New task" required />
             <button class="btn btn-primary" :disabled="busy"><Icon name="plus" :size="15" />Add task</button>
@@ -726,6 +840,7 @@ onUnmounted(() => {
               <p v-if="!cardsByColumn.get(column)!.length" class="column-empty">Nothing here</p>
             </div>
           </div>
+          </template>
         </div>
       </section>
 
@@ -804,7 +919,7 @@ onUnmounted(() => {
                 ref="composerElement"
                 v-model="prompt"
                 rows="1"
-                placeholder="Message this agent…"
+:placeholder="composerSuggestion && !coarsePointer ? composerSuggestion : 'Message this agent…'"
                 required
                 @input="autosize"
                 @keydown="onComposerKey"
@@ -816,7 +931,13 @@ onUnmounted(() => {
                     Interrupt
                   </button>
                 </div>
-                <span v-else class="composer-hint hide-sm">{{ coarsePointer ? "" : "Enter to send · Shift+Enter for a new line" }}</span>
+                <span v-else class="composer-hint hide-sm">{{
+                    composerSuggestion && !coarsePointer
+                      ? "Tab to use the suggestion"
+                      : coarsePointer
+                        ? ""
+                        : "Enter to send · Shift+Enter for a new line"
+                  }}</span>
                 <div class="composer-actions">
                   <button
                     v-if="running"

@@ -61,6 +61,9 @@ try {
     projectKey: null,
     activityAt: 1,
     attention: pending.length > 0,
+    state: pending.length ? "needs_input" : host === "alpha" ? "unread" : "done",
+    unread: !pending.length && host === "alpha",
+    lastError: null,
     pendingPermissions: pending,
   });
   const hostsEvent = {
@@ -99,7 +102,33 @@ try {
         : sse(hostsEvent),
     );
   });
-  const creations = [];
+  const creations = [],
+    predictions = [],
+    reads = [];
+  await page.route("**/api/usage**", (route) =>
+    route.fulfill({
+      json: {
+        fetchedAt: new Date().toISOString(),
+        unavailableHosts: [],
+        accounts: [
+          {
+            key: "codex",
+            providerId: "codex",
+            name: "Codex",
+            plan: "Pro",
+            source: null,
+            status: "available",
+            error: null,
+            hosts: ["Alpha", "Beta"],
+            windows: [
+              { id: "5h", label: "5-hour", shortLabel: "5h", remainingPct: 91, resetsAt: new Date(Date.now() + 3 * 3600e3).toISOString(), tone: null },
+              { id: "wk", label: "Weekly", shortLabel: "wk", remainingPct: 8, resetsAt: new Date(Date.now() + 3 * 86400e3).toISOString(), tone: null },
+            ],
+          },
+        ],
+      },
+    }),
+  );
   await page.route("**/api/hosts**", async (route) => {
     const p = new URL(route.request().url()).pathname;
     const host = p.split("/")[3];
@@ -144,11 +173,33 @@ try {
                   provider: "codex",
                   item: { type: "assistant_message", text: `Hello from ${host}` },
                 },
+                {
+                  seqStart: 2,
+                  seqEnd: 2,
+                  timestamp: "t",
+                  provider: "codex",
+                  item: { type: "plugin", pluginId: "turn-speed", id: "turn-1", kind: "turn-speed", version: 1, data: { provider: "codex", outputTokens: 12345, generationMs: 41200, requests: 6, tokensPerSecond: 87.2 } },
+                },
+                {
+                  seqStart: 3,
+                  seqEnd: 3,
+                  timestamp: "t",
+                  provider: "codex",
+                  item: { type: "plugin", pluginId: "next-input", id: "suggestion-tok", kind: "next-input", version: 1, data: { agentId: "shared-id", workspaceId: "w", token: "tok-" + host, status: "idle", text: "" } },
+                },
               ],
             },
           ],
         }),
       );
+    if (p.endsWith("/suggestion")) {
+      predictions.push({ host, ...route.request().postDataJSON() });
+      return route.fulfill({ json: { status: "ready", text: "Now add tests for the board" } });
+    }
+    if (p.endsWith("/read")) {
+      reads.push(host);
+      return route.fulfill({ json: { ok: true } });
+    }
     if (p.endsWith("/messages")) {
       messages.push({ host, ...route.request().postDataJSON() });
       return route.fulfill({ json: { status: "acknowledged" } });
@@ -164,7 +215,7 @@ try {
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await page.getByRole("button", { name: /beta conversation/ }).click();
   await page.getByText("Hello from beta", { exact: true }).waitFor();
-  await page.getByPlaceholder("Message this agent…").fill("Hello beta");
+  await page.locator(".composer textarea").fill("Hello beta");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await page.waitForFunction(() => document.querySelector(".composer textarea").value === "");
   assert.equal(messages[0].host, "beta");
@@ -201,7 +252,33 @@ try {
   );
   assert.equal(await dialog.count(), 0, "the dialog closes after creation");
 
+  // Plugin rows: turn speed, and a next-input suggestion predicted on demand and taken with Tab.
+  await page.getByRole("button", { name: /beta conversation/ }).click();
+  await page.getByText("87.2 tok/s · 12.3k tokens · 41.2s · 6 requests").waitFor();
+  await page.getByText("Now add tests for the board").waitFor();
+  assert.deepEqual(predictions.at(-1), { host: "beta", token: "tok-beta" });
+  await page.locator(".composer textarea").focus();
+  await page.keyboard.press("Tab");
+  assert.equal(await page.locator(".composer textarea").inputValue(), "Now add tests for the board");
+  await page.locator(".composer textarea").fill("");
+
+  // Opening an unread conversation marks it read.
+  await page.getByRole("button", { name: /alpha conversation/ }).click();
+  await page.waitForFunction(() => true);
+  for (let i = 0; i < 50 && !reads.includes("alpha"); i++) await page.waitForTimeout(100);
+  assert.ok(reads.includes("alpha"), "viewing an unread session clears its unread state");
+
+  // Usage across hosts in the sidebar.
+  await page.getByRole("button", { name: /Codex/ }).click();
+  await page.getByText("Usage left").waitFor();
+  await page.getByText("8% left").waitFor();
+  await page.getByRole("button", { name: "Close" }).last().click();
+
+  // Kanban: live agent lanes by default.
   await page.getByRole("button", { name: "Kanban", exact: true }).click();
+  await page.locator(".lane-review .task-card", { hasText: "alpha conversation" }).waitFor();
+  assert.equal(await page.locator(".lane-needs_input .task-card").count(), 0);
+  await page.getByRole("button", { name: "Plan", exact: true }).click();
   await page.getByPlaceholder("New task").fill("Validate two hosts");
   await page.getByRole("button", { name: "Add task", exact: true }).click();
   await page.getByText("Validate two hosts", { exact: true }).waitFor();

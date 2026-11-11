@@ -1,5 +1,6 @@
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
-import type { AgentSummary, Permission } from "../shared/wire.ts";
+import { deriveAgentStateBucket } from "@getpaseo/protocol/agent-state-bucket";
+import type { AgentState, AgentSummary, Permission } from "../shared/wire.ts";
 import type { VersionedCollection } from "./versioned-collection.ts";
 
 type SyncCursor = { generation: string; afterSeq: number };
@@ -94,6 +95,18 @@ export function summarize(
   activity = time(agent.updatedAt),
 ): AgentSummary {
   const permissions = (agent.pendingPermissions ?? []) as unknown as Permission[];
+  const bucket = deriveAgentStateBucket({
+    status: agent.status,
+    pendingPermissionCount: permissions.length,
+    requiresAttention: agent.requiresAttention,
+    attentionReason: agent.attentionReason,
+  });
+  const state: AgentState =
+    agent.status === "initializing" && bucket === "done"
+      ? "running"
+      : bucket === "attention"
+        ? "unread"
+        : bucket;
   return {
     key: `${hostId}:${agent.id}`,
     hostId,
@@ -105,7 +118,10 @@ export function summarize(
     project: project?.projectName || basename(agent.cwd) || "Other",
     projectKey: project?.projectKey ?? null,
     activityAt: activity,
-    attention: permissions.length > 0 || agent.requiresAttention === true,
+    attention: state === "needs_input",
+    state,
+    unread: agent.requiresAttention === true && state !== "needs_input",
+    lastError: agent.lastError ? agent.lastError.slice(0, 300) : null,
     pendingPermissions: permissions,
   };
 }

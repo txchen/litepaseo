@@ -1,7 +1,7 @@
 import { shallowRef } from "vue";
 import { OrderedIndex } from "../shared/ordered-index.ts";
 import { WeightedIndex } from "../shared/weighted-index.ts";
-import type { AgentSummary, DirectoryMessage } from "../shared/wire.ts";
+import { LANES, laneOf, type AgentSummary, type DirectoryMessage, type Lane } from "../shared/wire.ts";
 
 /** Sidebar geometry: fixed pitches keep scroll offsets computable without measuring. */
 export const GROUP_PITCH = 36;
@@ -41,6 +41,8 @@ class View {
   readonly flat = new OrderedIndex<AgentSummary>(compareAgents);
   readonly groups = new Map<string, ProjectGroup>();
   readonly index = new WeightedIndex<ProjectGroup>(compareGroups);
+  /** Task-board lanes, each in recency order, maintained with the rest of the view. */
+  readonly lanes = new Map<Lane, OrderedIndex<AgentSummary>>(LANES.map((l) => [l, new OrderedIndex(compareAgents)]));
   private readonly isCollapsed: (key: string) => boolean;
 
   constructor(isCollapsed: (key: string) => boolean) {
@@ -60,6 +62,7 @@ class View {
 
   add(agent: AgentSummary) {
     this.flat.insert(agent);
+    this.lanes.get(laneOf(agent.state ?? "done"))!.insert(agent);
     const key = groupKey(agent);
     let group = this.groups.get(key);
     if (group) this.index.remove(group); // its sort key may change below
@@ -74,6 +77,7 @@ class View {
 
   remove(agent: AgentSummary) {
     if (!this.flat.remove(agent)) return;
+    this.lanes.get(laneOf(agent.state ?? "done"))!.remove(agent);
     const group = this.groups.get(groupKey(agent));
     if (!group) return;
     this.index.remove(group);
@@ -92,6 +96,7 @@ class View {
     this.flat.clear();
     this.groups.clear();
     this.index.clear();
+    for (const lane of this.lanes.values()) lane.clear();
     this.waiting = 0;
   }
 
@@ -212,6 +217,14 @@ export class DirectoryStore {
   /** Flat recency order. */
   range(start: number, count: number) {
     return this.view.flat.range(start, count);
+  }
+
+  laneSize(lane: Lane) {
+    return this.view.lanes.get(lane)!.size;
+  }
+
+  laneRange(lane: Lane, start: number, count: number) {
+    return this.view.lanes.get(lane)!.range(start, count);
   }
 
   /** Height of the grouped list in pixels. */

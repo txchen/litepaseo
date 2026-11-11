@@ -7,7 +7,7 @@ import {
   compareAgents,
   groupKey,
 } from "../src/web/directory-store.ts";
-import type { AgentSummary } from "../src/shared/wire.ts";
+import { LANES, laneOf, type AgentSummary } from "../src/shared/wire.ts";
 
 const agent = (id: string, project: string, extra: Partial<AgentSummary> = {}): AgentSummary => ({
   key: (extra.hostId ?? "h") + ":" + id,
@@ -21,6 +21,9 @@ const agent = (id: string, project: string, extra: Partial<AgentSummary> = {}): 
   projectKey: null,
   activityAt: 0,
   attention: false,
+  state: "done",
+  unread: false,
+  lastError: null,
   pendingPermissions: [],
   ...extra,
 });
@@ -99,6 +102,7 @@ test("randomized: windows over the grouped view match a brute-force layout", () 
               hostId,
               activityAt: Math.floor(random() * 50),
               status: random() < 0.2 ? "running" : "idle",
+              state: (["needs_input", "running", "failed", "unread", "done"] as const)[Math.floor(random() * 5)],
               attention: random() < 0.1,
             })
           : null;
@@ -151,6 +155,11 @@ test("randomized: windows over the grouped view match a brute-force layout", () 
       `recent order at step ${step}`,
     );
     assert.equal(store.groupedHeight, top, `height at step ${step}`);
+    for (const lane of LANES) {
+      const want = visible.filter((x) => laneOf(x.state) === lane).sort(compareAgents).map((x) => x.key);
+      assert.equal(store.laneSize(lane), want.length, `lane ${lane} size at step ${step}`);
+      assert.deepEqual(store.laneRange(lane, 0, want.length).map((x) => x.key), want, `lane ${lane} at step ${step}`);
+    }
     assert.deepEqual(describe(store.groupedRows(0, top + 1)), expected, `layout at step ${step}`);
     // A random window returns exactly the rows that intersect it.
     const from = Math.floor(random() * Math.max(1, top));

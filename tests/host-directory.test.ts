@@ -222,3 +222,30 @@ test("activity time is the last turn end: held while running, ignores idle metad
   fake.update({ kind: "upsert", agent: agent("idle", { updatedAt: t(95), lastUserMessageAt: t(80) }), generation: "g1", seq: 72 });
   assert.equal(at("idle"), Date.parse(t(95)));
 });
+
+test("agent state follows Paseo's state bucket; a finished turn is unread, not needs-input", async () => {
+  const { summarize } = await import("../src/server/host-directory.ts");
+  const s = (extra: Record<string, unknown>) => summarize("h", agent("a", extra));
+  const permission = [{ id: "p", name: "Bash", kind: "tool" }];
+  assert.deepEqual(
+    [
+      s({ status: "running", pendingPermissions: permission }),
+      s({ status: "idle", requiresAttention: true, attentionReason: "permission" }),
+      s({ status: "running" }),
+      s({ status: "initializing" }),
+      s({ status: "error", lastError: "boom", requiresAttention: true, attentionReason: "error" }),
+      s({ status: "idle", requiresAttention: true, attentionReason: "finished" }),
+      s({ status: "idle" }),
+    ].map((x) => [x.state, x.attention, x.unread]),
+    [
+      ["needs_input", true, false],
+      ["needs_input", true, false],
+      ["running", false, false],
+      ["running", false, false],
+      ["failed", false, true],
+      ["unread", false, true],
+      ["done", false, false],
+    ],
+  );
+  assert.equal(s({ status: "error", lastError: "x".repeat(1000) }).lastError!.length, 300);
+});

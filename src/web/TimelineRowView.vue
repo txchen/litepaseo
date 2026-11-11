@@ -3,6 +3,7 @@ import { computed, ref, type ShallowRef } from "vue";
 import type { TimelineRow } from "../shared/wire.ts";
 import { renderMarkdown } from "./markdown.ts";
 import Icon from "./Icon.vue";
+import PluginRow from "./PluginRow.vue";
 
 // Receives the row's own ref: only this component re-renders when the row changes.
 const props = defineProps<{ entry: ShallowRef<TimelineRow> }>();
@@ -105,6 +106,8 @@ const label = computed(() => String(item.value.type).replaceAll("_", " "));
   <div v-else-if="item.type === 'compaction'" class="row row-divider">
     <span>{{ item.status === "loading" ? "Compacting context…" : "Context compacted" }}</span>
   </div>
+
+  <PluginRow v-else-if="item.type === 'plugin'" :item="item" :seq-start="row.seqStart" />
 
   <details v-else class="row row-tool" @toggle="open = ($event.target as HTMLDetailsElement).open">
     <summary>

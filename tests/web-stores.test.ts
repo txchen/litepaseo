@@ -16,6 +16,9 @@ const summary = (key: string, extra: Partial<AgentSummary> = {}): AgentSummary =
   projectKey: null,
   activityAt: 0,
   attention: false,
+  state: "done",
+  unread: false,
+  lastError: null,
   pendingPermissions: [],
   ...extra,
 });

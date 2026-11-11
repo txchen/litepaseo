@@ -103,9 +103,14 @@ test("cookie sign-in, CSRF header, revocation, and a daemon update becoming a pu
     assert.equal((await (await call("/health", { cookie })).json()).waiting, 1);
 
     // The turn ends: a second push.
-    observer.update({ type: "agent_update", payload: { kind: "upsert", agent: agent({ status: "idle" }), generation: "g", seq: 3 } });
+    // Paseo flags a finished turn for attention ("finished"); that is a turn-end, not a request for input.
+    observer.update({
+      type: "agent_update",
+      payload: { kind: "upsert", agent: agent({ status: "idle", requiresAttention: true, attentionReason: "finished" }), generation: "g", seq: 3 },
+    });
     await new Promise((r) => setImmediate(r));
     assert.deepEqual(pushes.map((p) => p.payload.title), ["litepaseo · needs your input", "litepaseo · turn finished"]);
+    assert.equal((await (await call("/health", { cookie })).json()).waiting, 0, "an unread finished turn is not waiting for input");
 
     // Devices and revocation: signing out the session removes its push subscription too.
     const devices = await (await call("/sessions", { cookie })).json();

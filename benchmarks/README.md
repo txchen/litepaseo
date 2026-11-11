@@ -94,6 +94,7 @@ checks, per-run results, CSV counters and the analysis script's grouped medians/
 Event logs may be gzip-compressed after collection; hashes refer to uncompressed bytes.
 The `harness/` directory archives the exact runner/server sources used for that run;
 its imports are relative to the original `benchmarks/` location.
-Smoke output is ignored by Git. These measurements establish a LitePaseo baseline;
+Smoke output, raw per-repetition data and archives are ignored by Git; only each
+run's top-level summaries are committed. These measurements establish a LitePaseo baseline;
 they do not compare official Paseo, measure daemon/provider cost or establish energy
 savings. See [the experiment plan and measured results](../docs/performance-plan.md).

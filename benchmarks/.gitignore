@@ -1,2 +1,7 @@
 runs/*-smoke/
 runs/*-preliminary/
+# Only per-run summaries are committed. Raw per-repetition data (events, samples,
+# per-repetition config with absolute paths) and archives stay local.
+runs/*/*/
+*.tar.gz
+diagnostics/

@@ -52,8 +52,8 @@ as a percentage of one logical core, not battery drain. All nine runs passed.
 
 These measurements preceded the final theme binding and async-layout follow
 handler. The run includes the precise product patch, new component source and
-built-asset hashes for that measured revision. Final-build smoke results are
-[recorded separately](../benchmarks/runs/2026-11-11T22-26-37.411Z-smoke/results.json);
+built-asset hashes for that measured revision. Final-build smoke results were
+recorded separately (smoke output is not kept in Git);
 do not interpret a two-second smoke as a new CPU benchmark.
 
 Content checks now compare the controlled fixtures' plain text/code body against

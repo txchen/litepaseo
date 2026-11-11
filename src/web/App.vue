@@ -125,8 +125,9 @@ function acknowledgeMessage() {
   if (selectedKey.value && uncertain.value) composer.resolve(selectedKey.value, uncertain.value.messageId);
 }
 function onComposerStorage(event: StorageEvent) {
+  if (event.storageArea !== localStorage) return;
   if (event.key === "litepaseo-composer-signout") composer.clear();
-  else composer.refresh();
+  else composer.onStorage(event.key, event.newValue); // O(1); ignores unrelated keys such as theme
 }
 window.addEventListener("storage", onComposerStorage);
 

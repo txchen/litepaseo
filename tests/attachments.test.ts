@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Attachments, MAX_FILE_BYTES } from "../src/server/attachments.ts";
+import { Attachments, MAX_FILE_BYTES, MAX_FILES_PER_OWNER } from "../src/server/attachments.ts";
 import { Hosts } from "../src/server/hosts.ts";
 import { Store } from "../src/server/store.ts";
 import { createApp } from "../src/server/app.ts";
@@ -12,13 +12,14 @@ import { randomUUID } from "node:crypto";
 function fakeHosts() {
   const hosts = new Hosts(), uploads: string[] = [], sends: any[] = [];
   let provider = "codex";
+  const facts = new Map<string, unknown>();
   const agent = { refresh: async () => {}, current: () => ({ provider }), capabilities: { supportsToolInvocations: true },
     send: async (text: string, options: any) => { sends.push({ text, options }); } };
-  hosts.clients.set("h", { api: { agents: { ref: () => agent } }, driver: {
+  hosts.clients.set("h", { directory: { facts: (id: string) => facts.get(id) }, api: { agents: { ref: () => agent } }, driver: {
     getConnectionState: () => ({ status: "connected" }),
     uploadFile: async (input: any) => { uploads.push(Buffer.from(input.bytes).toString()); return { file: { type: "uploaded_file", id: "remote", fileName: input.fileName, mimeType: input.mimeType, size: input.bytes.length, path: "/daemon/upload/file" }, error: null }; },
   } } as never);
-  return { hosts, uploads, sends, provider: (value: string) => { provider = value; } };
+  return { hosts, uploads, sends, facts, provider: (value: string) => { provider = value; }, agent };
 }
 
 test("attachment staging enforces ownership, limits, expiry and image signatures; upload happens only on send", async () => {
@@ -42,6 +43,35 @@ test("attachment staging enforces ownership, limits, expiry and image signatures
     assert.throws(() => store.get(expire.id, "owner", "h", "a"), /expired/);
     fixture.provider("unknown");
     assert.equal((await store.capabilities(fixture.hosts, "h", "a")).images, false);
+  } finally { store.close(); }
+});
+
+test("capabilities come from the live directory without a daemon round trip", async () => {
+  const store = new Attachments(), fixture = fakeHosts();
+  let refreshes = 0;
+  fixture.agent.refresh = async () => { refreshes++; };
+  fixture.facts.set("a", { provider: "pi", capabilities: { supportsImages: true, supportsToolInvocations: false } });
+  try {
+    assert.deepEqual(await store.capabilities(fixture.hosts, "h", "a").then(c => [c.images, c.files]), [true, false]);
+    assert.equal(refreshes, 0);
+    await store.capabilities(fixture.hosts, "h", "not-listed");
+    assert.equal(refreshes, 1, "only an agent outside the directory is fetched");
+  } finally { store.close(); }
+});
+
+test("staging limits the number of files and keeps byte totals exact across removal and expiry", () => {
+  const store = new Attachments();
+  try {
+    const ids = Array.from({ length: MAX_FILES_PER_OWNER }, (_, i) => store.put("o", "h", "a", `f${i}`, "text/plain", Buffer.alloc(1024 * 1024)).id);
+    assert.throws(() => store.put("o", "h", "a", "one-more", "text/plain", Buffer.from("x")), /full/);
+    store.put("other", "h", "a", "theirs", "text/plain", Buffer.from("x")); // a different session is unaffected
+    store.remove(ids[0], "o", "h", "a");
+    store.put("o", "h", "a", "replacement", "text/plain", Buffer.from("x"));
+    store.consumed(ids.slice(1));
+    // 24 MiB per session is available again once files are gone.
+    for (let i = 0; i < 2; i++) store.put("o", "h", "a", `big${i}`, "text/plain", Buffer.alloc(MAX_FILE_BYTES));
+    store.clearOwner("o");
+    for (let i = 0; i < 3; i++) store.put("o", "h", "a", `again${i}`, "text/plain", Buffer.alloc(MAX_FILE_BYTES));
   } finally { store.close(); }
 });
 

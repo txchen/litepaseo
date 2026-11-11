@@ -58,6 +58,8 @@ interface Adapter<Raw, Extra, Memo, S extends { key: string }> {
   id(raw: Raw): string;
   excluded(raw: Raw): boolean;
   summarize(hostId: string, raw: Raw, extra: Extra | undefined, previous?: Memo): { summary: S; memo: Memo };
+  /** Server-only facts kept per member (not published), e.g. agent capabilities. */
+  retain?(raw: Raw): unknown;
 }
 
 interface Member<Extra, Memo, S> {
@@ -66,6 +68,7 @@ interface Member<Extra, Memo, S> {
   extra?: Extra;
   memo: Memo;
   summary: S;
+  retained?: unknown;
 }
 
 /**
@@ -103,6 +106,11 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
     this.collection = collection;
     this.changed = changed;
     this.transition = transition;
+  }
+
+  /** What the adapter retained for a member, from the latest update; O(1). */
+  protected retained(id: string): unknown {
+    return this.members.get(id)?.retained;
   }
 
   start() {
@@ -243,7 +251,7 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
     const kept = extra === undefined ? member?.extra : extra;
     const { summary, memo } = this.adapter.summarize(this.hostId, raw, kept, member?.memo);
     const fingerprint = JSON.stringify(summary);
-    const next: Member<Extra, Memo, S> = { fingerprint, version, extra: kept, memo, summary };
+    const next: Member<Extra, Memo, S> = { fingerprint, version, extra: kept, memo, summary, retained: this.adapter.retain?.(raw) };
     this.members.set(id, next);
     if (member?.fingerprint === fingerprint) {
       next.summary = member.summary;
@@ -377,7 +385,11 @@ const agentAdapter: Adapter<AgentSnapshotPayload, Placement, ActivityMemo, Agent
     );
     return { summary: summarize(hostId, agent, project, memo.activityAt), memo };
   },
+  retain: (agent): AgentFacts => ({ provider: agent.provider, capabilities: agent.capabilities }),
 };
+
+/** Kept from the latest directory update so requests need no daemon round trip. */
+export interface AgentFacts { provider: string; capabilities: AgentSnapshotPayload["capabilities"] }
 
 /** One daemon's active agents. */
 export class HostDirectory extends HostMirror<AgentSnapshotPayload, Placement, ActivityMemo, AgentSummary> {
@@ -389,6 +401,10 @@ export class HostDirectory extends HostMirror<AgentSnapshotPayload, Placement, A
     transition?: Transition<AgentSummary>,
   ) {
     super(agentAdapter, hostId, driver, collection, changed, transition);
+  }
+  /** Provider and capabilities from the live directory; undefined if the agent is not listed. */
+  facts(agentId: string) {
+    return this.retained(agentId) as AgentFacts | undefined;
   }
 }
 

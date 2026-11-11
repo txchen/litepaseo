@@ -72,7 +72,11 @@ class Driver {
   }
   async fetchAgentTimeline(_id, options) {
     let rows;
-    if (options.direction === 'after') rows = this.live.filter(row => row.seqEnd > options.cursor.seq).slice(0, options.limit);
+    if (options.direction === 'after') {
+      rows = [];
+      for (let i = options.cursor.seq + 1; i <= config.history && rows.length < options.limit; i++) rows.push(this.initial(i));
+      rows.push(...this.live.filter(row => row.seqEnd > options.cursor.seq).slice(0, options.limit - rows.length));
+    }
     else rows = this.allTail(options.limit, options.direction === 'before' ? options.cursor.seq : Infinity);
     return { epoch: this.host, reset: false, entries: structuredClone(rows),
       window: { minSeq: 1, maxSeq: this.seq, nextSeq: this.seq + 1 },
@@ -136,7 +140,7 @@ process.on('message', async message => {
       }, 100);
       result = { started: Date.now() };
     } else if (message.cmd === 'stop') { stop(); result = { tick, generated }; }
-    else if (message.cmd === 'expected') result = Object.fromEntries([...drivers].map(([id, d]) => [id, d.allTail(message.limit)]));
+    else if (message.cmd === 'expected') result = Object.fromEntries([...drivers].map(([id, d]) => [id, d.allTail(message.limit, message.before ?? Infinity)]));
     else if (message.cmd === 'metrics') result = {
       at: Date.now(), cpu: process.cpuUsage(), memory: process.memoryUsage(), bytes, chunks, generated, directoryChanges,
       streams: app.openStreams(), timelineSubscriptions, agents: hosts.agents.size,

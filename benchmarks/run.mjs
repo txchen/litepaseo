@@ -5,6 +5,7 @@ import { resolve, join } from 'node:path';
 import { cpus, totalmem, release, platform } from 'node:os';
 import { createHash } from 'node:crypto';
 import { renderMarkdown } from '../src/web/markdown.ts';
+import assert from 'node:assert/strict';
 
 const smoke = process.argv.includes('--smoke');
 const motion = process.argv.includes('--motion');
@@ -44,6 +45,12 @@ if (motion) {
   for (let rep = 1; rep <= 3; rep++) for (const reduced of (rep % 2 ? [false, true] : [true, false])) {
     cases.push({ name: reduced ? 'idle-motion-reduced' : 'idle-motion-default', sessions: 1000,
       duration: 20, rep, clients: 1, rate: 0, reducedMotion: reduced ? 'reduce' : 'no-preference' });
+  }
+}
+if (process.argv.includes('--motion-sweep')) {
+  cases.length = 0;
+  for (let rep = 1; rep <= 3; rep++) for (const hz of (rep % 2 ? [2, 1] : [1, 2])) {
+    cases.push({ name: `idle-motion-${hz}hz`, sessions: 1000, duration: 20, rep, clients: 1, rate: 0, animationHz: hz });
   }
 }
 const onlyScenario = process.argv.find(arg => arg.startsWith('--scenario='))?.split('=')[1];
@@ -139,17 +146,55 @@ for (const spec of cases) {
       const cdp = await context.newCDPSession(page); cdps.push(cdp); await cdp.send('Performance.enable');
       const started = performance.now();
       await page.goto(ready.url + `/?session=h${i % 2}:a0`);
+      if (spec.animationHz) await page.addStyleTag({ content: `.status-dot.is-running { animation-duration: 2s; animation-timing-function: steps(${2 * spec.animationHz}, end); } .spinner { animation-duration: ${4 / spec.animationHz}s; animation-timing-function: steps(4, end); }` });
       await page.waitForFunction(count => Number(document.querySelector('.tabs .count')?.textContent) === count && document.querySelectorAll('.timeline-inner > .row').length === 60, spec.sessions);
       cold.push(performance.now() - started);
       if (await page.evaluate(() => document.hidden)) throw new Error('Expected a visible headless client');
+      if (motion) {
+        const clockCheck = await page.evaluate(async () => {
+          const pulse = () => document.getAnimations().find(a => a instanceof CSSAnimation && a.animationName === 'pulse');
+          let last = pulse()?.currentTime, changes = 0;
+          for (let i = 0; i < 50; i++) {
+            await new Promise(r => setTimeout(r, 20));
+            const now = pulse()?.currentTime;
+            if (now !== last) changes++;
+            last = now;
+          }
+          document.dispatchEvent(new Event('visibilitychange'));
+          Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+          document.dispatchEvent(new Event('visibilitychange'));
+          const before = pulse()?.currentTime;
+          await new Promise(r => setTimeout(r, 450));
+          const stopped = before === pulse()?.currentTime;
+          delete document.hidden;
+          document.dispatchEvent(new Event('visibilitychange'));
+          return { changes, stopped };
+        });
+        assert.ok(clockCheck.stopped, 'Hidden pages must stop the decorative clock');
+        assert.ok(spec.reducedMotion === 'reduce' ? clockCheck.changes === 0 : clockCheck.changes >= 3 && clockCheck.changes <= 6,
+          'Decorative animations must advance approximately five times/s (zero with reduced motion)');
+        writeFileSync(join(folder, 'motion-clock-check.json'), JSON.stringify(clockCheck));
+      }
     }
-    let historyLoadMs = null;
+    let historyLoadMs = null, historyBoundary = null;
     if (spec.olderPages) {
       const started = performance.now();
       for (let i = 0; i < spec.olderPages; i++) {
+        await pages[0].getByRole('button', { name: 'Show earlier messages' }).scrollIntoViewIfNeeded();
+        const previous = await pages[0].locator('.timeline-inner > .row').first().getAttribute('data-seq-start');
+        const anchorTop = await pages[0].locator('.timeline-inner > .row').first().evaluate(el => el.getBoundingClientRect().top);
         await pages[0].getByRole('button', { name: 'Show earlier messages' }).click();
-        await pages[0].waitForFunction(count => document.querySelectorAll('.timeline-inner > .row').length >= count, 60 + (i + 1) * 100);
+        await pages[0].waitForFunction(seq => Number(document.querySelector('.timeline-inner > .row')?.getAttribute('data-seq-start')) < seq, Number(previous));
+        assert.ok(await pages[0].locator('.timeline-inner > .row').count() <= 150);
+        const retainedTop = await pages[0].locator(`[data-seq-start="${previous}"]`).evaluate(el => el.getBoundingClientRect().top);
+        assert.ok(Math.abs(retainedTop - anchorTop) < 3, 'Older pagination must preserve the scroll anchor');
       }
+      const first = Number(await pages[0].locator('.timeline-inner > .row').first().getAttribute('data-seq-start'));
+      await pages[0].getByRole('button', { name: 'Show newer messages' }).click();
+      await pages[0].waitForFunction(seq => Number(document.querySelector('.timeline-inner > .row')?.getAttribute('data-seq-start')) > seq, first);
+      await pages[0].getByRole('button', { name: 'Show earlier messages' }).click();
+      await pages[0].waitForFunction(seq => Number(document.querySelector('.timeline-inner > .row')?.getAttribute('data-seq-start')) === seq, first);
+      historyBoundary = Number(await pages[0].locator('.timeline-inner > .row').last().getAttribute('data-seq-start')) + 1;
       historyLoadMs = performance.now() - started;
     }
     // Let startup layout settle. This is a short baseline, not the full 2-minute energy protocol.
@@ -200,7 +245,7 @@ for (const spec of cases) {
     const correctness = [];
     for (let i = 0; i < pages.length; i++) {
       const actual = await pages[i].locator('.timeline-inner > .row').allTextContents();
-      const expected = (await rpc('expected', { limit: actual.length }))['h' + (i % 2)];
+      const expected = (await rpc('expected', { limit: actual.length, ...(historyBoundary ? { before: historyBoundary } : {}) }))['h' + (i % 2)];
       const html = expected.map(row => row.item.type === 'assistant_message' ? renderMarkdown(row.item.text) : null);
       const wanted = await pages[i].evaluate(({ expected, html }) => expected.map((row, j) => {
         if (html[j] === null) return row.item.text;
@@ -229,6 +274,11 @@ for (const spec of cases) {
     result.latency = { samples: sorted.length, p50: sorted.length ? sorted[Math.floor((sorted.length - 1) * .5)] : null,
       p95: sorted.length ? sorted[Math.floor((sorted.length - 1) * .95)] : null, max: sorted.at(-1) ?? null };
     result.passed = errors.length === 0 && correctness.every(c => c.equal) && (!spec.hidden || hiddenEnd.streams === 0);
+    if (historyBoundary) {
+      assert.ok(result.maxTimelineRowsPerClient <= 150, 'History must remain bounded during live updates');
+      await pages[0].getByRole('button', { name: 'Back to latest' }).click();
+      await pages[0].waitForFunction(n => document.querySelector('.timeline-inner > .row:last-child')?.textContent?.includes(`:${n}:`), stopped.tick);
+    }
     if (!result.passed) failures++;
     await Promise.all(contexts.map(c => c.close()));
     await sleep(200);

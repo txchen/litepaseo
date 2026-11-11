@@ -44,7 +44,8 @@ const KEEP_ROWS = 500;
 /** Rows sent to a client that (re)joins; older ones load on demand. */
 const RESET_ROWS = 200;
 const MAX_BUFFER = 5000;
-const FLUSH_MS = 50;
+// At most about five steady-state timeline renders/s; input and permissions stay immediate.
+const FLUSH_MS = 200;
 const RETRY_MS = 2000;
 
 type Watcher = (ops: TimelineOp[]) => void;

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, provide, ref, shallowRef, watch } from "vue";
-import type { DirectoryMessage, HostState, Permission, TimelineMessage, WorkspaceSummary } from "../shared/wire.ts";
+import type { DirectoryMessage, HostState, Permission, TimelineMessage, TimelinePage, WorkspaceSummary } from "../shared/wire.ts";
 import { DirectoryStore, comparePinnedFirst } from "./directory-store.ts";
 import ThreadMenu from "./ThreadMenu.vue";
 import RenameThread from "./RenameThread.vue";
 import { ComposerStore } from "./composer-store.ts";
-import { TimelineStore } from "./timeline-store.ts";
+import { TimelineStore, type RowRef } from "./timeline-store.ts";
+import { pageHistory, RENDER_WINDOW } from "./timeline-window.ts";
 import { openStream, type StreamState } from "./event-stream.ts";
 import SessionList from "./SessionList.vue";
 import TimelineRowView from "./TimelineRowView.vue";
@@ -31,8 +32,6 @@ type Card = {
   agentId: string | null;
 };
 type Tab = "chat" | "board" | "hosts" | "settings";
-/** Rows rendered at once; older loaded rows mount when the user asks for them. */
-const RENDER_WINDOW = 150;
 const COLUMNS = ["Todo", "Doing", "Done"] as const;
 const coarsePointer = matchMedia("(pointer: coarse)").matches;
 function readJson<T>(key: string, fallback: T): T {
@@ -71,7 +70,8 @@ const hosts = shallowRef<HostState[]>([]),
   selectedKey = ref<string | null>(null),
   timeline = shallowRef(new TimelineStore()),
   timelineNotice = ref(""),
-  shown = ref(RENDER_WINDOW),
+  historyRows = shallowRef<RowRef[] | null>(null),
+  historyHasOlder = ref(false),
   timelineElement = ref<HTMLElement | null>(null),
   composerElement = ref<HTMLTextAreaElement | null>(null),
   query = ref(""),
@@ -186,14 +186,16 @@ const activeProject = computed(() => {
 });
 const running = computed(() => active.value?.status === "running");
 const visibleRows = computed(() => {
+  if (historyRows.value) return historyRows.value;
   const store = timeline.value;
   store.membership.value;
-  return store.rows.slice(Math.max(0, store.rows.length - shown.value));
+  return store.rows.slice(-RENDER_WINDOW);
 });
 const canShowOlder = computed(() => {
+  if (historyRows.value) return historyHasOlder.value;
   const store = timeline.value;
   store.membership.value;
-  return store.rows.length > shown.value || store.hasOlder;
+  return store.rows.length > RENDER_WINDOW || store.hasOlder;
 });
 const cardsByColumn = computed(() => {
   const map = new Map<string, Card[]>(COLUMNS.map((c) => [c, []]));
@@ -569,7 +571,7 @@ watch(
   timelineStream = null;
   const store = new TimelineStore();
   timeline.value = store;
-  shown.value = RENDER_WINDOW;
+  historyRows.value = null;
   timelineNotice.value = "";
   const agent = agentDirectory.get(key);
   if (!agent) return;
@@ -579,38 +581,54 @@ watch(
       if (state === "unauthorized") signOut(false);
     },
     onMessage: (data) => {
-      const stick = nearBottom() || !store.ready;
+      if (timeline.value !== store) return;
+      const stick = !historyRows.value && (nearBottom() || !store.ready);
       const ops = (data as TimelineMessage).ops;
       const failure = ops.find((op) => op.type === "error");
       timelineNotice.value = failure?.type === "error" ? failure.message : "";
+      const epoch = store.epoch;
       store.apply(ops);
+      if (epoch && epoch !== store.epoch) {
+        historyRows.value = null;
+        scrollToBottom();
+      }
       if (stick) scrollToBottom();
     },
   });
   },
 );
-async function showOlder() {
+function showLatest() {
+  historyRows.value = null;
+  scrollToBottom();
+}
+async function moveHistory(direction: "before" | "after") {
   const store = timeline.value;
   const el = timelineElement.value;
-  const fromBottom = el ? el.scrollHeight - el.scrollTop : 0;
-  const keepPosition = () =>
-    nextTick(() => {
-      if (el) el.scrollTop = el.scrollHeight - fromBottom;
-    });
-  if (store.rows.length > shown.value) {
-    shown.value += RENDER_WINDOW;
-    return keepPosition();
-  }
+  const current = visibleRows.value.map(r => ({ seqStart: r.seqStart, row: shallowRef(r.row.value) }));
+  const edge = direction === "before" ? current[0] : current.at(-1);
   const agent = active.value;
-  if (!agent || !store.startCursor) return;
+  if (!agent || !edge) return;
+  const epoch = store.epoch;
+  const rect = el?.getBoundingClientRect();
+  const onScreen = el ? Array.from(el.querySelectorAll<HTMLElement>("[data-seq-start]"))
+    .filter(row => row.getBoundingClientRect().bottom > rect!.top && row.getBoundingClientRect().top < rect!.bottom) : [];
+  const anchor = direction === "before" ? onScreen[0] : onScreen.at(-1);
+  const anchorSeq = anchor?.dataset.seqStart;
+  const anchorTop = anchor?.getBoundingClientRect().top;
+  const cursor = { epoch, seq: edge.seqStart };
   await action(async () => {
-    const page = await api(
-      path(agent) + "/timeline?cursor=" + encodeURIComponent(JSON.stringify(store.startCursor)),
-    );
-    if (timeline.value === store) {
-      shown.value += store.prepend(page);
-      await keepPosition();
-    }
+    const page: TimelinePage = await api(path(agent) + "/timeline?direction=" + direction +
+      "&cursor=" + encodeURIComponent(JSON.stringify(cursor)));
+    if (timeline.value !== store || store.epoch !== epoch) return;
+    if (page.epoch !== epoch) { showLatest(); return; }
+    const window = pageHistory(current, page, direction);
+    if (direction === "after" && !window.added) { showLatest(); return; }
+    historyRows.value = window.rows;
+    historyHasOlder.value = window.hasOlder;
+    await nextTick();
+    const retained = el?.querySelector<HTMLElement>(`[data-seq-start="${anchorSeq}"]`);
+    if (el && retained && anchorTop !== undefined) el.scrollTop += retained.getBoundingClientRect().top - anchorTop;
+    else if (el) el.scrollTop = direction === "before" ? 0 : el.scrollHeight;
   });
 }
 
@@ -655,7 +673,7 @@ async function sendText(text: string, fromComposer = false) {
       attachments.consume(a.key, sent.attachmentIds);
       if (selectedKey.value === a.key) suggestion.value = null;
       void nextTick(autosize);
-      scrollToBottom();
+      if (selectedKey.value === a.key) showLatest();
     } catch (e) {
       if (generation !== composer.generation) return;
       if (fromComposer && !state.text) composer.restoreFailed(a.key, sent);
@@ -1073,10 +1091,14 @@ onUnmounted(() => {
         <div ref="timelineElement" class="timeline">
           <div class="timeline-inner">
             <div v-if="canShowOlder" class="older">
-              <button class="btn btn-ghost" :disabled="busy" @click="showOlder">Show earlier messages</button>
+              <button class="btn btn-ghost" :disabled="busy" @click="moveHistory('before')">Show earlier messages</button>
             </div>
             <p v-if="timelineNotice" class="notice"><Icon name="alert" :size="14" />{{ timelineNotice }}</p>
-            <TimelineRowView v-for="r in visibleRows" :key="r.seqStart" :entry="r.row" />
+            <TimelineRowView v-for="r in visibleRows" :key="r.seqStart" :entry="r.row" :data-seq-start="r.seqStart" />
+            <div v-if="historyRows" class="older">
+              <button class="btn btn-ghost" :disabled="busy" @click="moveHistory('after')">Show newer messages</button>
+              <button class="btn btn-ghost" :disabled="busy" @click="showLatest">Back to latest</button>
+            </div>
             <div v-if="!visibleRows.length" class="timeline-empty">
               <span v-if="!timeline.ready" class="spinner"></span>
               {{ timeline.ready ? "No messages yet." : "Loading conversation…" }}

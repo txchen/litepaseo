@@ -310,7 +310,7 @@ h3 {
 .status-dot.is-running {
   background: var(--running);
   box-shadow: 0 0 0 0 var(--running-soft);
-  animation: pulse 1.6s ease-out infinite;
+  animation: pulse 1.6s ease-out infinite paused;
 }
 .status-dot.is-attention {
   background: var(--warn);
@@ -328,7 +328,6 @@ h3 {
   0% {
     box-shadow: 0 0 0 0 var(--pulse);
   }
-  80%,
   100% {
     box-shadow: 0 0 0 6px transparent;
   }
@@ -340,7 +339,7 @@ h3 {
   border-radius: 50%;
   border: 2px solid var(--surface-3);
   border-top-color: var(--accent);
-  animation: spin 0.8s linear infinite;
+  animation: spin 0.8s linear infinite paused;
 }
 @keyframes spin {
   to {

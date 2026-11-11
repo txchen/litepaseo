@@ -1,0 +1,47 @@
+{
+  "name": "litepaseo",
+  "version": "0.0.1",
+  "private": true,
+  "description": "A Vue and Hono console for multiple Paseo daemons",
+  "bin": {
+    "litepaseo": "dist/server/cli.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "vp build && vp pack",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "typecheck": "vue-tsc --noEmit",
+    "test:browser": "node tests/browser.mjs",
+    "check": "npm run typecheck && npm run build && npm test && npm run test:browser",
+    "screens": "node tests/screens.mjs",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "dependencies": {
+    "@getpaseo/client": "0.15.3",
+    "@getpaseo/protocol": "0.15.3",
+    "@hono/node-server": "2.1.6",
+    "hono": "4.13.17",
+    "qrcode": "1.5.4",
+    "web-push": "3.6.7",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "@types/node": "^24.0.0",
+    "@types/qrcode": "1.5.5",
+    "@types/web-push": "3.6.4",
+    "@vitejs/plugin-vue": "6.0.10",
+    "typescript": "^5.9.3",
+    "vite-plus": "1.5.1",
+    "vue": "3.5.45",
+    "vue-tsc": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=24.11.0"
+  }
+}

@@ -1,0 +1,874 @@
+<script setup lang="ts">
+import { computed, nextTick, onUnmounted, ref, shallowRef, watch } from "vue";
+import type { DirectoryMessage, HostState, Permission, TimelineMessage } from "../shared/wire.ts";
+import { DirectoryStore } from "./directory-store.ts";
+import { TimelineStore } from "./timeline-store.ts";
+import { openStream, type StreamState } from "./event-stream.ts";
+import SessionList from "./SessionList.vue";
+import TimelineRowView from "./TimelineRowView.vue";
+import NewSession from "./NewSession.vue";
+import type { ProjectGroup } from "./directory-store.ts";
+import Icon from "./Icon.vue";
+import { cycleTheme, theme } from "./theme.ts";
+import Settings from "./Settings.vue";
+import { registerServiceWorker, setBadge } from "./pwa.ts";
+
+type Card = {
+  id: string;
+  title: string;
+  column: string;
+  hostId: string | null;
+  agentId: string | null;
+};
+type Tab = "chat" | "board" | "hosts" | "settings";
+/** Rows rendered at once; older loaded rows mount when the user asks for them. */
+const RENDER_WINDOW = 150;
+const COLUMNS = ["Todo", "Doing", "Done"] as const;
+const coarsePointer = matchMedia("(pointer: coarse)").matches;
+function readJson<T>(key: string, fallback: T): T {
+  try {
+    return (JSON.parse(localStorage.getItem(key) ?? "null") as T) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+const token = ref(""),
+  code = ref(""),
+  /** null until the server says how this browser may sign in. */
+  authInfo = ref<{ authenticated: boolean; totp: boolean } | null>(null),
+  useToken = ref(false),
+  authenticated = ref(false),
+  error = ref(""),
+  busy = ref(false);
+const hosts = shallowRef<HostState[]>([]),
+  directory = new DirectoryStore({
+    collapsed: readJson<string[]>("litepaseo-collapsed-projects", []),
+    persist: (keys) => localStorage.setItem("litepaseo-collapsed-projects", JSON.stringify(keys)),
+  }),
+  listMode = ref<"projects" | "recent">(
+    localStorage.getItem("litepaseo-list-mode") === "recent" ? "recent" : "projects",
+  ),
+  directoryState = ref<StreamState>("closed"),
+  selectedKey = ref<string | null>(null),
+  timeline = shallowRef(new TimelineStore()),
+  timelineNotice = ref(""),
+  shown = ref(RENDER_WINDOW),
+  timelineElement = ref<HTMLElement | null>(null),
+  composerElement = ref<HTMLTextAreaElement | null>(null),
+  query = ref(""),
+  /** Compact layouts show either the list or the detail pane. */
+  detailOpen = ref(false);
+const label = ref(""),
+  connection = ref(""),
+  prompt = ref(""),
+  behavior = ref<"steer" | "interrupt">("steer"),
+  tab = ref<Tab>("chat"),
+  cardTitle = ref(""),
+  board = ref<{ revision: number; cards: Card[] }>({ revision: 0, cards: [] });
+const permissionInputs = ref<Record<string, string>>({}),
+  permissionActions = ref<Record<string, string>>({}),
+  uncertain = ref<{ messageId: string; text: string } | null>(null);
+
+const hostLabels = computed(() => new Map(hosts.value.map((h) => [h.id, h.label])));
+const hostStates = computed(() => new Map(hosts.value.map((h) => [h.id, h.state])));
+const connectedHosts = computed(() => hosts.value.filter((h) => h.state === "connected").length);
+// O(1) per directory message: a map lookup, not a scan.
+const active = computed(() => {
+  directory.version.value;
+  return directory.get(selectedKey.value) ?? null;
+});
+const sessionCount = computed(() => {
+  directory.version.value;
+  return directory.total;
+});
+const viewSize = computed(() => {
+  directory.version.value;
+  return directory.size;
+});
+const projectCount = computed(() => {
+  directory.version.value;
+  return directory.projectCount;
+});
+watch(listMode, (mode) => localStorage.setItem("litepaseo-list-mode", mode));
+
+// Host scope for the sidebar. Each host keeps its own incrementally maintained view.
+const hostFilter = ref<string | null>(localStorage.getItem("litepaseo-host-filter"));
+watch(
+  hostFilter,
+  (id) => {
+    directory.setHost(id);
+    if (id) localStorage.setItem("litepaseo-host-filter", id);
+    else localStorage.removeItem("litepaseo-host-filter");
+  },
+  { immediate: true },
+);
+watch(hosts, (list) => {
+  if (hostFilter.value && list.length && !list.some((h) => h.id === hostFilter.value))
+    hostFilter.value = null;
+});
+const hostCounts = computed(() => {
+  directory.version.value;
+  return new Map(hosts.value.map((h) => [h.id, directory.hostSize(h.id)]));
+});
+const activeProject = computed(() => {
+  const cwd = active.value?.cwd ?? "";
+  return cwd.replace(/\/+$/, "").split("/").pop() || cwd;
+});
+const running = computed(() => active.value?.status === "running");
+const visibleRows = computed(() => {
+  const store = timeline.value;
+  store.membership.value;
+  return store.rows.slice(Math.max(0, store.rows.length - shown.value));
+});
+const canShowOlder = computed(() => {
+  const store = timeline.value;
+  store.membership.value;
+  return store.rows.length > shown.value || store.hasOlder;
+});
+const cardsByColumn = computed(() => {
+  const map = new Map<string, Card[]>(COLUMNS.map((c) => [c, []]));
+  for (const card of board.value.cards) map.get(card.column)?.push(card);
+  return map;
+});
+const liveLabel = computed(() =>
+  directoryState.value === "live"
+    ? "Live"
+    : directoryState.value === "paused"
+      ? "Paused"
+      : "Reconnecting",
+);
+
+let directoryStream: { close(): void } | null = null,
+  timelineStream: { close(): void } | null = null,
+  searchTimer: ReturnType<typeof setTimeout> | undefined;
+
+async function api(path: string, method = "GET", body?: unknown, timeoutMs = 20000) {
+  const response = await fetch("/api" + path, {
+    method,
+    // Cookie session; the custom header marks the request as same-origin script (CSRF guard).
+    headers: { "Content-Type": "application/json", "x-litepaseo": "1" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (response.status === 401 && authenticated.value && path !== "/login") signOut(false);
+  if (!response.ok) throw new Error(data.error ?? "Request failed");
+  return data;
+}
+async function action(fn: () => Promise<void>) {
+  busy.value = true;
+  error.value = "";
+  try {
+    await fn();
+  } catch (e) {
+    error.value = String((e as Error).message);
+  } finally {
+    busy.value = false;
+  }
+}
+function path(a: { hostId: string; id: string }) {
+  return `/hosts/${encodeURIComponent(a.hostId)}/agents/${encodeURIComponent(a.id)}`;
+}
+function signOut(callServer = true) {
+  if (callServer) void api("/logout", "POST", {}).catch(() => {});
+  authenticated.value = false;
+  directoryStream?.close();
+  timelineStream?.close();
+  directoryStream = timelineStream = null;
+  token.value = code.value = "";
+  void loadAuth();
+  if (!callServer) error.value = "Signed out. Sign in again to continue.";
+}
+async function loadAuth() {
+  authInfo.value = await api("/auth").catch(() => ({ authenticated: false, totp: false }));
+  if (authInfo.value!.authenticated) await enter();
+}
+async function login() {
+  await action(async () => {
+    const totp = authInfo.value?.totp && !useToken.value;
+    await api("/login", "POST", totp ? { code: code.value.trim() } : { token: token.value.trim() });
+    await enter();
+  });
+}
+async function enter() {
+  authenticated.value = true;
+  error.value = "";
+  board.value = await api("/board");
+  openDirectory();
+  void registerServiceWorker();
+  // A notification tap opens /?session=<key>; select it once and clean the address.
+  const wanted = new URLSearchParams(location.search).get("session");
+  if (wanted) {
+    history.replaceState(history.state, "", "/");
+    select(wanted);
+  }
+}
+function onCodeInput() {
+  code.value = code.value.replace(/\D/g, "").slice(0, 6);
+  if (code.value.length === 6 && !busy.value) void login();
+}
+// The service worker asks an already-open app to show the tapped session.
+navigator.serviceWorker?.addEventListener("message", (event) => {
+  if (event.data?.type === "open-session" && authenticated.value) select(String(event.data.key));
+});
+function openDirectory() {
+  directoryStream?.close();
+  directoryStream = openStream({
+    url: () =>
+      `/api/stream?generation=${encodeURIComponent(directory.generation)}&since=${directory.seq}`,
+    onState: (state) => {
+      directoryState.value = state;
+      if (state === "unauthorized") signOut(false);
+    },
+    onMessage: (data) => {
+      const message = data as DirectoryMessage;
+      if (message.type === "hosts") hosts.value = message.hosts;
+      else directory.apply(message);
+    },
+  });
+}
+
+// Search: the matching set is built once per query and then maintained incrementally.
+watch(query, (text) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    const needle = text.trim().toLowerCase();
+    if (!needle) return directory.setFilter(null);
+    const labels = hostLabels.value;
+    directory.setFilter((a) =>
+      `${a.title ?? ""}\n${a.cwd}\n${labels.get(a.hostId) ?? ""}\n${a.provider}\n${a.id}`
+        .toLowerCase()
+        .includes(needle),
+    );
+  }, 120);
+});
+
+function nearBottom() {
+  const el = timelineElement.value;
+  return !el || el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+}
+function scrollToBottom() {
+  void nextTick(() => {
+    const el = timelineElement.value;
+    if (el) el.scrollTop = el.scrollHeight;
+  });
+}
+function select(key: string) {
+  tab.value = "chat";
+  selectedKey.value = key;
+  openDetail();
+}
+
+// Compact layouts: the detail pane is a history entry, so the system back button or gesture
+// returns to the list instead of leaving the app.
+const compact = matchMedia("(max-width: 760px)");
+function openDetail() {
+  if (!detailOpen.value && compact.matches) history.pushState({ litepaseoDetail: true }, "");
+  detailOpen.value = true;
+}
+function closeDetail() {
+  if (history.state?.litepaseoDetail) history.back();
+  else detailOpen.value = false;
+}
+function onPopState() {
+  if (detailOpen.value && !history.state?.litepaseoDetail) detailOpen.value = false;
+}
+window.addEventListener("popstate", onPopState);
+
+const searchInput = ref<HTMLInputElement | null>(null);
+function onGlobalKey(event: KeyboardEvent) {
+  const target = event.target as HTMLElement | null;
+  const typing = !!target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+  if ((event.key === "k" && (event.metaKey || event.ctrlKey)) || (event.key === "/" && !typing)) {
+    event.preventDefault();
+    if (detailOpen.value && compact.matches) closeDetail();
+    searchInput.value?.focus();
+    searchInput.value?.select();
+  } else if (event.key === "n" && !typing && !event.metaKey && !event.ctrlKey && !event.altKey && authenticated.value && !newSession.value) {
+    event.preventDefault();
+    startNew();
+  } else if (event.key === "Escape" && target === searchInput.value && query.value) {
+    query.value = "";
+  }
+}
+window.addEventListener("keydown", onGlobalKey);
+
+// New sessions: the dialog creates, the directory stream delivers, the selection opens it.
+const newSession = ref<{
+  hostId: string | null;
+  cwd: string | null;
+  project: { key: string | null; name: string } | null;
+} | null>(null);
+function startNew(group?: ProjectGroup) {
+  // Without a project, start where you worked last: the most recent session in the current view.
+  const recent = group ? group.agents.at(0) : directory.range(0, 1)[0];
+  newSession.value = {
+    hostId: hostFilter.value ?? recent?.hostId ?? active.value?.hostId ?? null,
+    cwd: recent?.cwd ?? null,
+    project: recent ? { key: recent.projectKey, name: recent.project } : null,
+  };
+}
+function onCreated(key: string) {
+  newSession.value = null;
+  if (query.value) query.value = "";
+  select(key);
+}
+const pendingSelection = computed(() => !!selectedKey.value && !active.value);
+watch(selectedKey, () => {
+  uncertain.value = null;
+});
+// The timeline stream follows the selected agent while it exists in the directory, so a
+// just-created session opens when it arrives and an archived one releases its subscription.
+watch(
+  () => active.value?.key ?? null,
+  (key) => {
+  timelineStream?.close();
+  timelineStream = null;
+  const store = new TimelineStore();
+  timeline.value = store;
+  shown.value = RENDER_WINDOW;
+  timelineNotice.value = "";
+  const agent = directory.get(key);
+  if (!agent) return;
+  timelineStream = openStream({
+    url: () => "/api" + path(agent) + "/timeline/stream",
+    onState: (state) => {
+      if (state === "unauthorized") signOut(false);
+    },
+    onMessage: (data) => {
+      const stick = nearBottom() || !store.ready;
+      const ops = (data as TimelineMessage).ops;
+      const failure = ops.find((op) => op.type === "error");
+      timelineNotice.value = failure?.type === "error" ? failure.message : "";
+      store.apply(ops);
+      if (stick) scrollToBottom();
+    },
+  });
+  },
+);
+async function showOlder() {
+  const store = timeline.value;
+  const el = timelineElement.value;
+  const fromBottom = el ? el.scrollHeight - el.scrollTop : 0;
+  const keepPosition = () =>
+    nextTick(() => {
+      if (el) el.scrollTop = el.scrollHeight - fromBottom;
+    });
+  if (store.rows.length > shown.value) {
+    shown.value += RENDER_WINDOW;
+    return keepPosition();
+  }
+  const agent = active.value;
+  if (!agent || !store.startCursor) return;
+  await action(async () => {
+    const page = await api(
+      path(agent) + "/timeline?cursor=" + encodeURIComponent(JSON.stringify(store.startCursor)),
+    );
+    if (timeline.value === store) {
+      shown.value += store.prepend(page);
+      await keepPosition();
+    }
+  });
+}
+
+function autosize() {
+  const el = composerElement.value;
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, Math.round(window.innerHeight * 0.4)) + "px";
+}
+function onComposerKey(event: KeyboardEvent) {
+  if (event.key !== "Enter" || event.isComposing) return;
+  // Desktop: Enter sends, Shift+Enter breaks. Touch keyboards keep Enter for new lines.
+  if ((!coarsePointer && !event.shiftKey) || event.metaKey || event.ctrlKey) {
+    event.preventDefault();
+    void send();
+  }
+}
+async function send() {
+  const a = active.value;
+  if (!a || !prompt.value.trim() || uncertain.value || busy.value) return;
+  const sent = { text: prompt.value, messageId: crypto.randomUUID() };
+  await action(async () => {
+    try {
+      await api(path(a) + "/messages", "POST", { ...sent, behavior: behavior.value });
+      prompt.value = "";
+      void nextTick(autosize);
+      scrollToBottom();
+    } catch (e) {
+      uncertain.value = sent;
+      throw e;
+    }
+  });
+}
+async function stop() {
+  const a = active.value;
+  if (a) await action(async () => void (await api(path(a) + "/stop", "POST")));
+}
+async function respond(p: Permission, allow: boolean) {
+  const a = active.value;
+  if (!a) return;
+  await action(async () => {
+    const response: Record<string, unknown> = { behavior: allow ? "allow" : "deny" };
+    if (permissionActions.value[p.id]) response.selectedActionId = permissionActions.value[p.id];
+    if (allow && permissionInputs.value[p.id])
+      response.updatedInput = JSON.parse(permissionInputs.value[p.id]);
+    await api(path(a) + "/permissions/" + encodeURIComponent(p.id), "POST", response);
+  });
+}
+async function addHost() {
+  await action(async () => {
+    await api("/hosts", "POST", { label: label.value, connection: connection.value });
+    label.value = "";
+    connection.value = "";
+  });
+}
+async function removeHost(host: HostState) {
+  if (!confirm(`Disconnect and remove ${host.label}? Its agents keep running on the host.`)) return;
+  await action(async () => void (await api("/hosts/" + host.id, "DELETE")));
+}
+async function saveCards(cards: Card[]) {
+  try {
+    board.value = await api("/board", "PUT", { revision: board.value.revision, cards });
+  } catch (e) {
+    board.value = await api("/board");
+    throw e;
+  }
+}
+async function addCard() {
+  await action(async () => {
+    if (!cardTitle.value.trim()) return;
+    await saveCards([
+      ...board.value.cards,
+      {
+        id: crypto.randomUUID(),
+        title: cardTitle.value,
+        column: "Todo",
+        hostId: active.value?.hostId ?? null,
+        agentId: active.value?.id ?? null,
+      },
+    ]);
+    cardTitle.value = "";
+  });
+}
+async function moveCard(card: Card, column: string) {
+  await action(() =>
+    saveCards(board.value.cards.map((c) => (c.id === card.id ? { ...c, column } : c))),
+  );
+}
+function openCard(card: Card) {
+  if (card.hostId && card.agentId) select(`${card.hostId}:${card.agentId}`);
+}
+function openTab(next: Tab) {
+  tab.value = next;
+  if (next !== "chat" || selectedKey.value) openDetail();
+  else closeDetail();
+}
+
+void loadAuth();
+// Waiting sessions show on the app icon and in the tab title.
+const waiting = computed(() => {
+  directory.version.value;
+  return directory.waiting;
+});
+watch(waiting, (count) => {
+  setBadge(count);
+  document.title = count ? `(${count}) LitePaseo` : "LitePaseo";
+});
+onUnmounted(() => {
+  window.removeEventListener("popstate", onPopState);
+  window.removeEventListener("keydown", onGlobalKey);
+  directoryStream?.close();
+  timelineStream?.close();
+  clearTimeout(searchTimer);
+});
+</script>
+
+<template>
+  <div v-if="!authenticated" class="login">
+    <form v-if="authInfo" class="login-card" @submit.prevent="login">
+      <div class="brand brand-large"><span class="brand-mark"></span>LitePaseo</div>
+      <p class="login-lede">All your Paseo hosts, one fast console.</p>
+      <template v-if="authInfo.totp && !useToken">
+        <label class="field">
+          <span>Authenticator code</span>
+          <input
+            v-model="code"
+            class="code-input"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            maxlength="6"
+            placeholder="••••••"
+            required
+            autofocus
+            @input="onCodeInput"
+          />
+        </label>
+        <p class="hint">Open your authenticator app. <button type="button" class="link-btn" @click="useToken = true">Use the access token instead</button></p>
+      </template>
+      <template v-else>
+        <label class="field">
+          <span>Server access token</span>
+          <input v-model="token" type="password" autocomplete="off" required autofocus />
+        </label>
+        <p class="hint">
+          Run <code>litepaseo token</code> on the server to print it.
+          <button v-if="authInfo.totp" type="button" class="link-btn" @click="useToken = false">Use a code</button>
+        </p>
+      </template>
+      <button class="btn btn-primary btn-block" :disabled="busy">{{ busy ? "Signing in…" : "Connect" }}</button>
+      <p v-if="error" class="form-error">{{ error }}</p>
+    </form>
+  </div>
+
+  <div v-else class="shell" :class="{ 'detail-open': detailOpen }">
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <div class="brand"><span class="brand-mark"></span>LitePaseo</div>
+        <div class="head-actions">
+        <span class="live" :class="'is-' + directoryState" :title="'Directory stream: ' + directoryState">
+          <span class="live-dot"></span>{{ liveLabel }}
+        </span>
+        <button
+          class="icon-btn theme-btn"
+          :class="{ chosen: tab === 'settings' }"
+          title="Settings"
+          aria-label="Settings"
+          @click="openTab('settings')"
+        >
+          <Icon name="gear" :size="15" />
+        </button>
+        <button
+          class="icon-btn theme-btn"
+          :title="'Theme: ' + theme + ' (click to change)'"
+          :aria-label="'Theme: ' + theme"
+          @click="cycleTheme"
+        >
+          <Icon :name="theme === 'dark' ? 'moon' : theme === 'light' ? 'sun' : 'monitor'" :size="15" />
+        </button>
+        </div>
+      </div>
+      <nav class="tabs">
+        <button :class="{ chosen: tab === 'chat' }" @click="openTab('chat')">
+          <Icon name="chat" />Sessions<span class="count">{{ sessionCount }}</span>
+        </button>
+        <button :class="{ chosen: tab === 'board' }" @click="openTab('board')">
+          <Icon name="board" />Kanban
+        </button>
+        <button :class="{ chosen: tab === 'hosts' }" @click="openTab('hosts')">
+          <Icon name="server" />Hosts<span class="count">{{ connectedHosts }}/{{ hosts.length }}</span>
+        </button>
+      </nav>
+      <button class="new-session" @click="startNew()">
+        <Icon name="plus" :size="15" />New session<kbd class="hide-sm">N</kbd>
+      </button>
+      <label class="search">
+        <Icon name="search" :size="15" />
+        <input
+          ref="searchInput"
+          v-model="query"
+          type="search"
+          placeholder="Search sessions, projects, hosts"
+          aria-keyshortcuts="/ Control+K Meta+K"
+        />
+        <kbd class="search-key hide-sm">/</kbd>
+      </label>
+      <div v-if="hosts.length > 1" class="host-filter" role="radiogroup" aria-label="Filter by host">
+        <button
+          role="radio"
+          :aria-checked="hostFilter === null"
+          :class="{ chosen: hostFilter === null }"
+          @click="hostFilter = null"
+        >
+          All<span class="chip-count">{{ sessionCount }}</span>
+        </button>
+        <button
+          v-for="h in hosts"
+          :key="h.id"
+          role="radio"
+          :aria-checked="hostFilter === h.id"
+          :class="{ chosen: hostFilter === h.id }"
+          :title="h.label + ' · ' + h.state"
+          @click="hostFilter = h.id"
+        >
+          <span class="status-dot" :class="h.state === 'connected' ? 'is-idle-ok' : 'is-offline'"></span
+          >{{ h.label }}<span class="chip-count">{{ hostCounts.get(h.id) }}</span>
+        </button>
+      </div>
+      <div class="list-toolbar">
+        <div class="segmented segmented-sm" role="radiogroup" aria-label="Group sessions">
+          <button :class="{ chosen: listMode === 'projects' }" @click="listMode = 'projects'">
+            Projects
+          </button>
+          <button :class="{ chosen: listMode === 'recent' }" @click="listMode = 'recent'">Recent</button>
+        </div>
+        <span class="list-summary">{{
+          listMode === "projects" ? `${projectCount} projects` : `${viewSize} sessions`
+        }}</span>
+      </div>
+      <SessionList
+        :mode="listMode"
+        :store="directory"
+        :host-labels="hostLabels"
+        :host-states="hostStates"
+        :selected-key="selectedKey"
+        :searching="!!query.trim()"
+        @select="select"
+        @new="startNew"
+      />
+    </aside>
+
+    <main class="main">
+      <div v-if="error" class="toast" role="alert">
+        <Icon name="alert" :size="15" /><span>{{ error }}</span
+        ><button class="icon-btn" aria-label="Dismiss" @click="error = ''">
+          <Icon name="close" :size="14" />
+        </button>
+      </div>
+
+      <!-- Hosts -->
+      <Settings
+        v-if="tab === 'settings'"
+        :request="api"
+        :totp-enabled="!!authInfo?.totp"
+        @back="closeDetail"
+        @signed-out="signOut(false)"
+        @totp-changed="(on) => authInfo && (authInfo.totp = on)"
+      />
+
+      <section v-else-if="tab === 'hosts'" class="page">
+        <header class="page-head">
+          <button class="icon-btn back" aria-label="Back" @click="closeDetail">
+            <Icon name="back" :size="18" />
+          </button>
+          <div>
+            <h1>Hosts</h1>
+            <p class="subtle">Paseo daemons this console connects to. Secrets stay on this server.</p>
+          </div>
+        </header>
+        <div class="page-body">
+          <div class="card">
+            <div v-for="h in hosts" :key="h.id" class="card-row">
+              <span class="status-dot" :class="h.state === 'connected' ? 'is-idle-ok' : 'is-offline'"></span>
+              <div class="grow">
+                <div class="row-title">{{ h.label }}</div>
+                <div class="row-sub">{{ h.state }}</div>
+              </div>
+              <button class="btn btn-outline" :disabled="busy" @click="removeHost(h)">Remove</button>
+            </div>
+            <div v-if="!hosts.length" class="card-row muted-text">No hosts yet.</div>
+          </div>
+          <h2 class="section-label">Add a host</h2>
+          <form class="card form-card" @submit.prevent="addHost">
+            <label class="field">
+              <span>Name</span>
+              <input v-model="label" placeholder="Build server" required />
+            </label>
+            <label class="field">
+              <span>Connection</span>
+              <input
+                v-model="connection"
+                type="password"
+                placeholder="ws://host:port/ws, pairing offer or SSH target"
+                required
+                autocomplete="off"
+              />
+            </label>
+            <div class="form-actions">
+              <button class="btn btn-primary" :disabled="busy">Add host</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- Kanban -->
+      <section v-else-if="tab === 'board'" class="page">
+        <header class="page-head">
+          <button class="icon-btn back" aria-label="Back" @click="closeDetail">
+            <Icon name="back" :size="18" />
+          </button>
+          <div>
+            <h1>Kanban</h1>
+            <p class="subtle">Planning only. Moving a card never changes an agent.</p>
+          </div>
+        </header>
+        <div class="page-body wide">
+          <form class="add-card" @submit.prevent="addCard">
+            <input v-model="cardTitle" placeholder="New task" required />
+            <button class="btn btn-primary" :disabled="busy"><Icon name="plus" :size="15" />Add task</button>
+          </form>
+          <p v-if="active" class="subtle small">New tasks link to “{{ active.title || active.id }}”.</p>
+          <div class="board">
+            <div v-for="column in COLUMNS" :key="column" class="column">
+              <div class="column-head">
+                <h3>{{ column }}</h3>
+                <span class="count">{{ cardsByColumn.get(column)!.length }}</span>
+              </div>
+              <article v-for="card in cardsByColumn.get(column)" :key="card.id" class="card kanban-card">
+                <div class="row-title">{{ card.title }}</div>
+                <button v-if="card.agentId" class="link-btn" @click="openCard(card)">
+                  <Icon name="chat" :size="13" />Open conversation
+                </button>
+                <div class="kanban-actions">
+                  <select :value="card.column" @change="moveCard(card, ($event.target as HTMLSelectElement).value)">
+                    <option v-for="c in COLUMNS" :key="c">{{ c }}</option>
+                  </select>
+                  <button
+                    class="icon-btn"
+                    aria-label="Remove"
+                    @click="action(() => saveCards(board.cards.filter((c) => c.id !== card.id)))"
+                  >
+                    <Icon name="trash" :size="15" />
+                  </button>
+                </div>
+              </article>
+              <p v-if="!cardsByColumn.get(column)!.length" class="column-empty">Nothing here</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Conversation -->
+      <section v-else-if="active" class="chat">
+        <header class="chat-head">
+          <button class="icon-btn back" aria-label="Back to sessions" @click="closeDetail">
+            <Icon name="back" :size="18" />
+          </button>
+          <div class="grow">
+            <h1 class="chat-title">{{ active.title || "Untitled session" }}</h1>
+            <div class="chat-meta">
+              <span class="badge" :class="'is-' + active.status">
+                <span class="status-dot" :class="'is-' + active.status"></span>{{ active.status }}
+              </span>
+              <span><Icon name="folder" :size="13" />{{ activeProject }}</span>
+              <span><Icon name="server" :size="13" />{{ hostLabels.get(active.hostId) }}</span>
+              <span class="hide-sm">{{ active.provider }}</span>
+            </div>
+          </div>
+        </header>
+
+        <div ref="timelineElement" class="timeline">
+          <div class="timeline-inner">
+            <div v-if="canShowOlder" class="older">
+              <button class="btn btn-ghost" :disabled="busy" @click="showOlder">Show earlier messages</button>
+            </div>
+            <p v-if="timelineNotice" class="notice"><Icon name="alert" :size="14" />{{ timelineNotice }}</p>
+            <TimelineRowView v-for="r in visibleRows" :key="r.seqStart" :entry="r.row" />
+            <div v-if="!visibleRows.length" class="timeline-empty">
+              <span v-if="!timeline.ready" class="spinner"></span>
+              {{ timeline.ready ? "No messages yet." : "Loading conversation…" }}
+            </div>
+          </div>
+        </div>
+
+        <div class="dock">
+          <div class="dock-inner">
+            <section v-for="p in active.pendingPermissions" :key="p.id" class="permission">
+              <div class="permission-head">
+                <span class="permission-icon"><Icon name="shield" :size="16" /></span>
+                <div class="grow">
+                  <div class="row-title">{{ p.title || p.name }}</div>
+                  <div class="row-sub">{{ p.kind === "question" ? "Question" : "Permission request" }} · {{ p.name }}</div>
+                </div>
+              </div>
+              <details class="permission-details">
+                <summary>Request details</summary>
+                <pre>{{ JSON.stringify(p.input, null, 2) }}</pre>
+              </details>
+              <label v-if="p.actions?.length" class="field">
+                <span>Action</span>
+                <select v-model="permissionActions[p.id]">
+                  <option value="">Default</option>
+                  <option v-for="a in p.actions" :key="a.id" :value="a.id">{{ a.label || a.id }}</option>
+                </select>
+              </label>
+              <label v-if="p.kind === 'question'" class="field">
+                <span>Answer (JSON)</span>
+                <textarea v-model="permissionInputs[p.id]" rows="3" placeholder='{"answers": {}}'></textarea>
+              </label>
+              <div class="permission-actions">
+                <button class="btn btn-outline" :disabled="busy" @click="respond(p, false)">Deny</button>
+                <button class="btn btn-primary" :disabled="busy" @click="respond(p, true)">Allow / submit</button>
+              </div>
+            </section>
+
+            <div v-if="uncertain" class="uncertain">
+              <Icon name="alert" :size="15" />
+              <span class="grow">Delivery unknown. Check the conversation before sending again.</span>
+              <button class="btn btn-ghost" @click="uncertain = null">I checked</button>
+            </div>
+
+            <form class="composer" @submit.prevent="send">
+              <textarea
+                ref="composerElement"
+                v-model="prompt"
+                rows="1"
+                placeholder="Message this agent…"
+                required
+                @input="autosize"
+                @keydown="onComposerKey"
+              ></textarea>
+              <div class="composer-bar">
+                <div v-if="running" class="segmented" role="radiogroup" aria-label="While a turn is running">
+                  <button type="button" :class="{ chosen: behavior === 'steer' }" @click="behavior = 'steer'">Steer</button>
+                  <button type="button" :class="{ chosen: behavior === 'interrupt' }" @click="behavior = 'interrupt'">
+                    Interrupt
+                  </button>
+                </div>
+                <span v-else class="composer-hint hide-sm">{{ coarsePointer ? "" : "Enter to send · Shift+Enter for a new line" }}</span>
+                <div class="composer-actions">
+                  <button
+                    v-if="running"
+                    type="button"
+                    class="disc disc-stop"
+                    aria-label="Stop turn"
+                    title="Stop turn"
+                    :disabled="busy"
+                    @click="stop"
+                  >
+                    <Icon name="stop" :size="14" />
+                  </button>
+                  <button class="disc disc-send" aria-label="Send" title="Send" :disabled="busy || !!uncertain || !prompt.trim()">
+                    <Icon name="send" :size="17" />
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <section v-else-if="tab === 'chat' && pendingSelection" class="empty">
+        <span class="spinner"></span>
+        <p>Starting session…</p>
+      </section>
+
+      <section v-else class="empty">
+        <div class="empty-mark"><Icon name="chat" :size="26" /></div>
+        <h2>{{ sessionCount ? "Pick a session" : "Connect your first host" }}</h2>
+        <p>
+          {{
+            sessionCount
+              ? hostFilter
+                ? `${viewSize} sessions in ${projectCount} projects on ${hostLabels.get(hostFilter) ?? "this host"}.`
+                : `${sessionCount} sessions in ${projectCount} projects across ${hosts.length} hosts.`
+              : "Add a Paseo daemon and its agents show up here, live."
+          }}
+        </p>
+        <button v-if="!hosts.length" class="btn btn-primary" @click="openTab('hosts')">Add a host</button>
+        <button v-else class="btn btn-primary" @click="startNew()"><Icon name="plus" :size="15" />New session</button>
+      </section>
+    </main>
+    <NewSession
+      v-if="newSession"
+      :hosts="hosts"
+      :initial-host-id="newSession.hostId"
+      :initial-cwd="newSession.cwd"
+      :initial-project="newSession.project"
+      :request="api"
+      @close="newSession = null"
+      @created="onCreated"
+    />
+  </div>
+</template>

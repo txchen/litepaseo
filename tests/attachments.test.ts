@@ -98,3 +98,22 @@ test("BFF accepts attachment-only messages and forwards native images and upload
     assert.equal(fixture.sends.length, 1);
   } finally { app.dispose(); store.close(); rmSync(root, { recursive: true, force: true }); }
 });
+
+test("a failed operation is logged with its path, route and error, without the query string", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lp-error-log-")), store = new Store(root), fixture = fakeHosts();
+  const app = createApp(store, fixture.hosts, "test", root, { pushSender: { async send() {} } });
+  const logged: string[] = [], original = console.error;
+  console.error = (line: string) => { logged.push(line); };
+  try {
+    // The fake driver has no cancelAgent, so the operation throws.
+    const response = await app.request("/api/hosts/h/agents/a/stop?secret=1", { method: "POST", headers: { authorization: "Bearer test" } });
+    assert.equal(response.status, 502);
+    const entry = JSON.parse(logged.find(l => l.includes("api_operation_failed"))!);
+    assert.equal(entry.requestId, (await response.json()).requestId);
+    assert.equal(entry.path, "/api/hosts/h/agents/a/stop");
+    assert.equal(entry.route, "/api/hosts/:host/agents/:agent/stop");
+    assert.equal(entry.error, "TypeError");
+    assert.match(entry.message, /cancelAgent/);
+    assert.ok(!JSON.stringify(entry).includes("secret"));
+  } finally { console.error = original; app.dispose(); store.close(); rmSync(root, { recursive: true, force: true }); }
+});

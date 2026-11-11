@@ -287,7 +287,17 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
     if (error instanceof UnknownHostError) return c.json({ error: "Unknown host" }, 404);
     if (error instanceof z.ZodError) return c.json({ error: "Invalid request", detail: error.issues }, 400);
     const requestId = randomUUID();
-    console.error(JSON.stringify({ event: "api_operation_failed", requestId, method: c.req.method }));
+    // Enough to diagnose from the private service log: where it failed and what failed. The
+    // query string is left out (it can carry cursors and filters), and messages are bounded.
+    const failure = error as Error & { code?: unknown; cause?: unknown };
+    const cause = failure.cause instanceof Error ? failure.cause : null;
+    console.error(JSON.stringify({
+      event: "api_operation_failed", requestId, method: c.req.method, path: c.req.path, route: c.req.routePath,
+      error: failure.name, ...(typeof failure.code === "string" ? { code: failure.code } : {}),
+      message: String(failure.message ?? "").slice(0, 500),
+      ...(cause ? { cause: `${cause.name}: ${cause.message}`.slice(0, 300) } : {}),
+      at: failure.stack?.split("\n").slice(1, 4).map((line) => line.trim()),
+    }));
     return c.json({ error: "Operation failed; refresh state before retrying", requestId }, 502);
   });
   app.get("/api/health", (c) => c.json({ ok: true, version: "0.0.1", waiting: notifier.waitingCount }));

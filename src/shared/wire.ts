@@ -73,10 +73,17 @@ export interface WorkspaceSummary {
   unread: boolean;
 }
 
+export interface HostDiagnostic {
+  lastConnectedAt?: string;
+  nextRetryAt?: string;
+  attempt?: number;
+  error?: { code: string; message: string };
+}
 export interface HostState {
   id: string;
   label: string;
   state: string;
+  diagnostic?: HostDiagnostic;
 }
 
 export interface Change<T> {

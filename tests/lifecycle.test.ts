@@ -12,8 +12,8 @@ test("packaged CLI background readiness, duplicate start, HTTP authentication an
   const port = (portServer.address() as { port: number }).port;
   await new Promise<void>((r) => portServer.close(() => r()));
   const env = { ...process.env, LITEPASEO_DATA_DIR: directory, LITEPASEO_PORT: String(port) };
-  const run = (command: string) =>
-    execFileSync(process.execPath, [resolve("dist/server/cli.mjs"), command], {
+  const run = (command: string, ...args: string[]) =>
+    execFileSync(process.execPath, [resolve("dist/server/cli.mjs"), command, ...args], {
       env,
       encoding: "utf8",
       timeout: 15000,
@@ -32,6 +32,15 @@ test("packaged CLI background readiness, duplicate start, HTTP authentication an
       200,
     );
     assert.match(run("status"), /"ready":true/);
+    const archive = join(directory, "snapshot");
+    assert.match(run("backup", archive), /Backup complete/);
+    const restoredHome = join(directory, "restored");
+    const restored = execFileSync(process.execPath, [resolve("dist/server/cli.mjs"), "restore", archive], {
+      env: { ...env, LITEPASEO_HOME: restoredHome }, encoding: "utf8", timeout: 15000,
+    });
+    assert.match(restored, /Restore complete/);
+    assert.equal(readFileSync(join(restoredHome, "token"), "utf8"), token);
+
   } finally {
     run("stop");
     for (let i = 0; i < 50; i++) {

@@ -110,7 +110,11 @@ try {
           seq: 1,
           agents: [
             summary("alpha", []),
-            summary("beta", [{ id: "p-1", name: "Read file", kind: "tool", input: { path: "README.md" } }]),
+            summary("beta", [{ id: "p-1", name: "request_user_input", kind: "question", input: { questions: [
+              { header: "Strategy", question: "Choose the strategy", options: [{ label: "Incremental" }, { label: "Rewrite" }] },
+              { header: "Checks", question: "Select checks", multiSelect: true, options: [{ label: "Unit tests" }, { label: "Browser tests" }] },
+              { header: "Notes", question: "Any notes?" },
+            ] } }]),
             helper,
           ],
         }),
@@ -290,9 +294,17 @@ try {
   assert.equal(messages[0].host, "beta");
   assert.equal(messages[0].behavior, "steer");
   await page.getByRole("button", { name: "Allow / submit" }).click();
+  await page.getByRole("alert").filter({ hasText: "Answer Strategy" }).waitFor();
+  assert.equal(permissions.length, 0, "incomplete question forms are not submitted");
+  await page.getByRole("radio", { name: "Incremental" }).check();
+  await page.getByRole("checkbox", { name: "Unit tests" }).check();
+  await page.getByRole("checkbox", { name: "Browser tests" }).check();
+  await page.getByLabel("Notes: Your answer").fill("Keep changes small");
+  await page.getByRole("button", { name: "Allow / submit" }).click();
   // The approval disappears through a resumed directory stream delivering the change.
   await page.waitForFunction(() => !document.querySelector(".permission"), null, { timeout: 15000 });
   assert.equal(permissions[0].host, "beta");
+  assert.deepEqual(permissions[0].updatedInput, { answers: { Strategy: "Incremental", Checks: "Unit tests, Browser tests", Notes: "Keep changes small" } });
   assert.ok(resumes.length > 0 && resumes.every((since) => since === "1" || since === "2"));
   // New session from the litepaseo project's "+": host and project come from the group,
   // model and thinking from the host's defaults; the session opens when the stream delivers it.

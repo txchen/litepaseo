@@ -11,6 +11,7 @@ import SessionList from "./SessionList.vue";
 import TimelineRowView from "./TimelineRowView.vue";
 import NewSession from "./NewSession.vue";
 import type { ProjectGroup } from "./directory-store.ts";
+import PermissionForm from "./PermissionForm.vue";
 import Icon from "./Icon.vue";
 import { cycleTheme, theme } from "./theme.ts";
 import Settings from "./Settings.vue";
@@ -80,9 +81,7 @@ const label = ref(""),
   tab = ref<Tab>("chat"),
   cardTitle = ref(""),
   board = ref<{ revision: number; cards: Card[] }>({ revision: 0, cards: [] });
-const permissionInputs = ref<Record<string, string>>({}),
-  permissionActions = ref<Record<string, string>>({}),
-  composer = new ComposerStore(() => localStorage);
+const composer = new ComposerStore(() => localStorage);
 const prompt = computed({
   get: () => selectedKey.value ? composer.state(selectedKey.value).text : "",
   set: (text: string) => { if (selectedKey.value) composer.setText(selectedKey.value, text); },
@@ -192,7 +191,7 @@ async function api(path: string, method = "GET", body?: unknown, timeoutMs = 200
   });
   const data = await response.json().catch(() => ({}));
   if (response.status === 401 && authenticated.value && path !== "/login") signOut(false);
-  if (!response.ok) throw new Error(data.error ?? "Request failed");
+  if (!response.ok) throw new Error((data.error ?? "Request failed") + (data.requestId ? ` (reference ${data.requestId})` : ""));
   return data;
 }
 async function action(fn: () => Promise<void>) {
@@ -633,14 +632,10 @@ async function stop() {
   const a = active.value;
   if (a) await action(async () => void (await api(path(a) + "/stop", "POST")));
 }
-async function respond(p: Permission, allow: boolean) {
+async function respond(p: Permission, response: Record<string, unknown>) {
   const a = active.value;
   if (!a) return;
   await action(async () => {
-    const response: Record<string, unknown> = { behavior: allow ? "allow" : "deny" };
-    if (permissionActions.value[p.id]) response.selectedActionId = permissionActions.value[p.id];
-    if (allow && permissionInputs.value[p.id])
-      response.updatedInput = JSON.parse(permissionInputs.value[p.id]);
     await api(path(a) + "/permissions/" + encodeURIComponent(p.id), "POST", response);
   });
 }
@@ -888,6 +883,10 @@ onUnmounted(() => {
               <div class="grow">
                 <div class="row-title">{{ h.label }}</div>
                 <div class="row-sub">{{ h.state }}</div>
+                <p v-if="h.diagnostic?.error" role="status">{{ h.diagnostic.error.message }}</p>
+                <div v-if="h.diagnostic?.lastConnectedAt" class="row-sub">Last connected: {{ new Date(h.diagnostic.lastConnectedAt).toLocaleString() }}</div>
+                <div v-if="h.diagnostic?.attempt" class="row-sub">Connection attempt {{ h.diagnostic.attempt }}</div>
+                <div v-if="h.diagnostic?.nextRetryAt" class="row-sub">Next retry: {{ new Date(h.diagnostic.nextRetryAt).toLocaleString() }}</div>
               </div>
               <button class="btn btn-outline" :disabled="busy" @click="removeHost(h)">Remove</button>
             </div>
@@ -1046,34 +1045,7 @@ onUnmounted(() => {
 
         <div class="dock">
           <div class="dock-inner">
-            <section v-for="p in active.pendingPermissions" :key="p.id" class="permission">
-              <div class="permission-head">
-                <span class="permission-icon"><Icon name="shield" :size="16" /></span>
-                <div class="grow">
-                  <div class="row-title">{{ p.title || p.name }}</div>
-                  <div class="row-sub">{{ p.kind === "question" ? "Question" : "Permission request" }} · {{ p.name }}</div>
-                </div>
-              </div>
-              <details class="permission-details">
-                <summary>Request details</summary>
-                <pre>{{ JSON.stringify(p.input, null, 2) }}</pre>
-              </details>
-              <label v-if="p.actions?.length" class="field">
-                <span>Action</span>
-                <select v-model="permissionActions[p.id]">
-                  <option value="">Default</option>
-                  <option v-for="a in p.actions" :key="a.id" :value="a.id">{{ a.label || a.id }}</option>
-                </select>
-              </label>
-              <label v-if="p.kind === 'question'" class="field">
-                <span>Answer (JSON)</span>
-                <textarea v-model="permissionInputs[p.id]" rows="3" placeholder='{"answers": {}}'></textarea>
-              </label>
-              <div class="permission-actions">
-                <button class="btn btn-outline" :disabled="busy" @click="respond(p, false)">Deny</button>
-                <button class="btn btn-primary" :disabled="busy" @click="respond(p, true)">Allow / submit</button>
-              </div>
-            </section>
+            <PermissionForm v-for="p in active.pendingPermissions" :key="active.key + ':' + p.id" :permission="p" :busy="busy" @respond="respond(p, $event)" />
 
             <p v-if="composer.warning.value" role="status">{{ composer.warning.value }}</p>
             <details v-if="savedDrafts.length">

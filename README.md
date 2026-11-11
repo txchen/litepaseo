@@ -36,7 +36,7 @@ The tarball includes prebuilt frontend assets. Runtime installation does not req
 ## What works in this preview
 
 - Independent official SDK connections, host management and a unified agent list.
-- Projected timeline pages, message send with explicit steer/interrupt behavior, stop, and permission responses. Structured questions currently use JSON input rather than provider-specific forms.
+- Projected timeline pages, message send with explicit steer/interrupt behavior, stop, and permission responses. Structured questions support single/multiple choices and text answers; unknown formats retain a JSON fallback.
 - Persistent Todo/Doing/Done cards, optionally linked to a conversation, with optimistic concurrency protection.
 - Background start/status/stop/restart, a private local control socket, and an authenticated browser API.
 
@@ -51,9 +51,9 @@ node tests/package.mjs
 
 Browser tests require Playwright Chromium (`npx playwright install chromium` if absent). Tests use temporary data directories and stop their servers afterward. Browser fixtures simulate daemon responses; they do not prove live protocol interoperability.
 
-Linux validation passed for TypeScript, production builds, API tests with two simulated hosts, background lifecycle, browser interactions and isolated tarball installation. The research SDK imports also passed on Node 24.11 and 26.12.1. A subsequent Linux run against a real 0.15.0 daemon validated creation, messages, timeline streaming and client reconnect; real approvals, active interruption, two-host isolation and macOS remain unverified. Start live integration with **one existing daemon**; a second host is useful later for routing/failure-isolation acceptance, not a prerequisite to starting.
+Linux validation passed for TypeScript, production builds, API tests with two simulated hosts, background lifecycle, browser interactions and isolated tarball installation. The research SDK imports also passed on Node 24.11 and 26.12.1. A subsequent Linux run against a real 0.15.0 daemon validated creation, messages, timeline streaming and client reconnect; real tool approvals, active interruption, two-host isolation and macOS remain unverified; a real Codex question/answer round trip has also passed. Start live integration with **one existing daemon**; a second host is useful later for routing/failure-isolation acceptance, not a prerequisite to starting.
 
-Full logout survival depends on OS session policy. Reboot autostart, crash supervision, automatic stale-socket recovery, log rotation, schema migrations, polished question forms remain unfinished. If a crash leaves `control.sock`, inspect the process before removing it; the CLI never kills a PID or deletes an unverified stale socket automatically. There are no CPU/energy results.
+Full logout survival depends on OS session policy. Reboot autostart, crash supervision, automatic stale-socket recovery and log rotation remain unfinished. If a crash leaves `control.sock`, inspect the process before removing it; the CLI never kills a PID or deletes an unverified stale socket automatically. There are no CPU/energy results.
 
 ## Design and research
 
@@ -79,3 +79,41 @@ Open the console over HTTPS (for example your Cloudflare tunnel address); browse
 Notifications are sent by this server, which is always connected to your daemons, through the browser vendor's push service (outbound HTTPS). Set `LITEPASEO_PUSH_SUBJECT=mailto:you@example.com` to your own contact address; Apple's push service requires a `mailto:` or `https:` subject.
 
 Recovery from the server shell: `litepaseo totp-reset` turns authenticator sign-in off, and `litepaseo signout-all` revokes every browser and its notifications.
+
+
+## Backups and upgrades
+
+The database now has a schema version. Existing unversioned databases are migrated transactionally;
+a private `pre-migration-v0-<id>.sqlite` snapshot is saved in the data directory first.
+A newer, unsupported schema is refused instead of being modified.
+
+Create a full backup, including the token, hosts, board, authenticator and push keys, sessions and subscriptions:
+
+```sh
+litepaseo backup /absolute/path/to/new-backup-directory
+```
+
+The destination must not exist. Backups can run while the server is running: SQLite's snapshot
+includes committed WAL data. The backup directory is 0700 and files are 0600. Keep it private;
+it contains working credentials. Conversation history remains on your daemons and browser drafts
+remain in browser storage, so neither is included.
+
+Restore into a **new, empty home**, leaving the original available for rollback:
+
+```sh
+LITEPASEO_HOME=/absolute/path/to/restored-home litepaseo restore /absolute/path/to/new-backup-directory
+# Stop the old instance before starting the replacement on the same port.
+LITEPASEO_HOME=/absolute/path/to/restored-home litepaseo start
+```
+
+Restore checks the manifest checksums, schema and database integrity, uses the service's exclusive
+control socket to block concurrent startup, and rejects nonempty destinations. An interrupted
+publish leaves a marker that prevents startup; restore the backup into another empty home.
+Only the current backup format/schema is supported by restore.
+
+## Connection diagnostics
+
+Hosts shows the last successful connection, retry attempt/time and a classified failure with
+suggested checks. SDK connection errors are classified without echoing remote text, connection
+URLs or credentials into the browser or logs. Unexpected API failures include a reference ID
+that can be matched to the `api_operation_failed` log entry.

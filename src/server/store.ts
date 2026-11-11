@@ -1,5 +1,6 @@
+import { migrate } from "./schema.ts";
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, chmodSync } from "node:fs";
+import { mkdirSync, chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 export interface Host {
@@ -45,20 +46,18 @@ const toSession = (r: Record<string, unknown>): LoginSession => ({
 export class Store {
   db: DatabaseSync;
   constructor(directory: string) {
+    if (existsSync(join(directory, ".restore-incomplete"))) throw new Error("An interrupted restore was found. Restore the backup to a fresh LITEPASEO_HOME.");
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     chmodSync(directory, 0o700);
     this.db = new DatabaseSync(join(directory, "litepaseo.sqlite"));
     chmodSync(join(directory, "litepaseo.sqlite"), 0o600);
-    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=3000;
-      CREATE TABLE IF NOT EXISTS hosts(id TEXT PRIMARY KEY,label TEXT NOT NULL,connection TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS board(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL,cards TEXT NOT NULL);
-      INSERT OR IGNORE INTO board VALUES(1,0,'[]');
-      CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,secret_hash TEXT NOT NULL UNIQUE,label TEXT NOT NULL,
-        created INTEGER NOT NULL,last_seen INTEGER NOT NULL,expires INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS push_subscriptions(endpoint TEXT PRIMARY KEY,session_id TEXT NOT NULL,
-        p256dh TEXT NOT NULL,auth TEXT NOT NULL,prefs TEXT NOT NULL,created INTEGER NOT NULL);
-      CREATE INDEX IF NOT EXISTS push_by_session ON push_subscriptions(session_id);`);
+    try {
+      migrate(this.db, directory);
+      this.db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=3000;");
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
   setting(key: string): string | null {
     const row = this.db.prepare("SELECT value FROM settings WHERE key=?").get(key);

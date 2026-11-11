@@ -1,7 +1,8 @@
+import { connectionProblem } from "./diagnostics.ts";
 import { createHostClient } from "@getpaseo/client/node";
 import { createPaseoApi } from "@getpaseo/client";
 import type { Host } from "./store.ts";
-import type { AgentSummary, WorkspaceSummary } from "../shared/wire.ts";
+import type { AgentSummary, WorkspaceSummary, HostDiagnostic } from "../shared/wire.ts";
 import { VersionedCollection } from "./versioned-collection.ts";
 import { HostDirectory, HostWorkspaces, type DirectoryDriver, type Transition } from "./host-directory.ts";
 import { TimelineView, type TimelineDriver } from "./timeline-view.ts";
@@ -29,6 +30,7 @@ export class Hosts {
   readonly agents = new VersionedCollection<AgentSummary>();
   readonly workspaces = new VersionedCollection<WorkspaceSummary>();
   readonly clients = new Map<string, Client>();
+  private readonly diagnostics = new Map<string, HostDiagnostic>();
   private readonly labels = new Map<string, string>();
   private readonly timelines = new Map<
     string,
@@ -48,7 +50,11 @@ export class Hosts {
     });
     this.labels.set(host.id, host.label);
     this.attach(host.id, driver, createPaseoApi(driver));
-    void driver.connect().catch(() => {});
+    void driver.connect().catch(error => {
+      if (this.clients.get(host.id)?.driver !== driver) return;
+      this.noteFailure(host.id, error);
+      this.emit(this.hostListeners);
+    });
   }
 
   /** Wires a connected-or-connecting driver; separate from `add` so tests can inject doubles. */
@@ -65,7 +71,19 @@ export class Hosts {
     const workspaces = new HostWorkspaces(hostId, driver as unknown as DirectoryDriver, this.workspaces, () =>
       this.emit(this.agentListeners),
     );
-    const stopStatus = driver.subscribeConnectionStatus(() => this.emit(this.hostListeners));
+    const update = (state: ReturnType<Driver["getConnectionState"]>) => {
+      const previous = this.diagnostics.get(hostId) ?? {};
+      if (state.status === "connected") this.diagnostics.set(hostId, { lastConnectedAt: new Date().toISOString() });
+      else if (state.status === "connecting") this.diagnostics.set(hostId, { ...previous, nextRetryAt: undefined, attempt: state.attempt });
+      else if (state.status === "disconnected") {
+        this.noteFailure(hostId, state);
+        const retry = state.nextRetryAt && Date.parse(state.nextRetryAt);
+        this.diagnostics.set(hostId, { ...this.diagnostics.get(hostId), nextRetryAt: retry && Number.isFinite(retry) ? new Date(retry).toISOString() : undefined });
+      }
+      this.emit(this.hostListeners);
+    };
+    const stopStatus = driver.subscribeConnectionStatus(update);
+    update(driver.getConnectionState());
     this.clients.set(hostId, { driver, api, directory, workspaces, stopStatus });
     directory.start();
     // Daemons that predate workspaces simply have none; agents still list.
@@ -77,6 +95,15 @@ export class Hosts {
     const c = this.clients.get(id);
     if (!c) throw new UnknownHostError();
     return c;
+  }
+
+  diagnostic(id: string) { return this.diagnostics.get(id); }
+
+  private noteFailure(id: string, failure: unknown) {
+    const error = connectionProblem(failure);
+    const previous = this.diagnostics.get(id) ?? {};
+    if (previous.error?.code !== error.code) console.warn(JSON.stringify({ event: "host_connection_failed", hostId: id, code: error.code }));
+    this.diagnostics.set(id, { ...previous, error });
   }
 
   state(id: string) {
@@ -99,6 +126,8 @@ export class Hosts {
       await c.api.dispose();
       await c.driver.close();
     }
+    this.diagnostics.delete(id);
+    this.labels.delete(id);
     this.emit(this.hostListeners);
   }
 

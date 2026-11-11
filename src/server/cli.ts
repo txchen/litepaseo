@@ -15,6 +15,7 @@ import {
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer, connect } from "node:net";
+import { backup, restore } from "./backup.ts";
 import { Store } from "./store.ts";
 import { Hosts } from "./hosts.ts";
 import { createApp } from "./app.ts";
@@ -43,7 +44,7 @@ async function main() {
   if (command === "help" || command === "--help") {
     console.log(
       [
-        "LitePaseo: start | serve | status | stop | restart | logs | token | totp-reset | signout-all",
+        "LitePaseo: start | serve | status | stop | restart | logs | token | totp-reset | signout-all | backup <directory> | restore <directory>",
         "  token        print the access token (sign-in fallback)",
         "  totp-reset   turn off authenticator sign-in (lost phone)",
         "  signout-all  revoke every signed-in browser and its notifications",
@@ -52,6 +53,14 @@ async function main() {
         "  LITEPASEO_PUSH_SUBJECT (mailto: or https: contact for push services)",
       ].join("\n"),
     );
+    return;
+  }
+  if (command === "backup" || command === "restore") {
+    const path = process.argv[3];
+    if (!path) throw new Error(`Usage: litepaseo ${command} <backup-directory>`);
+    if (command === "backup") backup(directory, path);
+    else await restore(path, directory);
+    console.log(command === "backup" ? "Backup complete. Keep this directory private: it contains credentials." : "Restore complete. Start LitePaseo with this LITEPASEO_HOME.");
     return;
   }
   if (command === "token") {

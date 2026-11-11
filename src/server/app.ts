@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -279,23 +280,16 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
     const session = requireSession(c.get("session"));
     return c.json({ sent: await notifier.test(session.id) });
   });
-  app.onError((error, c) =>
-    error instanceof UnknownHostError
-      ? c.json({ error: "Unknown host" }, 404)
-      : c.json(
-      {
-        error:
-          error instanceof z.ZodError
-            ? "Invalid request"
-            : "Operation failed; refresh state before retrying",
-        detail: error instanceof z.ZodError ? error.issues : undefined,
-      },
-      error instanceof z.ZodError ? 400 : 502,
-    ),
-  );
+  app.onError((error, c) => {
+    if (error instanceof UnknownHostError) return c.json({ error: "Unknown host" }, 404);
+    if (error instanceof z.ZodError) return c.json({ error: "Invalid request", detail: error.issues }, 400);
+    const requestId = randomUUID();
+    console.error(JSON.stringify({ event: "api_operation_failed", requestId, method: c.req.method }));
+    return c.json({ error: "Operation failed; refresh state before retrying", requestId }, 502);
+  });
   app.get("/api/health", (c) => c.json({ ok: true, version: "0.0.1", waiting: notifier.waitingCount }));
   const hostStates = (): HostState[] =>
-    store.hosts().map((h) => ({ id: h.id, label: h.label, state: hosts.state(h.id) }));
+    store.hosts().map((h) => ({ id: h.id, label: h.label, state: hosts.state(h.id), diagnostic: hosts.diagnostic(h.id) }));
   app.get("/api/hosts", (c) => c.json(hostStates()));
 
   // Directory streams. Each remembers the last collection seq it delivered, so a flush sends

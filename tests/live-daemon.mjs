@@ -81,6 +81,22 @@ try {
   await request(agentPath + '/messages', 'POST', message);
   await until(async () => (await tail()).entries.some(e => e.item.type === 'assistant_message' && e.item.text?.includes('LITEPASEO_SECOND_OK')), 'second answer');
   console.log('PASS message send');
+  if (process.env.LITEPASEO_TEST_QUESTIONS === '1') {
+    await request(agentPath + '/messages', 'POST', { messageId: randomUUID(), behavior: 'steer',
+      text: 'This is a question protocol test. Use request_user_input_async to ask exactly one question: Which strategy? Suggested options: Incremental, Rewrite. Do not use any other tools or inspect files. Wait for my answer. After receiving it, reply exactly LITEPASEO_QUESTION_OK.' });
+    let permission;
+    await until(() => {
+      permission = hosts.agents.snapshot().find(a => a.id === id)?.pendingPermissions.find(p => p.kind === 'question');
+      return !!permission;
+    }, 'real question request');
+    const questions = permission.input?.questions;
+    assert.ok(Array.isArray(questions) && questions.length);
+    const answers = Object.fromEntries(questions.map(q => [q.header, q.options?.[0]?.label ?? 'Incremental']));
+    await request(agentPath + '/permissions/' + encodeURIComponent(permission.id), 'POST', { behavior: 'allow', updatedInput: { answers } });
+    await until(async () => (await tail()).entries.some(e => e.item.type === 'assistant_message' && e.item.text?.includes('LITEPASEO_QUESTION_OK')), 'answer after question');
+    console.log('PASS real question request and structured response');
+  }
+
   const page = await tail();
   assert.ok(page.startCursor);
   await request(agentPath + '/timeline?cursor=' + encodeURIComponent(JSON.stringify(page.startCursor)));

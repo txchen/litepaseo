@@ -63,6 +63,7 @@ Background start runs a supervisor that restarts crashed workers with backoff. A
 - [Toolchain validation](docs/toolchain-validation.md)
 - [Lifecycle and storage research](docs/lifecycle-storage-detail.md)
 - [Markdown rendering research](docs/rendering-detail.md)
+- [Markstream published-package investigation and browser results](docs/markstream-integration-research.md)
 - [Performance experiment plan](docs/performance-plan.md)
 
 Research fixtures are under `research/`. Earlier design documents describe the target architecture, not every feature already implemented.

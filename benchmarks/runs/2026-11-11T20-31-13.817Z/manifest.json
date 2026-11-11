@@ -1,0 +1,271 @@
+{
+  "startedAt": "2026-11-11T20:31:13.826Z",
+  "commit": "5f1e337a7b89de61126de4c018f56f2929bdc574",
+  "sourceStatus": "?? benchmarks/\n",
+  "node": "v26.12.1",
+  "os": "linux 7.2.13-200.fc44.x86_64",
+  "cpu": "Intel(R) Core(TM) Ultra 7 256V",
+  "logicalCpus": 8,
+  "totalMemory": 16272830464,
+  "governor": "powersave",
+  "acOnline": "1",
+  "batteryStatus": "Not charging",
+  "loadavg": "0.59 0.83 0.80 1/986 766968",
+  "energy": {
+    "available": false,
+    "reason": "RAPL energy_uj is not readable; no joule or battery-drain claims."
+  },
+  "harness": {
+    "server": "b6a0b7a9e9f1568368d5c0e31e29ad5e2451e34ebbf154068a4ac16caca9c882",
+    "runner": "57d6b8301577519114822ec422a81fc600c9e1a2bf00ec8d492d6ef279b7ca7f"
+  },
+  "methodology": "Production frontend over real loopback HTTP/SSE, actual BFF/HostDirectory/TimelineView source loaded with Node type stripping; SDK facades are deterministic in-process doubles. BFF CPU/memory includes fixture generation/logging, not real daemon/network/provider costs. Fresh Chromium process and BFF per repetition. Browser CPU sums sampled /proc process-tree counters; RSS double-counts shared pages, PSS is also collected. Latency is event-generation to the rAF following a DOM mutation, sampled <=1Hz, not a physical paint/energy measurement. All clients use separate contexts in one headless Chromium process. Samples every 2s. No official-client comparison. Shared host, plugged in, powersave governor, no controlled thermal/brightness conditions.",
+  "cases": [
+    {
+      "name": "catalog-100",
+      "sessions": 100,
+      "duration": 2,
+      "rep": 1,
+      "clients": 1,
+      "rate": 0
+    },
+    {
+      "name": "catalog-100",
+      "sessions": 100,
+      "duration": 2,
+      "rep": 2,
+      "clients": 1,
+      "rate": 0
+    },
+    {
+      "name": "catalog-100",
+      "sessions": 100,
+      "duration": 2,
+      "rep": 3,
+      "clients": 1,
+      "rate": 0
+    },
+    {
+      "name": "catalog-1000",
+      "sessions": 1000,
+      "duration": 2,
+      "rep": 1,
+      "clients": 1,
+      "rate": 0
+    },
+    {
+      "name": "catalog-1000",
+      "sessions": 1000,
+      "duration": 2,
+      "rep": 2,
+      "clients": 1,
+      "rate": 0
+    },
+    {
+      "name": "catalog-1000",
+      "sessions": 1000,
+      "duration": 2,
+      "rep": 3,
+      "clients": 1,
+      "rate": 0
+    },
+    {
+      "name": "catalog-10000",
+      "sessions": 10000,
+      "duration": 2,
+      "rep": 1,
+      "clients": 1,
+      "rate": 0
+    },
+    {
+      "name": "catalog-10000",
+      "sessions": 10000,
+      "duration": 2,
+      "rep": 2,
+      "clients": 1,
+      "rate": 0
+    },
+    {
+      "name": "catalog-10000",
+      "sessions": 10000,
+      "duration": 2,
+      "rep": 3,
+      "clients": 1,
+      "rate": 0
+    },
+    {
+      "name": "idle",
+      "sessions": 1000,
+      "duration": 60,
+      "rep": 1,
+      "clients": 1,
+      "rate": 0
+    },
+    {
+      "name": "plain",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "duration": 30,
+      "rep": 1
+    },
+    {
+      "name": "plain",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "duration": 30,
+      "rep": 2
+    },
+    {
+      "name": "plain",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "duration": 30,
+      "rep": 3
+    },
+    {
+      "name": "markdown-large",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "kind": "markdown",
+      "prefillLines": 12000,
+      "rowEvery": 0,
+      "duration": 30,
+      "rep": 1
+    },
+    {
+      "name": "markdown-large",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "kind": "markdown",
+      "prefillLines": 12000,
+      "rowEvery": 0,
+      "duration": 30,
+      "rep": 2
+    },
+    {
+      "name": "markdown-large",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "kind": "markdown",
+      "prefillLines": 12000,
+      "rowEvery": 0,
+      "duration": 30,
+      "rep": 3
+    },
+    {
+      "name": "eight-clients",
+      "sessions": 10000,
+      "clients": 8,
+      "rate": 20,
+      "rowEvery": 100,
+      "duration": 30,
+      "rep": 1
+    },
+    {
+      "name": "eight-clients",
+      "sessions": 10000,
+      "clients": 8,
+      "rate": 20,
+      "rowEvery": 100,
+      "duration": 30,
+      "rep": 2
+    },
+    {
+      "name": "eight-clients",
+      "sessions": 10000,
+      "clients": 8,
+      "rate": 20,
+      "rowEvery": 100,
+      "duration": 30,
+      "rep": 3
+    },
+    {
+      "name": "history-expanded",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "olderPages": 20,
+      "duration": 30,
+      "rep": 1
+    },
+    {
+      "name": "history-expanded",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "olderPages": 20,
+      "duration": 30,
+      "rep": 2
+    },
+    {
+      "name": "history-expanded",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "olderPages": 20,
+      "duration": 30,
+      "rep": 3
+    },
+    {
+      "name": "directory-churn",
+      "sessions": 10000,
+      "clients": 1,
+      "rate": 0,
+      "directoryRate": 50,
+      "duration": 30,
+      "rep": 1
+    },
+    {
+      "name": "directory-churn",
+      "sessions": 10000,
+      "clients": 1,
+      "rate": 0,
+      "directoryRate": 50,
+      "duration": 30,
+      "rep": 2
+    },
+    {
+      "name": "directory-churn",
+      "sessions": 10000,
+      "clients": 1,
+      "rate": 0,
+      "directoryRate": 50,
+      "duration": 30,
+      "rep": 3
+    },
+    {
+      "name": "hidden-signal",
+      "sessions": 1000,
+      "duration": 60,
+      "rep": 1,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "hidden": true
+    },
+    {
+      "name": "soak",
+      "sessions": 1000,
+      "duration": 600,
+      "rep": 1,
+      "clients": 2,
+      "rate": 20,
+      "rowEvery": 3
+    }
+  ],
+  "chromium": "158.0.8127.18",
+  "finishedAt": "2026-11-11T20:53:27.961Z",
+  "failures": 0
+}

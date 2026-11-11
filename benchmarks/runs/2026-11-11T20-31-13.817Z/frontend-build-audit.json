@@ -1,0 +1,30 @@
+{
+  "before": {
+    "assets/index-Bxseb8PG.js": "ef5d609e5911cba6066cc53b15ac8b3b678d82df13e8ab65ef0443130f149681",
+    "assets/index-CHNg3Fom.css": "762463e4785810b52bf203a6891e5bb2b413887f9372bf5bb07e29448d03fdc5",
+    "icons/apple-touch-icon.png": "60111830bff9882f49f65ea9a5f5e1418900c47e5d26aa97ae7d5206863e38cc",
+    "icons/badge-96.png": "c3fd2da78dc4f26cad22ba5713f2ce25f19caf02f9f5e2750f9a2b8e5e159042",
+    "icons/icon-192.png": "804c9c4290c60efe0afb33b354948d566d6736ec85b3765b1914c4c5e208c3c7",
+    "icons/icon-512.png": "d88b6d41d98d84f717b9e8846af82bf04bbb7b7590cf590bf6926b490c1ab491",
+    "icons/maskable-512.png": "f460bf17d12c38ae2ffc4781b1a5d6f7c1c151f2b950a04675032d78fc3c480b",
+    "index.html": "8ac370c3a5728a57176700d760cde1456c834368da92e6f002880bf8bde1d7b6",
+    "manifest.webmanifest": "1b6f73867f1af794ac46fea2ed880e5a925214ae6011d342634007068a137873",
+    "sw.js": "338d1237eb6a6dbdd2bf103130a215c106527625c857a30d8a06b866547e9485"
+  },
+  "lockfileSha256": "a96ac7d9a2c11ee4c4908a3ec3c8f392a17ed4ed40cb6db17a72629ec8767023",
+  "after": {
+    "assets/index-Bxseb8PG.js": "ef5d609e5911cba6066cc53b15ac8b3b678d82df13e8ab65ef0443130f149681",
+    "assets/index-CHNg3Fom.css": "762463e4785810b52bf203a6891e5bb2b413887f9372bf5bb07e29448d03fdc5",
+    "icons/apple-touch-icon.png": "60111830bff9882f49f65ea9a5f5e1418900c47e5d26aa97ae7d5206863e38cc",
+    "icons/badge-96.png": "c3fd2da78dc4f26cad22ba5713f2ce25f19caf02f9f5e2750f9a2b8e5e159042",
+    "icons/icon-192.png": "804c9c4290c60efe0afb33b354948d566d6736ec85b3765b1914c4c5e208c3c7",
+    "icons/icon-512.png": "d88b6d41d98d84f717b9e8846af82bf04bbb7b7590cf590bf6926b490c1ab491",
+    "icons/maskable-512.png": "f460bf17d12c38ae2ffc4781b1a5d6f7c1c151f2b950a04675032d78fc3c480b",
+    "index.html": "8ac370c3a5728a57176700d760cde1456c834368da92e6f002880bf8bde1d7b6",
+    "manifest.webmanifest": "1b6f73867f1af794ac46fea2ed880e5a925214ae6011d342634007068a137873",
+    "sw.js": "338d1237eb6a6dbdd2bf103130a215c106527625c857a30d8a06b866547e9485"
+  },
+  "identical": true,
+  "lockfileUnchanged": true,
+  "command": "npm run build"
+}

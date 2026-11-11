@@ -1,0 +1,92 @@
+[
+  {
+    "minute": 1,
+    "browserMedianPssMiB": 438.0400390625,
+    "browserHeapMiB": 13.535076141357422,
+    "bffMedianRssMiB": 184.30859375,
+    "fixtureTextMiB": 0.15015792846679688,
+    "fixtureRows": 772,
+    "maxDomRows": 150
+  },
+  {
+    "minute": 2,
+    "browserMedianPssMiB": 444.32666015625,
+    "browserHeapMiB": 12.09465217590332,
+    "bffMedianRssMiB": 155.80078125,
+    "fixtureTextMiB": 0.30821800231933594,
+    "fixtureRows": 1572,
+    "maxDomRows": 150
+  },
+  {
+    "minute": 3,
+    "browserMedianPssMiB": 445.662109375,
+    "browserHeapMiB": 12.689319610595703,
+    "bffMedianRssMiB": 155.9375,
+    "fixtureTextMiB": 0.4606189727783203,
+    "fixtureRows": 2344,
+    "maxDomRows": 150
+  },
+  {
+    "minute": 4,
+    "browserMedianPssMiB": 448.20361328125,
+    "browserHeapMiB": 13.236629486083984,
+    "bffMedianRssMiB": 154.52734375,
+    "fixtureTextMiB": 0.6184158325195312,
+    "fixtureRows": 3144,
+    "maxDomRows": 150
+  },
+  {
+    "minute": 5,
+    "browserMedianPssMiB": 450.265625,
+    "browserHeapMiB": 13.580421447753906,
+    "bffMedianRssMiB": 155.48828125,
+    "fixtureTextMiB": 0.7763442993164062,
+    "fixtureRows": 3944,
+    "maxDomRows": 150
+  },
+  {
+    "minute": 6,
+    "browserMedianPssMiB": 452.75,
+    "browserHeapMiB": 14.154022216796875,
+    "bffMedianRssMiB": 156.97265625,
+    "fixtureTextMiB": 0.9291400909423828,
+    "fixtureRows": 4718,
+    "maxDomRows": 150
+  },
+  {
+    "minute": 7,
+    "browserMedianPssMiB": 455.134765625,
+    "browserHeapMiB": 14.660385131835938,
+    "bffMedianRssMiB": 158.4140625,
+    "fixtureTextMiB": 1.0869369506835938,
+    "fixtureRows": 5518,
+    "maxDomRows": 150
+  },
+  {
+    "minute": 8,
+    "browserMedianPssMiB": 457.1259765625,
+    "browserHeapMiB": 14.712760925292969,
+    "bffMedianRssMiB": 160.1171875,
+    "fixtureTextMiB": 1.2449970245361328,
+    "fixtureRows": 6318,
+    "maxDomRows": 150
+  },
+  {
+    "minute": 9,
+    "browserMedianPssMiB": 459.208984375,
+    "browserHeapMiB": 14.838512420654297,
+    "bffMedianRssMiB": 161.84765625,
+    "fixtureTextMiB": 1.3988761901855469,
+    "fixtureRows": 7092,
+    "maxDomRows": 150
+  },
+  {
+    "minute": 10,
+    "browserMedianPssMiB": 459.97509765625,
+    "browserHeapMiB": 14.717033386230469,
+    "bffMedianRssMiB": 162.8515625,
+    "fixtureTextMiB": 1.5593605041503906,
+    "fixtureRows": 7892,
+    "maxDomRows": 150
+  }
+]

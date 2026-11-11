@@ -1,0 +1,46 @@
+{
+  "at": "2026-11-11T20:32:53.001Z",
+  "sampleAt": 1794429172955,
+  "expected": [
+    {
+      "pid": 767877,
+      "ppid": 766957,
+      "type": "browser"
+    },
+    {
+      "pid": 767879,
+      "ppid": 767877,
+      "type": "--type=zygote"
+    },
+    {
+      "pid": 767880,
+      "ppid": 767877,
+      "type": "--type=zygote"
+    },
+    {
+      "pid": 767901,
+      "ppid": 767877,
+      "type": "--type=utility",
+      "subtype": "--utility-sub-type=network.mojom.NetworkService"
+    },
+    {
+      "pid": 767900,
+      "ppid": 767879,
+      "type": "--type=gpu-process"
+    },
+    {
+      "pid": 767937,
+      "ppid": 767880,
+      "type": "--type=renderer"
+    }
+  ],
+  "measuredPids": [
+    767877,
+    767901,
+    767880,
+    767937,
+    767879,
+    767900
+  ],
+  "missing": []
+}

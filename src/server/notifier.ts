@@ -58,7 +58,7 @@ export function webPushSender(store: Store, subject: string): PushSender {
 export class Notifier {
   private readonly store: Store;
   private readonly sender: PushSender;
-  private readonly isViewing: (key: string) => boolean;
+  private readonly isViewing: (key: string, sessionId: string) => boolean;
   private readonly hostLabel: (hostId: string) => string;
   private readonly waiting = new Set<string>();
   private readonly recent = new Map<string, number>();
@@ -67,7 +67,7 @@ export class Notifier {
   constructor(options: {
     store: Store;
     sender: PushSender;
-    isViewing: (key: string) => boolean;
+    isViewing: (key: string, sessionId: string) => boolean;
     hostLabel: (hostId: string) => string;
     now?: () => number;
   }) {
@@ -130,7 +130,6 @@ export class Notifier {
   }
 
   private emit(kind: NotificationKind, agent: AgentSummary, title: string, body: string) {
-    if (this.isViewing(agent.key)) return; // the user is looking at it already
     const dedupeKey = `${kind}:${agent.key}`;
     const now = this.now();
     if (now - (this.recent.get(dedupeKey) ?? -Infinity) < DEDUPE_MS) return;
@@ -146,10 +145,16 @@ export class Notifier {
     };
     const pref: keyof PushPrefs = kind === "attention" ? "attention" : "turns";
     for (const subscription of this.store.pushSubscriptions())
-      if (subscription.prefs[pref]) void this.deliver(subscription, message);
+      if (subscription.prefs[pref] && !this.isViewing(agent.key, subscription.sessionId))
+        void this.deliver(subscription, message);
   }
 
   private async deliver(subscription: PushSubscriptionRecord, message: PushMessage) {
+    const session = this.store.sessionById(subscription.sessionId);
+    if (!session || session.expires <= this.now()) {
+      this.store.removePushSubscription(subscription.endpoint, subscription.sessionId);
+      return;
+    }
     try {
       await this.sender.send(subscription, JSON.stringify(message));
     } catch (error) {

@@ -53,7 +53,7 @@ Browser tests require Playwright Chromium (`npx playwright install chromium` if 
 
 Linux validation passed for TypeScript, production builds, API tests with two simulated hosts, background lifecycle, browser interactions and isolated tarball installation. The research SDK imports also passed on Node 24.11 and 26.12.1. The application itself has not yet been tested against an actual daemon or on macOS. Start live integration with **one existing daemon**; a second host is useful later for routing/failure-isolation acceptance, not a prerequisite to starting.
 
-Full logout survival depends on OS session policy. Reboot autostart, crash supervision, automatic stale-socket recovery, log rotation, schema migrations, a notification channel and polished question forms remain unfinished. If a crash leaves `control.sock`, inspect the process before removing it; the CLI never kills a PID or deletes an unverified stale socket automatically. There are no CPU/energy results.
+Full logout survival depends on OS session policy. Reboot autostart, crash supervision, automatic stale-socket recovery, log rotation, schema migrations, polished question forms remain unfinished. If a crash leaves `control.sock`, inspect the process before removing it; the CLI never kills a PID or deletes an unverified stale socket automatically. There are no CPU/energy results.
 
 ## Design and research
 
@@ -74,7 +74,7 @@ Open the console over HTTPS (for example your Cloudflare tunnel address); browse
 1. **Sign in once.** The browser receives an HttpOnly session cookie (30 days, extended while in use). Review or revoke devices under **Settings → Signed-in devices**.
 2. **Optional: authenticator sign-in.** **Settings → Authenticator code → Set up** shows a QR code for any TOTP app; afterwards the sign-in page asks for a 6-digit code. Codes are single-use, and guessing is limited server-wide with a lockout that doubles up to 24 hours. The access token always remains a working fallback, and it is not affected by that lockout. Putting Cloudflare Access in front is still the strongest option.
 3. **Install.** Android/desktop Chrome: **Settings → Install**, or the browser's install menu. iPhone/iPad: Safari → Share → **Add to Home Screen**, then open LitePaseo from the Home Screen. On iOS, push only works in the Home Screen app (iOS 16.4+).
-4. **Turn on notifications** in **Settings → Notifications**: one push when an agent needs your input (permission or question), and one when a turn finishes or fails. A push is not sent for a conversation you are currently viewing. Tapping it opens that session. The app icon shows how many sessions are waiting.
+4. **Turn on notifications** in **Settings → Notifications**: one push when an agent needs your input (permission or question), and one when a turn finishes or fails. A push is not sent to the signed-in device currently viewing that conversation; other subscribed devices still receive it. Tapping it opens that session. The app icon shows how many sessions are waiting.
 
 Notifications are sent by this server, which is always connected to your daemons, through the browser vendor's push service (outbound HTTPS). Set `LITEPASEO_PUSH_SUBJECT=mailto:you@example.com` to your own contact address; Apple's push service requires a `mailto:` or `https:` subject.
 

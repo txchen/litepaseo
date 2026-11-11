@@ -30,6 +30,7 @@ const summary = (extra: Partial<AgentSummary> = {}): AgentSummary => ({
 function setup() {
   const directory = mkdtempSync(join(tmpdir(), "litepaseo-notify-"));
   const store = new Store(directory);
+  store.addSession({ id: "s1", secretHash: "test", label: "test", created: 0, lastSeen: 0, expires: 1e15 });
   const sent: { endpoint: string; message: PushMessage }[] = [];
   const failing = new Set<string>();
   let now = 1000;
@@ -42,7 +43,7 @@ function setup() {
         sent.push({ endpoint: subscription.endpoint, message: JSON.parse(payload) });
       },
     },
-    isViewing: () => viewing,
+    isViewing: (_key, sessionId) => viewing && sessionId === "s1",
     hostLabel: () => "MacBook",
     now: () => now,
   });
@@ -131,4 +132,24 @@ test("failed turns, dedupe, stale ends, viewing suppression and dead subscriptio
   } finally {
     t.cleanup();
   }
+});
+
+
+test("viewing suppresses only that device; expired devices cannot receive pushes", async () => {
+  const t = setup();
+  try {
+    t.subscribe("https://push.example/desktop");
+    t.store.addSession({ id: "s2", secretHash: "phone", label: "phone", created: 0, lastSeen: 0, expires: 2000 });
+    t.store.savePushSubscription({ endpoint: "https://push.example/phone", sessionId: "s2", p256dh: "k", auth: "a", prefs: { attention: true, turns: true }, created: 0 });
+    t.view(true);
+    t.notifier.transition(summary(), summary({ attention: true }));
+    await t.settle();
+    assert.deepEqual(t.sent.map(s => s.endpoint), ["https://push.example/phone"]);
+    t.sent.length = 0;
+    t.tick(20_000);
+    t.notifier.transition(summary(), summary({ attention: true }));
+    await t.settle();
+    assert.equal(t.sent.length, 0);
+    assert.deepEqual(t.store.pushSubscriptions().map(s => s.sessionId), ["s1"]);
+  } finally { t.cleanup(); }
 });

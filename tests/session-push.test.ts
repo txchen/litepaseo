@@ -79,12 +79,29 @@ test("cookie sign-in, CSRF header, revocation, and a daemon update becoming a pu
     assert.deepEqual(await (await call("/auth", { cookie })).json(), { authenticated: true, totp: false });
     assert.equal((await call("/hosts", { cookie })).status, 200);
 
+    const savedSession = store.sessions()[0];
+    store.touchSession(savedSession.id, Date.now() - 7200_000, savedSession.expires);
+    const renewed = await call("/auth", { cookie });
+    assert.match(renewed.headers.get("set-cookie")!, /Max-Age=259199[89]|Max-Age=2592000/);
+    assert.ok(store.sessionById(savedSession.id)!.lastSeen > savedSession.lastSeen);
+
     // Writes with only a cookie must carry the same-origin header.
     const subscription = { endpoint: "https://push.example/device", keys: { p256dh: "p", auth: "a" } };
     const subscribe = { method: "POST", body: { subscription, prefs: { attention: true, turns: true } }, cookie };
     assert.equal((await call("/push/subscribe", subscribe)).status, 403);
     assert.equal((await call("/push/subscribe", { ...subscribe, csrf: true })).status, 200);
     assert.match((await (await call("/push/key", { cookie })).json()).publicKey, /^[\w-]{80,}$/);
+
+    // A second signed-in browser viewing this conversation must not suppress this device.
+    const otherLogin = await call("/login", { method: "POST", body: { token: "test-token" } });
+    const otherCookie = otherLogin.headers.get("set-cookie")!.split(";")[0];
+    const otherSubscribe = { ...subscribe, cookie: otherCookie, csrf: true,
+      body: { subscription: { ...subscription, endpoint: "https://push.example/desktop" }, prefs: { attention: true, turns: true } } };
+    await call("/push/subscribe", otherSubscribe);
+    const originalWatch = hosts.watchTimeline;
+    hosts.watchTimeline = () => () => {};
+    const desktopStream = await call(`/hosts/${host.id}/agents/a1/timeline/stream`, { cookie: otherCookie });
+    hosts.watchTimeline = originalWatch;
 
     // The daemon reports a permission request: the subscribed device gets a push.
     observer.update({
@@ -98,9 +115,13 @@ test("cookie sign-in, CSRF header, revocation, and a daemon update becoming a pu
     });
     await new Promise((r) => setImmediate(r));
     assert.equal(pushes.length, 1);
+    assert.equal(pushes[0].endpoint, subscription.endpoint);
     assert.equal(pushes[0].payload.title, "litepaseo · needs your input");
     assert.equal(pushes[0].payload.url, `/?session=${encodeURIComponent(host.id + ":a1")}`);
     assert.equal((await (await call("/health", { cookie })).json()).waiting, 1);
+
+    await desktopStream.body!.cancel();
+    await call("/logout", { method: "POST", cookie: otherCookie, csrf: true });
 
     // The turn ends: a second push.
     // Paseo flags a finished turn for attention ("finished"); that is a turn-end, not a request for input.

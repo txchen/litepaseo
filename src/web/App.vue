@@ -75,14 +75,26 @@ const hosts = shallowRef<HostState[]>([]),
   detailOpen = ref(false);
 const label = ref(""),
   connection = ref(""),
-  prompt = ref(""),
   behavior = ref<"steer" | "interrupt">("steer"),
   tab = ref<Tab>("chat"),
   cardTitle = ref(""),
   board = ref<{ revision: number; cards: Card[] }>({ revision: 0, cards: [] });
 const permissionInputs = ref<Record<string, string>>({}),
   permissionActions = ref<Record<string, string>>({}),
-  uncertain = ref<{ messageId: string; text: string } | null>(null);
+  composerStates = ref<Record<string, { text: string; uncertain: { messageId: string; text: string } | null }>>({});
+function composerFor(key: string) {
+  return composerStates.value[key] ??= { text: "", uncertain: null };
+}
+const prompt = computed({
+  get: () => selectedKey.value ? composerFor(selectedKey.value).text : "",
+  set: (text: string) => { if (selectedKey.value) composerFor(selectedKey.value).text = text; },
+});
+const uncertain = computed({
+  get: () => selectedKey.value ? composerFor(selectedKey.value).uncertain : null,
+  set: (value: { messageId: string; text: string } | null) => {
+    if (selectedKey.value) composerFor(selectedKey.value).uncertain = value;
+  },
+});
 
 const hostLabels = computed(() => new Map(hosts.value.map((h) => [h.id, h.label])));
 const hostStates = computed(() => new Map(hosts.value.map((h) => [h.id, h.state])));
@@ -505,7 +517,6 @@ async function loadUsage(refresh = false) {
   }
 }
 watch(selectedKey, () => {
-  uncertain.value = null;
   suggestion.value = null;
 });
 // The timeline stream follows the selected agent while it exists in the directory, so a
@@ -588,16 +599,18 @@ async function send() {
 async function sendText(text: string, fromComposer = false) {
   const a = active.value;
   if (!a || !text.trim() || uncertain.value || busy.value) return;
+  const state = composerFor(a.key);
   const sent = { text, messageId: crypto.randomUUID() };
+  if (fromComposer) state.text = "";
   await action(async () => {
     try {
       await api(path(a) + "/messages", "POST", { ...sent, behavior: behavior.value });
-      suggestion.value = null;
-      if (fromComposer) prompt.value = "";
+      if (selectedKey.value === a.key) suggestion.value = null;
       void nextTick(autosize);
       scrollToBottom();
     } catch (e) {
-      uncertain.value = sent;
+      state.uncertain = sent;
+      if (fromComposer && !state.text) state.text = sent.text;
       throw e;
     }
   });
@@ -1049,7 +1062,7 @@ onUnmounted(() => {
 
             <div v-if="uncertain" class="uncertain">
               <Icon name="alert" :size="15" />
-              <span class="grow">Delivery unknown. Check the conversation before sending again.</span>
+              <span class="grow">Delivery unknown. Check the conversation before sending again. Message: {{ uncertain.text }}</span>
               <button class="btn btn-ghost" @click="uncertain = null">I checked</button>
             </div>
 

@@ -40,6 +40,8 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
+  let finishMessage = null;
+  let messageFailure = false;
   const messages = [],
     permissions = [];
   // Each mocked stream response ends after its events; the client reconnects with its cursor,
@@ -232,7 +234,8 @@ try {
     }
     if (p.endsWith("/messages")) {
       messages.push({ host, ...route.request().postDataJSON() });
-      return route.fulfill({ json: { status: "acknowledged" } });
+      await new Promise(resolve => { finishMessage = resolve; });
+      return route.fulfill({ status: messageFailure ? 502 : 200, json: messageFailure ? { error: "Delivery outcome unknown" } : { status: "acknowledged" } });
     }
     if (p.includes("/permissions/")) {
       permissions.push({ host, ...route.request().postDataJSON() });
@@ -255,6 +258,26 @@ try {
   await page.locator(".composer textarea").fill("Hello beta");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await page.waitForFunction(() => document.querySelector(".composer textarea").value === "");
+  await page.locator(".composer textarea").fill("Next beta draft");
+  while (!finishMessage) await new Promise(r => setTimeout(r, 10));
+  finishMessage();
+  finishMessage = null;
+  await page.waitForFunction(() => !document.querySelector('.disc-send').disabled);
+  assert.equal(await page.locator(".composer textarea").inputValue(), "Next beta draft");
+  messageFailure = true;
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  while (!finishMessage) await new Promise(r => setTimeout(r, 10));
+  await page.locator("button.session", { hasText: "alpha conversation" }).click();
+  await page.locator(".composer textarea").fill("Alpha draft");
+  finishMessage();
+  await page.getByText("Delivery outcome unknown", { exact: true }).waitFor();
+  assert.equal(await page.locator(".uncertain").count(), 0);
+  assert.equal(await page.locator(".composer textarea").inputValue(), "Alpha draft");
+  await page.locator("button.session", { hasText: "beta conversation" }).click();
+  await page.locator(".uncertain").waitFor();
+  assert.equal(await page.locator(".composer textarea").inputValue(), "Next beta draft");
+  await page.getByRole("button", { name: "I checked", exact: true }).click();
+  await page.locator(".composer textarea").fill("");
   assert.equal(messages[0].host, "beta");
   assert.equal(messages[0].behavior, "steer");
   await page.getByRole("button", { name: "Allow / submit" }).click();
@@ -289,6 +312,7 @@ try {
   );
   assert.equal(await dialog.count(), 0, "the dialog closes after creation");
 
+  threadActions.length = 0; // Earlier conversation switching also marked alpha as read.
   // Thread actions from the row menu (right click on desktop): pin, rename, unread, archive.
   const betaRow = page.locator("button.session", { hasText: "beta conversation" });
   await betaRow.click({ button: "right" });

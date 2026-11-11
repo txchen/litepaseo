@@ -112,10 +112,11 @@ type Env = { Variables: { session: LoginSession | null } };
 export function createApp(store: Store, hosts: Hosts, token: string, webRoot: string, options: AppOptions = {}) {
   const app = new Hono<Env>();
   const auth = new Auth(store, token);
+  const viewers = new Map<string, Map<string, number>>();
   const notifier = new Notifier({
     store,
     sender: options.pushSender ?? webPushSender(store, options.pushSubject ?? "mailto:litepaseo@example.com"),
-    isViewing: (key) => hosts.isViewing(key),
+    isViewing: (key, sessionId) => (viewers.get(key)?.get(sessionId) ?? 0) > 0,
     hostLabel: (id) => hosts.label(id) || store.hosts().find((h) => h.id === id)?.label || "",
   });
   hosts.onTransition((previous, next) => notifier.transition(previous, next));
@@ -133,6 +134,15 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
       "Content-Security-Policy",
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'",
     );
+  });
+  app.use("/api/*", async (c, next) => {
+    const secret = getCookie(c, SESSION_COOKIE);
+    const session = auth.verify(secret);
+    if (session && secret) setCookie(c, SESSION_COOKIE, secret, {
+      httpOnly: true, secure: secure(c), sameSite: "Strict", path: "/",
+      maxAge: Math.max(0, Math.floor((session.expires - Date.now()) / 1000)),
+    });
+    await next();
   });
   app.use("/api/*", bodyLimit({ maxSize: 1024 * 1024 }));
   app.use("/api/*", async (c, next) => {
@@ -467,12 +477,27 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
 
   app.get("/api/hosts/:host/agents/:agent/timeline/stream", (c) => {
     hosts.get(c.req.param("host"));
-    return eventStream(c.req.raw.signal, (send) =>
-      hosts.watchTimeline(c.req.param("host"), c.req.param("agent"), (ops) =>
-        send({ type: "ops", ops } satisfies TimelineMessage),
-      ),
-      streamValidity(c.get("session")),
-    );
+    return eventStream(c.req.raw.signal, (send) => {
+      const sessionId = c.get("session")?.id;
+      const key = `${c.req.param("host")}:${c.req.param("agent")}`;
+      const stop = hosts.watchTimeline(c.req.param("host"), c.req.param("agent"), (ops) =>
+        send({ type: "ops", ops } satisfies TimelineMessage));
+      if (sessionId) {
+        let devices = viewers.get(key);
+        if (!devices) viewers.set(key, devices = new Map());
+        devices.set(sessionId, (devices.get(sessionId) ?? 0) + 1);
+      }
+      return () => {
+        stop();
+        const devices = viewers.get(key);
+        if (sessionId && devices) {
+          const count = (devices.get(sessionId) ?? 1) - 1;
+          if (count) devices.set(sessionId, count);
+          else devices.delete(sessionId);
+          if (!devices.size) viewers.delete(key);
+        }
+      };
+    }, streamValidity(c.get("session")));
   });
   /** Older history for the browser; live rows come from the stream above. */
   app.get("/api/hosts/:host/agents/:agent/timeline", async (c) => {

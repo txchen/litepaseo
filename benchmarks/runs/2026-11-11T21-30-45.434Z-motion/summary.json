@@ -1,0 +1,42 @@
+{
+  "manifest": {
+    "commit": "ef0ccb63b8fb9ad0485117dfc2fd1eedc9b6a868",
+    "chromium": "158.0.8127.18"
+  },
+  "summary": [
+    {
+      "scenario": "idle-motion-default",
+      "repetitions": 3,
+      "passed": 3,
+      "coldReadyMs": {
+        "median": 788.9921849999992,
+        "min": 770.504909000003,
+        "max": 791.047499
+      },
+      "browserCpuPct": {
+        "median": 1.4244337875694404,
+        "min": 1.3295346628679954,
+        "max": 1.472754050073638
+      },
+      "bffFixtureCpuPct": {
+        "median": 0.1579107312440646,
+        "min": 0.14852487054016816,
+        "max": 0.17720905939888892
+      },
+      "browserPeakPssMiB": {
+        "median": 233.9873046875,
+        "min": 233.73828125,
+        "max": 234.52734375
+      },
+      "bffPeakRssMiB": {
+        "median": 179.10546875,
+        "min": 174.21484375,
+        "max": 180.1015625
+      },
+      "sampledLatencyP95Ms": null,
+      "maxRows": 60,
+      "maxSidebarRows": 22,
+      "longTasks": 0
+    }
+  ]
+}

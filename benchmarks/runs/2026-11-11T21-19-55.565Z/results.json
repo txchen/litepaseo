@@ -1,0 +1,404 @@
+[
+  {
+    "name": "idle-motion-2hz-r1",
+    "spec": {
+      "name": "idle-motion-2hz",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 1,
+      "clients": 1,
+      "rate": 0,
+      "animationHz": 2
+    },
+    "coldReadyMs": [
+      479.932806
+    ],
+    "historyLoadMs": null,
+    "resumeMs": null,
+    "wallSeconds": 21.047,
+    "browserCpuSeconds": 0.29000000000000004,
+    "bffFixtureCpuSeconds": 0.031047,
+    "bffStartRss": 189341696,
+    "bffEndRss": 189341696,
+    "bffPeakRss": 189341696,
+    "browserStartPss": 245699584,
+    "browserEndPss": 243846144,
+    "browserPeakPss": 245699584,
+    "browserPeakSummedRss": 512454656,
+    "browserHeapStart": [
+      5801040
+    ],
+    "browserHeapEnd": [
+      5955592
+    ],
+    "wireBytes": 16,
+    "initialWireBytes": 998065,
+    "generated": 0,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.10808006130268,
+      "p95Ms": 20.217855,
+      "maxMs": 20.856831
+    },
+    "longTasks": 0,
+    "longTaskMs": 0,
+    "maxDomNodesPerClient": 516,
+    "maxTimelineRowsPerClient": 60,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 60,
+        "expectedHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "actualHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 0,
+      "p50": null,
+      "p95": null,
+      "max": null
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  },
+  {
+    "name": "idle-motion-1hz-r1",
+    "spec": {
+      "name": "idle-motion-1hz",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 1,
+      "clients": 1,
+      "rate": 0,
+      "animationHz": 1
+    },
+    "coldReadyMs": [
+      475.5512060000001
+    ],
+    "historyLoadMs": null,
+    "resumeMs": null,
+    "wallSeconds": 21.053,
+    "browserCpuSeconds": 0.17999999999999994,
+    "bffFixtureCpuSeconds": 0.033933,
+    "bffStartRss": 188186624,
+    "bffEndRss": 188317696,
+    "bffPeakRss": 188317696,
+    "browserStartPss": 245532672,
+    "browserEndPss": 243553280,
+    "browserPeakPss": 245532672,
+    "browserPeakSummedRss": 513032192,
+    "browserHeapStart": [
+      5848864
+    ],
+    "browserHeapEnd": [
+      5991608
+    ],
+    "wireBytes": 16,
+    "initialWireBytes": 998065,
+    "generated": 0,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.100761355023923,
+      "p95Ms": 20.217855,
+      "maxMs": 20.611071
+    },
+    "longTasks": 0,
+    "longTaskMs": 0,
+    "maxDomNodesPerClient": 516,
+    "maxTimelineRowsPerClient": 60,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 60,
+        "expectedHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "actualHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 0,
+      "p50": null,
+      "p95": null,
+      "max": null
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  },
+  {
+    "name": "idle-motion-1hz-r2",
+    "spec": {
+      "name": "idle-motion-1hz",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 2,
+      "clients": 1,
+      "rate": 0,
+      "animationHz": 1
+    },
+    "coldReadyMs": [
+      473.4712189999991
+    ],
+    "historyLoadMs": null,
+    "resumeMs": null,
+    "wallSeconds": 21.057,
+    "browserCpuSeconds": 0.19999999999999996,
+    "bffFixtureCpuSeconds": 0.031581,
+    "bffStartRss": 188977152,
+    "bffEndRss": 189108224,
+    "bffPeakRss": 189108224,
+    "browserStartPss": 246781952,
+    "browserEndPss": 243427328,
+    "browserPeakPss": 246781952,
+    "browserPeakSummedRss": 512802816,
+    "browserHeapStart": [
+      6280016
+    ],
+    "browserHeapEnd": [
+      6422748
+    ],
+    "wireBytes": 16,
+    "initialWireBytes": 998065,
+    "generated": 0,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.09093482217973,
+      "p95Ms": 20.201471,
+      "maxMs": 21.184511
+    },
+    "longTasks": 0,
+    "longTaskMs": 0,
+    "maxDomNodesPerClient": 516,
+    "maxTimelineRowsPerClient": 60,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 60,
+        "expectedHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "actualHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 0,
+      "p50": null,
+      "p95": null,
+      "max": null
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  },
+  {
+    "name": "idle-motion-2hz-r2",
+    "spec": {
+      "name": "idle-motion-2hz",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 2,
+      "clients": 1,
+      "rate": 0,
+      "animationHz": 2
+    },
+    "coldReadyMs": [
+      484.5343390000053
+    ],
+    "historyLoadMs": null,
+    "resumeMs": null,
+    "wallSeconds": 21.049,
+    "browserCpuSeconds": 0.30999999999999983,
+    "bffFixtureCpuSeconds": 0.032479,
+    "bffStartRss": 189304832,
+    "bffEndRss": 189304832,
+    "bffPeakRss": 189304832,
+    "browserStartPss": 246072320,
+    "browserEndPss": 244151296,
+    "browserPeakPss": 246072320,
+    "browserPeakSummedRss": 512561152,
+    "browserHeapStart": [
+      5840872
+    ],
+    "browserHeapEnd": [
+      5995436
+    ],
+    "wireBytes": 16,
+    "initialWireBytes": 998065,
+    "generated": 0,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.133336237775644,
+      "p95Ms": 20.217855,
+      "maxMs": 20.889599
+    },
+    "longTasks": 0,
+    "longTaskMs": 0,
+    "maxDomNodesPerClient": 516,
+    "maxTimelineRowsPerClient": 60,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 60,
+        "expectedHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "actualHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 0,
+      "p50": null,
+      "p95": null,
+      "max": null
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  },
+  {
+    "name": "idle-motion-2hz-r3",
+    "spec": {
+      "name": "idle-motion-2hz",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 3,
+      "clients": 1,
+      "rate": 0,
+      "animationHz": 2
+    },
+    "coldReadyMs": [
+      473.93358899999293
+    ],
+    "historyLoadMs": null,
+    "resumeMs": null,
+    "wallSeconds": 21.038,
+    "browserCpuSeconds": 0.2999999999999998,
+    "bffFixtureCpuSeconds": 0.036151,
+    "bffStartRss": 188268544,
+    "bffEndRss": 188268544,
+    "bffPeakRss": 188268544,
+    "browserStartPss": 245798912,
+    "browserEndPss": 243877888,
+    "browserPeakPss": 245798912,
+    "browserPeakSummedRss": 513036288,
+    "browserHeapStart": [
+      5797180
+    ],
+    "browserHeapEnd": [
+      5951696
+    ],
+    "wireBytes": 16,
+    "initialWireBytes": 998065,
+    "generated": 0,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.108130235406698,
+      "p95Ms": 20.217855,
+      "maxMs": 20.692991
+    },
+    "longTasks": 0,
+    "longTaskMs": 0,
+    "maxDomNodesPerClient": 516,
+    "maxTimelineRowsPerClient": 60,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 60,
+        "expectedHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "actualHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 0,
+      "p50": null,
+      "p95": null,
+      "max": null
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  },
+  {
+    "name": "idle-motion-1hz-r3",
+    "spec": {
+      "name": "idle-motion-1hz",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 3,
+      "clients": 1,
+      "rate": 0,
+      "animationHz": 1
+    },
+    "coldReadyMs": [
+      485.35220000000845
+    ],
+    "historyLoadMs": null,
+    "resumeMs": null,
+    "wallSeconds": 21.047,
+    "browserCpuSeconds": 0.16999999999999993,
+    "bffFixtureCpuSeconds": 0.036178,
+    "bffStartRss": 189337600,
+    "bffEndRss": 189337600,
+    "bffPeakRss": 189337600,
+    "browserStartPss": 243696640,
+    "browserEndPss": 241859584,
+    "browserPeakPss": 243696640,
+    "browserPeakSummedRss": 511279104,
+    "browserHeapStart": [
+      6232224
+    ],
+    "browserHeapEnd": [
+      5474640
+    ],
+    "wireBytes": 16,
+    "initialWireBytes": 998065,
+    "generated": 0,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.100729998086123,
+      "p95Ms": 20.201471,
+      "maxMs": 21.413887
+    },
+    "longTasks": 0,
+    "longTaskMs": 0,
+    "maxDomNodesPerClient": 516,
+    "maxTimelineRowsPerClient": 60,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 60,
+        "expectedHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "actualHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 0,
+      "p50": null,
+      "p95": null,
+      "max": null
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  }
+]

@@ -1,0 +1,614 @@
+[
+  {
+    "name": "plain-r1",
+    "spec": {
+      "name": "plain",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "duration": 30,
+      "rep": 1
+    },
+    "coldReadyMs": [
+      781.0599049999998
+    ],
+    "historyLoadMs": null,
+    "resumeMs": null,
+    "wallSeconds": 31.04,
+    "browserCpuSeconds": 1.53,
+    "bffFixtureCpuSeconds": 0.251588,
+    "bffStartRss": 187596800,
+    "bffEndRss": 187858944,
+    "bffPeakRss": 187858944,
+    "browserStartPss": 244989952,
+    "browserEndPss": 243396608,
+    "browserPeakPss": 260481024,
+    "browserPeakSummedRss": 526581760,
+    "browserHeapStart": [
+      7503224
+    ],
+    "browserHeapEnd": [
+      5262392
+    ],
+    "wireBytes": 49901,
+    "initialWireBytes": 924471,
+    "generated": 1196,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.09457250550875,
+      "p95Ms": 20.529151,
+      "maxMs": 21.053439
+    },
+    "longTasks": 0,
+    "longTaskMs": 0,
+    "maxDomNodesPerClient": 1125,
+    "maxTimelineRowsPerClient": 66,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 66,
+        "expectedHash": "9136c9db30cdc4533f588c7f68df22c1ef5d917684d8d256f59d37e34b98577e",
+        "actualHash": "9136c9db30cdc4533f588c7f68df22c1ef5d917684d8d256f59d37e34b98577e",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 30,
+      "p50": 54,
+      "p95": 56,
+      "max": 58
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  },
+  {
+    "name": "plain-r2",
+    "spec": {
+      "name": "plain",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "duration": 30,
+      "rep": 2
+    },
+    "coldReadyMs": [
+      783.3297870000024
+    ],
+    "historyLoadMs": null,
+    "resumeMs": null,
+    "wallSeconds": 31.043,
+    "browserCpuSeconds": 1.5,
+    "bffFixtureCpuSeconds": 0.241621,
+    "bffStartRss": 188620800,
+    "bffEndRss": 189145088,
+    "bffPeakRss": 189145088,
+    "browserStartPss": 244201472,
+    "browserEndPss": 243579904,
+    "browserPeakPss": 255491072,
+    "browserPeakSummedRss": 522842112,
+    "browserHeapStart": [
+      7531364
+    ],
+    "browserHeapEnd": [
+      5264408
+    ],
+    "wireBytes": 49901,
+    "initialWireBytes": 924471,
+    "generated": 1196,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.093010345006483,
+      "p95Ms": 20.512767,
+      "maxMs": 20.987903
+    },
+    "longTasks": 0,
+    "longTaskMs": 0,
+    "maxDomNodesPerClient": 1125,
+    "maxTimelineRowsPerClient": 66,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 66,
+        "expectedHash": "875b8efd7c02bb542b14d701e151bfb552282a7377632dc8b9260841854f0f4e",
+        "actualHash": "875b8efd7c02bb542b14d701e151bfb552282a7377632dc8b9260841854f0f4e",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 30,
+      "p50": 54,
+      "p95": 58,
+      "max": 58
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  },
+  {
+    "name": "plain-r3",
+    "spec": {
+      "name": "plain",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "duration": 30,
+      "rep": 3
+    },
+    "coldReadyMs": [
+      791.7260839999944
+    ],
+    "historyLoadMs": null,
+    "resumeMs": null,
+    "wallSeconds": 31.036,
+    "browserCpuSeconds": 1.5999999999999999,
+    "bffFixtureCpuSeconds": 0.253006,
+    "bffStartRss": 188538880,
+    "bffEndRss": 188801024,
+    "bffPeakRss": 188801024,
+    "browserStartPss": 243898368,
+    "browserEndPss": 243713024,
+    "browserPeakPss": 256607232,
+    "browserPeakSummedRss": 525058048,
+    "browserHeapStart": [
+      7589316
+    ],
+    "browserHeapEnd": [
+      5259228
+    ],
+    "wireBytes": 49505,
+    "initialWireBytes": 924471,
+    "generated": 1196,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.11314618559377,
+      "p95Ms": 20.578303,
+      "maxMs": 21.037055
+    },
+    "longTasks": 0,
+    "longTaskMs": 0,
+    "maxDomNodesPerClient": 1125,
+    "maxTimelineRowsPerClient": 66,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 66,
+        "expectedHash": "6ac4d9d99f732833c5f93e5b6d44e43cc7452761d9ac00c0cbe5c2597de5909b",
+        "actualHash": "6ac4d9d99f732833c5f93e5b6d44e43cc7452761d9ac00c0cbe5c2597de5909b",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 30,
+      "p50": 56,
+      "p95": 59,
+      "max": 61
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  },
+  {
+    "name": "markdown-large-r1",
+    "spec": {
+      "name": "markdown-large",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "kind": "markdown",
+      "prefillLines": 12000,
+      "rowEvery": 0,
+      "duration": 30,
+      "rep": 1
+    },
+    "coldReadyMs": [
+      783.5451180000091
+    ],
+    "historyLoadMs": null,
+    "resumeMs": null,
+    "wallSeconds": 31.05,
+    "browserCpuSeconds": 8.499999999999998,
+    "bffFixtureCpuSeconds": 0.214055,
+    "bffStartRss": 188542976,
+    "bffEndRss": 194834432,
+    "bffPeakRss": 194834432,
+    "browserStartPss": 245494784,
+    "browserEndPss": 388652032,
+    "browserPeakPss": 414114816,
+    "browserPeakSummedRss": 682385408,
+    "browserHeapStart": [
+      6147196
+    ],
+    "browserHeapEnd": [
+      6583964
+    ],
+    "wireBytes": 385006,
+    "initialWireBytes": 924471,
+    "generated": 1196,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.090144684381077,
+      "p95Ms": 20.463615,
+      "maxMs": 26.607615
+    },
+    "longTasks": 60,
+    "longTaskMs": 6131,
+    "maxDomNodesPerClient": 520,
+    "maxTimelineRowsPerClient": 61,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 61,
+        "expectedHash": "54f100a62417ef72558e7a0ee27b62d65e28c2eb714ae0fa3db8dbbe5badff9e",
+        "actualHash": "54f100a62417ef72558e7a0ee27b62d65e28c2eb714ae0fa3db8dbbe5badff9e",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 27,
+      "p50": 164,
+      "p95": 176,
+      "max": 183
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  },
+  {
+    "name": "markdown-large-r2",
+    "spec": {
+      "name": "markdown-large",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "kind": "markdown",
+      "prefillLines": 12000,
+      "rowEvery": 0,
+      "duration": 30,
+      "rep": 2
+    },
+    "coldReadyMs": [
+      788.7480740000028
+    ],
+    "historyLoadMs": null,
+    "resumeMs": null,
+    "wallSeconds": 31.041,
+    "browserCpuSeconds": 8.719999999999999,
+    "bffFixtureCpuSeconds": 0.220022,
+    "bffStartRss": 187502592,
+    "bffEndRss": 193925120,
+    "bffPeakRss": 193925120,
+    "browserStartPss": 246530048,
+    "browserEndPss": 389528576,
+    "browserPeakPss": 391977984,
+    "browserPeakSummedRss": 659767296,
+    "browserHeapStart": [
+      6183096
+    ],
+    "browserHeapEnd": [
+      16356680
+    ],
+    "wireBytes": 385006,
+    "initialWireBytes": 924471,
+    "generated": 1196,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.098291050583658,
+      "p95Ms": 20.512767,
+      "maxMs": 21.004287
+    },
+    "longTasks": 60,
+    "longTaskMs": 6302,
+    "maxDomNodesPerClient": 520,
+    "maxTimelineRowsPerClient": 61,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 61,
+        "expectedHash": "bf489fbfc9b437ac4b6520b0cb88eb22c38132da4ba562837281bad283a2b733",
+        "actualHash": "bf489fbfc9b437ac4b6520b0cb88eb22c38132da4ba562837281bad283a2b733",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 26,
+      "p50": 166,
+      "p95": 182,
+      "max": 189
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  },
+  {
+    "name": "markdown-large-r3",
+    "spec": {
+      "name": "markdown-large",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "kind": "markdown",
+      "prefillLines": 12000,
+      "rowEvery": 0,
+      "duration": 30,
+      "rep": 3
+    },
+    "coldReadyMs": [
+      775.8005739999935
+    ],
+    "historyLoadMs": null,
+    "resumeMs": null,
+    "wallSeconds": 31.04,
+    "browserCpuSeconds": 8.79,
+    "bffFixtureCpuSeconds": 0.204383,
+    "bffStartRss": 188264448,
+    "bffEndRss": 194949120,
+    "bffPeakRss": 194949120,
+    "browserStartPss": 244350976,
+    "browserEndPss": 352789504,
+    "browserPeakPss": 353453056,
+    "browserPeakSummedRss": 621568000,
+    "browserHeapStart": [
+      6257816
+    ],
+    "browserHeapEnd": [
+      9858800
+    ],
+    "wireBytes": 385006,
+    "initialWireBytes": 924471,
+    "generated": 1196,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.092002882696047,
+      "p95Ms": 20.447231,
+      "maxMs": 24.150015
+    },
+    "longTasks": 60,
+    "longTaskMs": 6272,
+    "maxDomNodesPerClient": 520,
+    "maxTimelineRowsPerClient": 61,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 61,
+        "expectedHash": "9fb177b18b028a4315b92d6ae1b073056c6c78741948bf9777c804555f521431",
+        "actualHash": "9fb177b18b028a4315b92d6ae1b073056c6c78741948bf9777c804555f521431",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 28,
+      "p50": 165,
+      "p95": 173,
+      "max": 317
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  },
+  {
+    "name": "history-expanded-r1",
+    "spec": {
+      "name": "history-expanded",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "olderPages": 20,
+      "duration": 30,
+      "rep": 1
+    },
+    "coldReadyMs": [
+      785.2511330000125
+    ],
+    "historyLoadMs": 3629.4906109999865,
+    "resumeMs": null,
+    "wallSeconds": 31.043,
+    "browserCpuSeconds": 0.6499999999999999,
+    "bffFixtureCpuSeconds": 0.270994,
+    "bffStartRss": 199888896,
+    "bffEndRss": 204214272,
+    "bffPeakRss": 204214272,
+    "browserStartPss": 317855744,
+    "browserEndPss": 256864256,
+    "browserPeakPss": 317941760,
+    "browserPeakSummedRss": 587300864,
+    "browserHeapStart": [
+      14918836
+    ],
+    "browserHeapEnd": [
+      7007144
+    ],
+    "wireBytes": 49901,
+    "initialWireBytes": 3606931,
+    "generated": 1196,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.08038648865846,
+      "p95Ms": 20.529151,
+      "maxMs": 20.971519
+    },
+    "longTasks": 0,
+    "longTaskMs": 0,
+    "maxDomNodesPerClient": 743,
+    "maxTimelineRowsPerClient": 150,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 150,
+        "expectedHash": "f1f61016468daa0fc0f79c9f3edd08bdd1699c197d487d2433ce202012de9dd1",
+        "actualHash": "f1f61016468daa0fc0f79c9f3edd08bdd1699c197d487d2433ce202012de9dd1",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 0,
+      "p50": null,
+      "p95": null,
+      "max": null
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  },
+  {
+    "name": "history-expanded-r2",
+    "spec": {
+      "name": "history-expanded",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "olderPages": 20,
+      "duration": 30,
+      "rep": 2
+    },
+    "coldReadyMs": [
+      776.1847240000207
+    ],
+    "historyLoadMs": 3613.325527000008,
+    "resumeMs": null,
+    "wallSeconds": 31.047,
+    "browserCpuSeconds": 0.6899999999999995,
+    "bffFixtureCpuSeconds": 0.290665,
+    "bffStartRss": 200421376,
+    "bffEndRss": 204877824,
+    "bffPeakRss": 204877824,
+    "browserStartPss": 319031296,
+    "browserEndPss": 257933312,
+    "browserPeakPss": 319031296,
+    "browserPeakSummedRss": 588304384,
+    "browserHeapStart": [
+      7198064
+    ],
+    "browserHeapEnd": [
+      6946852
+    ],
+    "wireBytes": 49901,
+    "initialWireBytes": 3606931,
+    "generated": 1196,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.094275193778355,
+      "p95Ms": 20.529151,
+      "maxMs": 21.282815
+    },
+    "longTasks": 0,
+    "longTaskMs": 0,
+    "maxDomNodesPerClient": 743,
+    "maxTimelineRowsPerClient": 150,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 150,
+        "expectedHash": "f1f61016468daa0fc0f79c9f3edd08bdd1699c197d487d2433ce202012de9dd1",
+        "actualHash": "f1f61016468daa0fc0f79c9f3edd08bdd1699c197d487d2433ce202012de9dd1",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 0,
+      "p50": null,
+      "p95": null,
+      "max": null
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  },
+  {
+    "name": "history-expanded-r3",
+    "spec": {
+      "name": "history-expanded",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "olderPages": 20,
+      "duration": 30,
+      "rep": 3
+    },
+    "coldReadyMs": [
+      781.89676100004
+    ],
+    "historyLoadMs": 3513.674875000026,
+    "resumeMs": null,
+    "wallSeconds": 31.051,
+    "browserCpuSeconds": 0.6699999999999999,
+    "bffFixtureCpuSeconds": 0.290891,
+    "bffStartRss": 195330048,
+    "bffEndRss": 199786496,
+    "bffPeakRss": 199786496,
+    "browserStartPss": 319238144,
+    "browserEndPss": 257022976,
+    "browserPeakPss": 319238144,
+    "browserPeakSummedRss": 589312000,
+    "browserHeapStart": [
+      14775784
+    ],
+    "browserHeapEnd": [
+      6998432
+    ],
+    "wireBytes": 49802,
+    "initialWireBytes": 3606931,
+    "generated": 1196,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.108438080415045,
+      "p95Ms": 20.594687,
+      "maxMs": 21.217279
+    },
+    "longTasks": 0,
+    "longTaskMs": 0,
+    "maxDomNodesPerClient": 743,
+    "maxTimelineRowsPerClient": 150,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 150,
+        "expectedHash": "f1f61016468daa0fc0f79c9f3edd08bdd1699c197d487d2433ce202012de9dd1",
+        "actualHash": "f1f61016468daa0fc0f79c9f3edd08bdd1699c197d487d2433ce202012de9dd1",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 0,
+      "p50": null,
+      "p95": null,
+      "max": null
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  }
+]

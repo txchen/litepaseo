@@ -1,0 +1,7 @@
+scenario,repetition,wall_seconds,browser_cpu_seconds,bff_fixture_cpu_seconds,browser_peak_pss_bytes,bff_peak_rss_bytes,sampled_latency_p95_ms,generated_events,final_visible_suffix_equal,energy_joules
+idle-motion-default,1,21.056,1.08,0.031493,252234752,188809216,,0,true,
+idle-motion-reduced,1,21.052,0.050000000000000044,0.03359,243986432,188915712,,0,true,
+idle-motion-reduced,2,21.043,0.039999999999999925,0.032624,242001920,187793408,,0,true,
+idle-motion-default,2,21.033,1.18,0.029157,249706496,188018688,,0,true,
+idle-motion-default,3,21.04,1.21,0.032906,251569152,187588608,,0,true,
+idle-motion-reduced,3,21.037,0.030000000000000027,0.031214,245137408,187920384,,0,true,

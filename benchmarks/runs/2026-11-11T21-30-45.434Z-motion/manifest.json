@@ -1,0 +1,55 @@
+{
+  "startedAt": "2026-11-11T21:30:45.443Z",
+  "commit": "ef0ccb63b8fb9ad0485117dfc2fd1eedc9b6a868",
+  "sourceStatus": "?? benchmarks/runs/2026-11-11T21-07-04.552Z-motion/\n?? benchmarks/runs/2026-11-11T21-10-18.690Z/\n?? benchmarks/runs/2026-11-11T21-15-33.485Z-motion/\n?? benchmarks/runs/2026-11-11T21-19-55.565Z/\n?? benchmarks/runs/2026-11-11T21-24-16.534Z-motion/\n?? benchmarks/runs/2026-11-11T21-25-34.752Z/\n?? benchmarks/runs/2026-11-11T21-30-45.434Z-motion/\n",
+  "node": "v26.12.1",
+  "os": "linux 7.2.13-200.fc44.x86_64",
+  "cpu": "Intel(R) Core(TM) Ultra 7 256V",
+  "logicalCpus": 8,
+  "totalMemory": 16272830464,
+  "governor": "powersave",
+  "acOnline": "1",
+  "batteryStatus": "Not charging",
+  "loadavg": "0.23 0.33 0.38 1/991 793585",
+  "energy": {
+    "available": false,
+    "reason": "Energy counters are not sampled by this harness; no joule or battery-drain claims."
+  },
+  "harness": {
+    "server": "9f819d2ccc73235acf88d3c613f312769387466ed1649e0d678bb1a3c8de42b5",
+    "runner": "226c6e3a2058b36f3e9d3a8f2dd6915a1d10bb460ed1ef34e0e06d8c5558ba1c"
+  },
+  "methodology": "Production frontend over real loopback HTTP/SSE, actual BFF/HostDirectory/TimelineView source loaded with Node type stripping; SDK facades are deterministic in-process doubles. BFF CPU/memory includes fixture generation/logging, not real daemon/network/provider costs. Fresh Chromium process and BFF per repetition. Browser CPU sums sampled /proc process-tree counters; RSS double-counts shared pages, PSS is also collected. Latency is event-generation to the rAF following a DOM mutation, sampled <=1Hz, not a physical paint/energy measurement. All clients use separate contexts in one headless Chromium process. Samples every 2s. No official-client comparison. Shared host, plugged in, powersave governor, no controlled thermal/brightness conditions.",
+  "cases": [
+    {
+      "name": "idle-motion-default",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 1,
+      "clients": 1,
+      "rate": 0,
+      "reducedMotion": "no-preference"
+    },
+    {
+      "name": "idle-motion-default",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 2,
+      "clients": 1,
+      "rate": 0,
+      "reducedMotion": "no-preference"
+    },
+    {
+      "name": "idle-motion-default",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 3,
+      "clients": 1,
+      "rate": 0,
+      "reducedMotion": "no-preference"
+    }
+  ],
+  "chromium": "158.0.8127.18",
+  "finishedAt": "2026-11-11T21:32:04.391Z",
+  "failures": 0
+}

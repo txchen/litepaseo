@@ -1,0 +1,72 @@
+diff --git a/benchmarks/run.mjs b/benchmarks/run.mjs
+index 6f6653b..9833127 100644
+--- a/benchmarks/run.mjs
++++ b/benchmarks/run.mjs
+@@ -146,11 +146,11 @@ for (const spec of cases) {
+       const cdp = await context.newCDPSession(page); cdps.push(cdp); await cdp.send('Performance.enable');
+       const started = performance.now();
+       await page.goto(ready.url + `/?session=h${i % 2}:a0`);
+-      if (spec.animationHz) await page.addStyleTag({ content: `.status-dot.is-running { animation-duration: 2s; animation-timing-function: steps(${2 * spec.animationHz}, end); } .spinner { animation-duration: ${4 / spec.animationHz}s; animation-timing-function: steps(4, end); }` });
++      if (spec.animationHz) await page.addStyleTag({ content: `:root { --motion-step-ms: ${1000 / spec.animationHz}; } .status-dot.is-running { animation-duration: 2s; animation-timing-function: steps(${2 * spec.animationHz}, end); } .spinner { animation-duration: ${4 / spec.animationHz}s; animation-timing-function: steps(4, end); }` });
+       await page.waitForFunction(count => Number(document.querySelector('.tabs .count')?.textContent) === count && document.querySelectorAll('.timeline-inner > .row').length === 60, spec.sessions);
+       cold.push(performance.now() - started);
+       if (await page.evaluate(() => document.hidden)) throw new Error('Expected a visible headless client');
+-      if (motion) {
++      if (motion || spec.animationHz) {
+         const clockCheck = await page.evaluate(async () => {
+           const pulse = () => document.getAnimations().find(a => a instanceof CSSAnimation && a.animationName === 'pulse');
+           let last = pulse()?.currentTime, changes = 0;
+@@ -168,11 +168,11 @@ for (const spec of cases) {
+           const stopped = before === pulse()?.currentTime;
+           delete document.hidden;
+           document.dispatchEvent(new Event('visibilitychange'));
+-          return { changes, stopped };
++          return { changes, stopped, rate: 1000 / (Number(getComputedStyle(document.documentElement).getPropertyValue('--motion-step-ms')) || 200) };
+         });
+         assert.ok(clockCheck.stopped, 'Hidden pages must stop the decorative clock');
+-        assert.ok(spec.reducedMotion === 'reduce' ? clockCheck.changes === 0 : clockCheck.changes >= 3 && clockCheck.changes <= 6,
+-          'Decorative animations must advance approximately five times/s (zero with reduced motion)');
++        assert.ok(spec.reducedMotion === 'reduce' ? clockCheck.changes === 0 : clockCheck.changes >= Math.max(1, clockCheck.rate - 2) && clockCheck.changes <= clockCheck.rate + 1,
++          'Decorative animations must follow the configured low-frequency clock (zero with reduced motion)');
+         writeFileSync(join(folder, 'motion-clock-check.json'), JSON.stringify(clockCheck));
+       }
+     }
+diff --git a/src/server/app.ts b/src/server/app.ts
+index e4d26c2..a6a4cdc 100644
+--- a/src/server/app.ts
++++ b/src/server/app.ts
+@@ -514,7 +514,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
+       cursor,
+       limit: 100,
+       projection: "projected",
+-      wholeTurns: true,
++      wholeTurns: false,
+     });
+     return c.json({
+       epoch: page.epoch,
+diff --git a/src/web/motion-clock.ts b/src/web/motion-clock.ts
+index 17b24e6..44f8d8f 100644
+--- a/src/web/motion-clock.ts
++++ b/src/web/motion-clock.ts
+@@ -3,6 +3,7 @@ export function startMotionClock() {
+   const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+   let timer: ReturnType<typeof setTimeout> | undefined;
+   let disposed = false;
++  const interval = () => Math.max(200, Number(getComputedStyle(document.documentElement).getPropertyValue("--motion-step-ms")) || 200);
+   const stop = () => { clearTimeout(timer); timer = undefined; };
+   const tick = () => {
+     timer = undefined;
+@@ -15,11 +16,11 @@ export function startMotionClock() {
+       animation.pause();
+       animation.currentTime = now;
+     }
+-    timer = setTimeout(tick, 200);
++    timer = setTimeout(tick, interval());
+   };
+   const wake = () => {
+     if (document.hidden || reduced.matches) stop();
+-    else if (!timer && !disposed) timer = setTimeout(tick, 200);
++    else if (!timer && !disposed) timer = setTimeout(tick, interval());
+   };
+   // Class/child changes discover newly mounted status indicators. No polling while idle.
+   const observer = new MutationObserver(wake);

@@ -1,0 +1,21 @@
+{
+  "applicationCommit": "ef0ccb6",
+  "command": "npm run check",
+  "tests": 64,
+  "failed": 0,
+  "typecheck": true,
+  "build": true,
+  "browserAcceptance": true,
+  "builtFrontend": {
+    "assets/index-B4rAnSLm.js": "6564b493421d5afbc2ddad9aa73342fd9e13683969075a6cb2bebb6fe461865e",
+    "assets/index-C919ZKcr.css": "a4e344c3c63accdebf24c0db6e072865ba239d396dab7b407411a8d5eb802d22",
+    "icons/apple-touch-icon.png": "60111830bff9882f49f65ea9a5f5e1418900c47e5d26aa97ae7d5206863e38cc",
+    "icons/badge-96.png": "c3fd2da78dc4f26cad22ba5713f2ce25f19caf02f9f5e2750f9a2b8e5e159042",
+    "icons/icon-192.png": "804c9c4290c60efe0afb33b354948d566d6736ec85b3765b1914c4c5e208c3c7",
+    "icons/icon-512.png": "d88b6d41d98d84f717b9e8846af82bf04bbb7b7590cf590bf6926b490c1ab491",
+    "icons/maskable-512.png": "f460bf17d12c38ae2ffc4781b1a5d6f7c1c151f2b950a04675032d78fc3c480b",
+    "index.html": "50e3f930acb81cb36ada144db6b28c2d8bfc1fbbe98559543110df1068a5b2d4",
+    "manifest.webmanifest": "1b6f73867f1af794ac46fea2ed880e5a925214ae6011d342634007068a137873",
+    "sw.js": "338d1237eb6a6dbdd2bf103130a215c106527625c857a30d8a06b866547e9485"
+  }
+}

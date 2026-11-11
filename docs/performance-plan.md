@@ -123,7 +123,106 @@ Recommended implementation order:
 3. Keep history pagination in a bounded viewport with a preserved scroll anchor.
    Loading older history currently expands the rendered message count.
 
-These are measured optimization candidates, not changes implemented by this report.
+These were optimization candidates at the baseline commit. The follow-up below
+records the subsequent implementation and calibration.
+
+## Follow-up: low-frequency motion and bounded history
+
+Final requested configuration: **persistent decorative animation at 2 updates/s,
+timeline message batches every 500 ms**. Input and clicks are not rate limited.
+The implementation is recorded in application commit `ef0ccb6`.
+
+The animation experiments used three repetitions per setting, 20 seconds each,
+with a connected 1,000-session directory and no incoming messages. CPU remains
+percentage of one logical core. They showed why CSS `steps()` alone was insufficient:
+
+| Animation implementation | Frequency | Median browser CPU |
+|---|---:|---:|
+| Original continuously playing CSS | default display cadence | 16.8% |
+| Continuously playing CSS with `steps()` | 5/s | 5.6% |
+| Continuously playing CSS with `steps()` | 2/s | 4.3% |
+| Continuously playing CSS with `steps()` | 1/s | 4.0% |
+| Paused CSS advanced by an explicit clock | 5/s | 3.2% |
+| Paused CSS advanced by an explicit clock | 2/s | 1.4% |
+| Paused CSS advanced by an explicit clock | 1/s | 0.9% |
+| Reduced motion (no persistent animation) | 0/s | about 0.2% |
+
+Sources: [CSS 5/s](../benchmarks/runs/2026-11-11T21-07-04.552Z-motion/summary.json),
+[CSS 2/s and 1/s](../benchmarks/runs/2026-11-11T21-10-18.690Z/summary.json),
+[clock 5/s](../benchmarks/runs/2026-11-11T21-15-33.485Z-motion/summary.json),
+[clock 2/s and 1/s](../benchmarks/runs/2026-11-11T21-19-55.565Z/summary.json).
+The final frequency was chosen by the user, keeping message and decorative-motion
+cadences separate. No claim about measured display FPS or energy follows from these
+CPU counters. The clock tests directly inspect animation-time changes and verify
+that those changes stop when the application receives a hidden visibility signal.
+
+`motion-clock.ts` keeps persistent CSS animations paused and advances their time
+with a low-frequency timer. The timer stops while hidden, under reduced motion,
+or when no persistent animation is present. Short entrance transitions are separate
+from this persistent-animation clock. These experiments do not isolate the browser
+internals responsible for the residual cost of continuously playing stepped CSS.
+
+History no longer grows `shown` or prepends pages to the live cache. It uses a
+separate **150-message snapshot**, with overlapping pages to preserve the scroll
+anchor. Only sequence-number bookmarks are retained for forward navigation; older
+page bodies are discarded. Backward and forward navigation use stable `seqStart`
+boundaries, so a late update to an old tool row's `seqEnd` does not select a different
+page. Streaming continues in the bounded live cache while the history view stays
+fixed; “Back to latest” resumes that view. Epoch or session changes discard history.
+
+The current renderer remains the built-in whole-message Markdown renderer, not
+Markstream. Vue row-level refs isolate unrelated messages, but do not make parsing
+or HTML replacement incremental inside one large message. Batching reduces how
+often that work happens. A 500 ms batching interval can add up to roughly 500 ms
+before dispatch, plus rendering time; the sampled newest-marker p95 is not the
+latency of the oldest event in each batch.
+
+Calibration provenance: CSS-step runs used the
+[archived frontend](../benchmarks/runs/2026-11-11T21-07-04.552Z-motion/served-frontend.tar.gz)
+before the motion-clock implementation. The clock 2/s–1/s sweep used `ef79b05` plus
+its recorded `application.patch`. A 1/s-motion, 200 ms-streaming comparison was
+interrupted when the user selected the final 2/s, 500 ms policy; its partial samples
+are retained in the [superseded-run archive](../benchmarks/diagnostics/2026-11-11T21-25-34.752Z-superseded.tar.gz)
+but are not final-configuration results.
+
+### Final configuration results
+
+All **12 final-configuration repetitions passed** (three each for idle motion,
+plain streaming, large Markdown and history navigation). `npm run check` also
+passed type checking, production build, 64 tests and browser acceptance.
+
+| Workload | Original browser CPU | Final browser CPU | Final sampled peak PSS |
+|---|---:|---:|---:|
+| No new events, running badges | 16.8% | 1.4% | 234 MiB |
+| Plain streaming | 34.7% | 4.9% | 245 MiB |
+| 12,000-line growing code block | 111.6% | 28.1% | 374 MiB |
+
+Final data: [motion](../benchmarks/runs/2026-11-11T21-30-45.434Z-motion/summary.json),
+[streaming and history](../benchmarks/runs/2026-11-11T21-32-04.839Z/summary.json),
+[counter CSV](../benchmarks/runs/2026-11-11T21-32-04.839Z/counters.csv).
+These are same-fixture local measurements collected sequentially, not a randomized
+cross-version A/B trial. Host and measurement limitations from the baseline still apply.
+
+The code-block case still produced **60 long tasks per repetition**, totaling
+6.1–6.3 seconds over each ~31-second window, versus 431–434 tasks totaling about
+27.1 seconds in the original runs. Lower average CPU does not mean incremental
+Markdown rendering or the complete absence of input stalls. Plain streaming had
+no observed long tasks in its three repetitions.
+
+History mounted at most **150 message rows** in all three runs, including after
+20 backward pages and while new output continued. The checks cover backward/forward
+round trips, retained-row scroll positions (within 3 px), historical-content equality,
+and return to the latest output. It used about 2.2% browser CPU, but that is **not a
+like-for-like CPU comparison** with the old 2,066-row live-updating history view:
+the new historical snapshot deliberately stays fixed until the reader navigates.
+
+The final sampled newest-marker p95s were 58 ms for plain text and 176 ms for the
+code block. Those figures omit the waiting time of older deltas coalesced into the
+same batch; they must not be described as end-to-end latency for every message.
+Navigation to the initial timeline now took roughly 0.78 seconds in these runs,
+versus about 0.34 seconds in the old 1,000-session runs, because initial timeline
+reset delivery also uses the 500 ms flush cadence. The chosen cadence trades
+update latency for reduced CPU. No energy or real-daemon performance claim is made.
 
 ## Planned comparisons
 

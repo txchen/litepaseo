@@ -1,0 +1,76 @@
+{
+  "manifest": {
+    "commit": "ef79b05dcc7978bfb83c6faebfd8ede7b8986d7e",
+    "chromium": "158.0.8127.18"
+  },
+  "summary": [
+    {
+      "scenario": "idle-motion-default",
+      "repetitions": 3,
+      "passed": 3,
+      "coldReadyMs": {
+        "median": 482.7944750000024,
+        "min": 460.51298600000155,
+        "max": 487.8947210000001
+      },
+      "browserCpuPct": {
+        "median": 3.231017770597738,
+        "min": 3.0424034987640227,
+        "max": 3.3233632436025258
+      },
+      "bffFixtureCpuPct": {
+        "median": 0.15036111375083153,
+        "min": 0.14650123597642137,
+        "max": 0.16334330342306413
+      },
+      "browserPeakPssMiB": {
+        "median": 234.7314453125,
+        "min": 234.076171875,
+        "max": 235.0732421875
+      },
+      "bffPeakRssMiB": {
+        "median": 180.5859375,
+        "min": 179.5625,
+        "max": 180.6796875
+      },
+      "sampledLatencyP95Ms": null,
+      "maxRows": 60,
+      "maxSidebarRows": 22,
+      "longTasks": 0
+    },
+    {
+      "scenario": "idle-motion-reduced",
+      "repetitions": 3,
+      "passed": 3,
+      "coldReadyMs": {
+        "median": 481.9406190000009,
+        "min": 448.4348800000007,
+        "max": 486.36615400001756
+      },
+      "browserCpuPct": {
+        "median": 0.23746200607902757,
+        "min": 0.18996058317899053,
+        "max": 0.23749584382273226
+      },
+      "bffFixtureCpuPct": {
+        "median": 0.1625664893617021,
+        "min": 0.14435472379233363,
+        "max": 0.18482689841857816
+      },
+      "browserPeakPssMiB": {
+        "median": 232.8369140625,
+        "min": 232.2138671875,
+        "max": 233.3125
+      },
+      "bffPeakRssMiB": {
+        "median": 180.36328125,
+        "min": 180.34765625,
+        "max": 180.6484375
+      },
+      "sampledLatencyP95Ms": null,
+      "maxRows": 60,
+      "maxSidebarRows": 22,
+      "longTasks": 0
+    }
+  ]
+}

@@ -1,0 +1,203 @@
+[
+  {
+    "name": "idle-motion-default-r1",
+    "spec": {
+      "name": "idle-motion-default",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 1,
+      "clients": 1,
+      "rate": 0,
+      "reducedMotion": "no-preference"
+    },
+    "coldReadyMs": [
+      791.047499
+    ],
+    "historyLoadMs": null,
+    "resumeMs": null,
+    "wallSeconds": 21.049,
+    "browserCpuSeconds": 0.31000000000000005,
+    "bffFixtureCpuSeconds": 0.031263,
+    "bffStartRss": 182677504,
+    "bffEndRss": 182677504,
+    "bffPeakRss": 182677504,
+    "browserStartPss": 245919744,
+    "browserEndPss": 244019200,
+    "browserPeakPss": 245919744,
+    "browserPeakSummedRss": 512606208,
+    "browserHeapStart": [
+      7032664
+    ],
+    "browserHeapEnd": [
+      7184144
+    ],
+    "wireBytes": 16,
+    "initialWireBytes": 998119,
+    "generated": 0,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.125560513902204,
+      "p95Ms": 20.217855,
+      "maxMs": 20.856831
+    },
+    "longTasks": 0,
+    "longTaskMs": 0,
+    "maxDomNodesPerClient": 515,
+    "maxTimelineRowsPerClient": 60,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 60,
+        "expectedHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "actualHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 0,
+      "p50": null,
+      "p95": null,
+      "max": null
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  },
+  {
+    "name": "idle-motion-default-r2",
+    "spec": {
+      "name": "idle-motion-default",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 2,
+      "clients": 1,
+      "rate": 0,
+      "reducedMotion": "no-preference"
+    },
+    "coldReadyMs": [
+      788.9921849999992
+    ],
+    "historyLoadMs": null,
+    "resumeMs": null,
+    "wallSeconds": 21.061,
+    "browserCpuSeconds": 0.2999999999999998,
+    "bffFixtureCpuSeconds": 0.037322,
+    "bffStartRss": 187805696,
+    "bffEndRss": 187805696,
+    "bffPeakRss": 187805696,
+    "browserStartPss": 245353472,
+    "browserEndPss": 243560448,
+    "browserPeakPss": 245353472,
+    "browserPeakSummedRss": 511844352,
+    "browserHeapStart": [
+      7214432
+    ],
+    "browserHeapEnd": [
+      7365900
+    ],
+    "wireBytes": 16,
+    "initialWireBytes": 998119,
+    "generated": 0,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.09129508221797,
+      "p95Ms": 20.185087,
+      "maxMs": 21.315583
+    },
+    "longTasks": 0,
+    "longTaskMs": 0,
+    "maxDomNodesPerClient": 515,
+    "maxTimelineRowsPerClient": 60,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 60,
+        "expectedHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "actualHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 0,
+      "p50": null,
+      "p95": null,
+      "max": null
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  },
+  {
+    "name": "idle-motion-default-r3",
+    "spec": {
+      "name": "idle-motion-default",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 3,
+      "clients": 1,
+      "rate": 0,
+      "reducedMotion": "no-preference"
+    },
+    "coldReadyMs": [
+      770.504909000003
+    ],
+    "historyLoadMs": null,
+    "resumeMs": null,
+    "wallSeconds": 21.06,
+    "browserCpuSeconds": 0.2799999999999998,
+    "bffFixtureCpuSeconds": 0.033256,
+    "bffStartRss": 188850176,
+    "bffEndRss": 188850176,
+    "bffPeakRss": 188850176,
+    "browserStartPss": 245092352,
+    "browserEndPss": 243302400,
+    "browserPeakPss": 245092352,
+    "browserPeakSummedRss": 513884160,
+    "browserHeapStart": [
+      7252120
+    ],
+    "browserHeapEnd": [
+      7403712
+    ],
+    "wireBytes": 16,
+    "initialWireBytes": 998119,
+    "generated": 0,
+    "directoryChanges": 0,
+    "eventLoop": {
+      "meanMs": 20.070720794651386,
+      "p95Ms": 20.103167,
+      "maxMs": 21.135359
+    },
+    "longTasks": 0,
+    "longTaskMs": 0,
+    "maxDomNodesPerClient": 515,
+    "maxTimelineRowsPerClient": 60,
+    "maxSidebarRowsPerClient": 22,
+    "endDirectoryStreams": 1,
+    "hiddenEnd": null,
+    "correctness": [
+      {
+        "client": 0,
+        "rows": 60,
+        "expectedHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "actualHash": "2e8d081ba90ba206a69e26567f30acc2ba552a763f3778cc1adc9c76fc042c2b",
+        "equal": true
+      }
+    ],
+    "errors": [],
+    "latency": {
+      "samples": 0,
+      "p50": null,
+      "p95": null,
+      "max": null
+    },
+    "passed": true,
+    "directoryStreamsAfterClose": 0
+  }
+]

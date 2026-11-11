@@ -1,0 +1,82 @@
+{
+  "startedAt": "2026-11-11T21:07:04.562Z",
+  "commit": "68b190fa8deb207358d3fcced183efb2e67c538a",
+  "sourceStatus": " M benchmarks/fixture-server.mjs\n M benchmarks/run.mjs\n M src/server/app.ts\n M src/server/timeline-view.ts\n M src/web/App.vue\n M src/web/style.css\n M tests/app.test.ts\n M tests/timeline.test.ts\n?? benchmarks/runs/2026-11-11T21-07-04.552Z-motion/\n?? src/web/timeline-window.ts\n?? tests/timeline-window.test.ts\n",
+  "node": "v26.12.1",
+  "os": "linux 7.2.13-200.fc44.x86_64",
+  "cpu": "Intel(R) Core(TM) Ultra 7 256V",
+  "logicalCpus": 8,
+  "totalMemory": 16272830464,
+  "governor": "powersave",
+  "acOnline": "1",
+  "batteryStatus": "Not charging",
+  "loadavg": "0.90 0.61 0.66 1/982 781267",
+  "energy": {
+    "available": false,
+    "reason": "Energy counters are not sampled by this harness; no joule or battery-drain claims."
+  },
+  "harness": {
+    "server": "9f819d2ccc73235acf88d3c613f312769387466ed1649e0d678bb1a3c8de42b5",
+    "runner": "95bb5f22c691e66356c9abc1d664c64f62d1e498ff46142ade444ae91a7a4457"
+  },
+  "methodology": "Production frontend over real loopback HTTP/SSE, actual BFF/HostDirectory/TimelineView source loaded with Node type stripping; SDK facades are deterministic in-process doubles. BFF CPU/memory includes fixture generation/logging, not real daemon/network/provider costs. Fresh Chromium process and BFF per repetition. Browser CPU sums sampled /proc process-tree counters; RSS double-counts shared pages, PSS is also collected. Latency is event-generation to the rAF following a DOM mutation, sampled <=1Hz, not a physical paint/energy measurement. All clients use separate contexts in one headless Chromium process. Samples every 2s. No official-client comparison. Shared host, plugged in, powersave governor, no controlled thermal/brightness conditions.",
+  "cases": [
+    {
+      "name": "idle-motion-default",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 1,
+      "clients": 1,
+      "rate": 0,
+      "reducedMotion": "no-preference"
+    },
+    {
+      "name": "idle-motion-reduced",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 1,
+      "clients": 1,
+      "rate": 0,
+      "reducedMotion": "reduce"
+    },
+    {
+      "name": "idle-motion-reduced",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 2,
+      "clients": 1,
+      "rate": 0,
+      "reducedMotion": "reduce"
+    },
+    {
+      "name": "idle-motion-default",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 2,
+      "clients": 1,
+      "rate": 0,
+      "reducedMotion": "no-preference"
+    },
+    {
+      "name": "idle-motion-default",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 3,
+      "clients": 1,
+      "rate": 0,
+      "reducedMotion": "no-preference"
+    },
+    {
+      "name": "idle-motion-reduced",
+      "sessions": 1000,
+      "duration": 20,
+      "rep": 3,
+      "clients": 1,
+      "rate": 0,
+      "reducedMotion": "reduce"
+    }
+  ],
+  "chromium": "158.0.8127.18",
+  "finishedAt": "2026-11-11T21:09:31.278Z",
+  "failures": 0
+}

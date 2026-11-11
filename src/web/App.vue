@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, provide, ref, shallowRef, watch } from "vue";
-import type { DirectoryMessage, HostState, Permission, TimelineMessage } from "../shared/wire.ts";
-import { DirectoryStore } from "./directory-store.ts";
+import type { DirectoryMessage, HostState, Permission, TimelineMessage, WorkspaceSummary } from "../shared/wire.ts";
+import { DirectoryStore, comparePinnedFirst } from "./directory-store.ts";
+import ThreadMenu from "./ThreadMenu.vue";
+import RenameThread from "./RenameThread.vue";
 import { TimelineStore } from "./timeline-store.ts";
 import { openStream, type StreamState } from "./event-stream.ts";
 import SessionList from "./SessionList.vue";
@@ -46,10 +48,18 @@ const token = ref(""),
   error = ref(""),
   busy = ref(false);
 const hosts = shallowRef<HostState[]>([]),
-  directory = new DirectoryStore({
+  /** The sidebar: Paseo workspaces ("threads"), pinned first, then by last use. */
+  directory = new DirectoryStore<WorkspaceSummary>({
     collapsed: readJson<string[]>("litepaseo-collapsed-projects", []),
     persist: (keys) => localStorage.setItem("litepaseo-collapsed-projects", JSON.stringify(keys)),
+    compare: comparePinnedFirst,
   }),
+  /** Agents: the board, the open conversation, notifications; indexed by their thread. */
+  agentDirectory = new DirectoryStore<AgentSummary>({
+    indexBy: (a) => (a.workspaceId ? `${a.hostId}:${a.workspaceId}` : null),
+  }),
+  /** The thread shown; the agent shown is `selectedKey`, one of the thread's agents. */
+  selectedThread = ref<string | null>(null),
   listMode = ref<"projects" | "recent">(
     localStorage.getItem("litepaseo-list-mode") === "recent" ? "recent" : "projects",
   ),
@@ -77,10 +87,19 @@ const permissionInputs = ref<Record<string, string>>({}),
 const hostLabels = computed(() => new Map(hosts.value.map((h) => [h.id, h.label])));
 const hostStates = computed(() => new Map(hosts.value.map((h) => [h.id, h.state])));
 const connectedHosts = computed(() => hosts.value.filter((h) => h.state === "connected").length);
-// O(1) per directory message: a map lookup, not a scan.
+// O(1) per directory message: map lookups, not scans.
 const active = computed(() => {
+  agentDirectory.version.value;
+  return agentDirectory.get(selectedKey.value) ?? null;
+});
+const activeThread = computed(() => {
   directory.version.value;
-  return directory.get(selectedKey.value) ?? null;
+  return directory.get(selectedThread.value) ?? null;
+});
+/** The open thread's agents, most recent first (tabs when there is more than one). */
+const threadAgents = computed(() => {
+  agentDirectory.version.value;
+  return agentDirectory.indexed(selectedThread.value, 12);
 });
 const sessionCount = computed(() => {
   directory.version.value;
@@ -102,6 +121,7 @@ watch(
   hostFilter,
   (id) => {
     directory.setHost(id);
+    agentDirectory.setHost(id);
     if (id) localStorage.setItem("litepaseo-host-filter", id);
     else localStorage.removeItem("litepaseo-host-filter");
   },
@@ -223,7 +243,8 @@ function openDirectory() {
   directoryStream?.close();
   directoryStream = openStream({
     url: () =>
-      `/api/stream?generation=${encodeURIComponent(directory.generation)}&since=${directory.seq}`,
+      `/api/stream?generation=${encodeURIComponent(agentDirectory.generation)}&since=${agentDirectory.seq}` +
+      `&wgeneration=${encodeURIComponent(directory.generation)}&wsince=${directory.seq}`,
     onState: (state) => {
       directoryState.value = state;
       if (state === "unauthorized") signOut(false);
@@ -231,7 +252,11 @@ function openDirectory() {
     onMessage: (data) => {
       const message = data as DirectoryMessage;
       if (message.type === "hosts") hosts.value = message.hosts;
-      else directory.apply(message);
+      else if (message.type === "workspaces-snapshot")
+        directory.applyCollection({ type: "snapshot", generation: message.generation, seq: message.seq, items: message.workspaces });
+      else if (message.type === "workspaces-changes")
+        directory.applyCollection({ type: "changes", generation: message.generation, seq: message.seq, changes: message.changes });
+      else agentDirectory.apply(message);
     },
   });
 }
@@ -241,10 +266,19 @@ watch(query, (text) => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     const needle = text.trim().toLowerCase();
-    if (!needle) return directory.setFilter(null);
+    if (!needle) {
+      directory.setFilter(null);
+      agentDirectory.setFilter(null);
+      return;
+    }
     const labels = hostLabels.value;
-    directory.setFilter((a) =>
-      `${a.title ?? ""}\n${a.cwd}\n${labels.get(a.hostId) ?? ""}\n${a.provider}\n${a.id}`
+    directory.setFilter((w) =>
+      `${w.name}\n${w.project}\n${w.branch ?? ""}\n${w.directory}\n${labels.get(w.hostId) ?? ""}`
+        .toLowerCase()
+        .includes(needle),
+    );
+    agentDirectory.setFilter((a) =>
+      `${a.title ?? ""}\n${a.project}\n${a.cwd}\n${labels.get(a.hostId) ?? ""}\n${a.provider}`
         .toLowerCase()
         .includes(needle),
     );
@@ -261,11 +295,30 @@ function scrollToBottom() {
     if (el) el.scrollTop = el.scrollHeight;
   });
 }
+/** Opens an agent (board, notification, a new session) and the thread it belongs to. */
 function select(key: string) {
   tab.value = "chat";
   selectedKey.value = key;
+  const agent = agentDirectory.get(key);
+  selectedThread.value = agent?.workspaceId ? `${agent.hostId}:${agent.workspaceId}` : null;
   openDetail();
 }
+/** Opens a thread from the sidebar: its most recently used agent. */
+function selectThread(key: string) {
+  tab.value = "chat";
+  selectedThread.value = key;
+  selectedKey.value = agentDirectory.indexed(key, 1)[0]?.key ?? null;
+  openDetail();
+}
+// An agent that arrives after its selection (new session, notification tap) finds its thread;
+// a thread whose agent is not known yet picks one when it arrives.
+watch(active, (a) => {
+  if (a?.workspaceId && !selectedThread.value) selectedThread.value = `${a.hostId}:${a.workspaceId}`;
+});
+watch(threadAgents, (list) => {
+  if (selectedThread.value && list.length && !list.some((a) => a.key === selectedKey.value))
+    selectedKey.value = list[0].key;
+});
 
 // Compact layouts: the detail pane is a history entry, so the system back button or gesture
 // returns to the list instead of leaving the app.
@@ -307,12 +360,12 @@ const newSession = ref<{
   cwd: string | null;
   project: { key: string | null; name: string } | null;
 } | null>(null);
-function startNew(group?: ProjectGroup) {
-  // Without a project, start where you worked last: the most recent session in the current view.
-  const recent = group ? group.agents.at(0) : directory.range(0, 1)[0];
+function startNew(group?: ProjectGroup<WorkspaceSummary>) {
+  // Without a project, start where you worked last: the most recent thread in the current view.
+  const recent = group ? group.items.at(0) : directory.range(0, 1)[0];
   newSession.value = {
     hostId: hostFilter.value ?? recent?.hostId ?? active.value?.hostId ?? null,
-    cwd: recent?.cwd ?? null,
+    cwd: recent?.rootPath ?? null,
     project: recent ? { key: recent.projectKey, name: recent.project } : null,
   };
 }
@@ -321,7 +374,66 @@ function onCreated(key: string) {
   if (query.value) query.value = "";
   select(key);
 }
-const pendingSelection = computed(() => !!selectedKey.value && !active.value);
+const pendingSelection = computed(() => (!!selectedKey.value || !!selectedThread.value) && !active.value);
+
+// Thread actions (rename, pin, unread/read, archive): the daemon operations Paseo's sidebar uses.
+const menu = shallowRef<{ thread: WorkspaceSummary; x: number; y: number } | null>(null);
+const renaming = shallowRef<WorkspaceSummary | null>(null);
+function threadPath(w: { hostId: string; id: string }) {
+  return `/hosts/${encodeURIComponent(w.hostId)}/workspaces/${encodeURIComponent(w.id)}`;
+}
+function openMenu(thread: WorkspaceSummary, x: number, y: number) {
+  menu.value = { thread, x, y };
+}
+function openHeaderMenu(event: MouseEvent) {
+  const thread = activeThread.value;
+  if (!thread) return;
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  openMenu(thread, rect.right - 200, rect.bottom + 6);
+}
+async function renameThread(title: string | null) {
+  const thread = renaming.value;
+  if (!thread) return;
+  await action(async () => {
+    await api(threadPath(thread) + "/title", "POST", { title });
+    renaming.value = null;
+  });
+}
+async function pinThread(thread: WorkspaceSummary, pinned: boolean) {
+  await action(async () => void (await api(threadPath(thread) + "/pin", "POST", { pinned })));
+}
+async function markThreadUnread(thread: WorkspaceSummary) {
+  await action(async () => {
+    await api(threadPath(thread) + "/unread", "POST", {});
+    // Leave it so viewing does not mark it read again right away.
+    if (selectedThread.value === thread.key) {
+      selectedThread.value = selectedKey.value = null;
+      closeDetail();
+    }
+  });
+}
+async function markThreadRead(thread: WorkspaceSummary) {
+  await action(async () => void (await api(threadPath(thread) + "/read", "POST", {})));
+}
+async function archiveThread(thread: WorkspaceSummary) {
+  if (!confirm(`Archive “${thread.name}”? It leaves the sidebar; the host keeps its history.`)) return;
+  await action(async () => {
+    await api(threadPath(thread) + "/archive", "POST", {});
+    if (selectedThread.value === thread.key) selectedThread.value = selectedKey.value = null;
+  });
+}
+// Viewing an unread thread marks it read (the agent-level read happens below).
+let threadReadSent = "";
+watch(
+  () => (activeThread.value?.unread && timeline.value.membership.value >= 0 && timeline.value.ready ? activeThread.value : null),
+  (w) => {
+    if (!w || document.hidden) return;
+    const marker = `${w.key}@${w.activityAt}`;
+    if (threadReadSent === marker) return;
+    threadReadSent = marker;
+    void api(threadPath(w) + "/read", "POST", {}).catch(() => (threadReadSent = ""));
+  },
+);
 
 // Kanban: live agent lanes (default) or the hand-made plan.
 const boardMode = ref<"agents" | "plan">(localStorage.getItem("litepaseo-board-mode") === "plan" ? "plan" : "agents");
@@ -407,7 +519,7 @@ watch(
   timeline.value = store;
   shown.value = RENDER_WINDOW;
   timelineNotice.value = "";
-  const agent = directory.get(key);
+  const agent = agentDirectory.get(key);
   if (!agent) return;
   timelineStream = openStream({
     url: () => "/api" + path(agent) + "/timeline/stream",
@@ -558,7 +670,7 @@ void loadAuth();
 // Waiting sessions show on the app icon and in the tab title.
 const waiting = computed(() => {
   directory.version.value;
-  return directory.waiting;
+  return agentDirectory.waiting;
 });
 watch(waiting, (count) => {
   setBadge(count);
@@ -696,7 +808,7 @@ onUnmounted(() => {
           <button :class="{ chosen: listMode === 'recent' }" @click="listMode = 'recent'">Recent</button>
         </div>
         <span class="list-summary">{{
-          listMode === "projects" ? `${projectCount} projects` : `${viewSize} sessions`
+          listMode === "projects" ? `${projectCount} projects` : `${viewSize} threads`
         }}</span>
       </div>
       <SessionList
@@ -704,10 +816,11 @@ onUnmounted(() => {
         :store="directory"
         :host-labels="hostLabels"
         :host-states="hostStates"
-        :selected-key="selectedKey"
+        :selected-key="selectedThread"
         :searching="!!query.trim()"
-        @select="select"
+        @select="selectThread"
         @new="startNew"
+        @menu="openMenu"
       />
       <UsagePanel :report="usage" :loading="usageLoading" @refresh="loadUsage(true)" />
     </aside>
@@ -799,7 +912,7 @@ onUnmounted(() => {
         <div class="page-body wide">
           <AgentBoard
             v-if="boardMode === 'agents'"
-            :store="directory"
+            :store="agentDirectory"
             :host-labels="hostLabels"
             :busy="busy"
             @open="select"
@@ -851,17 +964,43 @@ onUnmounted(() => {
             <Icon name="back" :size="18" />
           </button>
           <div class="grow">
-            <h1 class="chat-title">{{ active.title || "Untitled session" }}</h1>
+            <h1 class="chat-title">
+              <Icon v-if="activeThread?.pinnedAt" name="pin" :size="13" class="title-pin" />{{
+                activeThread?.name || active.title || "Untitled session"
+              }}
+            </h1>
             <div class="chat-meta">
               <span class="badge" :class="'is-' + active.status">
                 <span class="status-dot" :class="'is-' + active.status"></span>{{ active.status }}
               </span>
               <span><Icon name="folder" :size="13" />{{ activeProject }}</span>
               <span><Icon name="server" :size="13" />{{ hostLabels.get(active.hostId) }}</span>
+              <span v-if="activeThread?.branch" class="hide-sm"><Icon name="branch" :size="13" />{{ activeThread.branch }}</span>
               <span class="hide-sm">{{ active.provider }}</span>
             </div>
           </div>
+          <button
+            v-if="activeThread"
+            class="icon-btn"
+            aria-label="Thread actions"
+            title="Rename, pin, mark unread, archive"
+            @click="openHeaderMenu"
+          >
+            <Icon name="more" :size="18" />
+          </button>
         </header>
+        <!-- A thread with several agents: switch between them. -->
+        <nav v-if="threadAgents.length > 1" class="agent-tabs" aria-label="Agents in this thread">
+          <button
+            v-for="a in threadAgents"
+            :key="a.key"
+            :class="{ chosen: a.key === selectedKey }"
+            @click="selectedKey = a.key"
+          >
+            <span class="status-dot" :class="'is-' + (a.attention ? 'attention' : a.state === 'failed' ? 'error' : a.state === 'running' ? 'running' : a.unread ? 'unread' : 'idle')"></span>
+            <span class="agent-tab-name">{{ a.title || a.provider }}</span>
+          </button>
+        </nav>
 
         <div ref="timelineElement" class="timeline">
           <div class="timeline-inner">
@@ -981,6 +1120,19 @@ onUnmounted(() => {
         <button v-else class="btn btn-primary" @click="startNew()"><Icon name="plus" :size="15" />New session</button>
       </section>
     </main>
+    <ThreadMenu
+      v-if="menu"
+      :thread="menu.thread"
+      :x="menu.x"
+      :y="menu.y"
+      @close="menu = null"
+      @rename="(t) => (renaming = t)"
+      @pin="pinThread"
+      @unread="markThreadUnread"
+      @read="markThreadRead"
+      @archive="archiveThread"
+    />
+    <RenameThread v-if="renaming" :thread="renaming" :busy="busy" @close="renaming = null" @save="renameThread" />
     <NewSession
       v-if="newSession"
       :hosts="hosts"

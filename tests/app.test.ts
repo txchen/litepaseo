@@ -27,8 +27,11 @@ async function openEvents(app: Requester, path: string) {
         if (boundary >= 0) {
           const block = buffer.slice(0, boundary);
           buffer = buffer.slice(boundary + 2);
-          if (block.startsWith("data: ")) return JSON.parse(block.slice(6));
-          continue;
+          if (!block.startsWith("data: ")) continue;
+          const message = JSON.parse(block.slice(6));
+          // These checks are about the agent directory; workspaces have their own test.
+          if (String(message.type).startsWith("workspaces-")) continue;
+          return message;
         }
         const { value, done } = await reader.read();
         if (done) throw new Error("stream ended");

@@ -44,6 +44,7 @@ const agents = Array.from({ length: 64 }, (_, i) => {
     key: `${host}:a${i}`,
     hostId: host,
     id: "a" + i,
+    workspaceId: "w" + (i === 4 ? 1 : i),
     title: titles[i % titles.length] + (i >= titles.length ? ` (${Math.floor(i / titles.length) + 1})` : ""),
     status: i === 0 || i === 4 ? "running" : i === 7 ? "error" : "idle",
     provider: i % 2 ? "codex" : "pi",
@@ -58,6 +59,27 @@ const agents = Array.from({ length: 64 }, (_, i) => {
     pendingPermissions: pending,
   };
 });
+// One thread per agent, except a1 and a4 (same host) which share thread w1; a few are pinned and renamed.
+const workspaces = agents
+  .filter((a) => a.workspaceId === "w" + a.id.slice(1))
+  .map((a, n) => ({
+    key: `${a.hostId}:${a.workspaceId}`,
+    hostId: a.hostId,
+    id: a.workspaceId,
+    name: a.id === "a5" ? "Release notes (renamed)" : a.title,
+    title: a.id === "a5" ? "Release notes (renamed)" : null,
+    project: a.project,
+    projectKey: a.projectKey,
+    rootPath: a.cwd,
+    directory: a.cwd,
+    kind: "worktree",
+    branch: ["main", "feat/sync", "fix/flaky-ws", null][n % 4],
+    pinnedAt: a.id === "a8" || a.id === "a14" ? 1_000 + n : 0,
+    activityAt: a.activityAt,
+    state: a.state,
+    attention: a.attention,
+    unread: a.unread,
+  }));
 let seq = 0;
 const row = (item, turnId = "t1") => ({ seqStart: ++seq, seqEnd: seq, timestamp: "t", provider: "codex", turnId, item });
 const rows = [
@@ -97,7 +119,13 @@ try {
     const context = await browser.newContext(options);
     const page = await context.newPage();
     await page.route("**/api/stream**", (route) =>
-      route.fulfill(sse({ type: "hosts", hosts }, { type: "snapshot", generation: "g", seq: 1, agents })),
+      route.fulfill(
+        sse(
+          { type: "hosts", hosts },
+          { type: "workspaces-snapshot", generation: "wg", seq: 1, workspaces },
+          { type: "snapshot", generation: "g", seq: 1, agents },
+        ),
+      ),
     );
     await page.route("**/timeline/stream", (route) =>
       route.fulfill(sse({ type: "ops", ops: [{ type: "reset", epoch: "e", rows, hasOlder: true, startCursor: { epoch: "e", seq: 1 } }] })),
@@ -152,7 +180,7 @@ try {
   };
   const openChat = async (page) => {
     await login(page);
-    await page.getByRole("button", { name: /Fix flaky websocket/ }).first().click();
+    await page.locator("button.session", { hasText: "Fix flaky websocket" }).first().click();
     await page.locator(".row-todo").waitFor();
     await page.locator(".row-suggestion.is-ready").waitFor();
   };
@@ -219,6 +247,32 @@ try {
       await open.first().click();
     }
   };
+  await shoot("thread-menu", desktop, async (page) => {
+    await openChat(page);
+    await page.getByRole("button", { name: "Thread actions" }).click();
+    await page.getByRole("menu").waitFor();
+  });
+  await shoot("thread-menu-dark", { ...desktop, colorScheme: "dark" }, async (page) => {
+    await login(page);
+    const row = page.locator("button.session").nth(2);
+    const box = await row.boundingBox();
+    await row.click({ button: "right", position: { x: box.width - 60, y: 20 } });
+    await page.getByRole("menu").waitFor();
+  });
+  await shoot("rename", desktop, async (page) => {
+    await openChat(page);
+    await page.getByRole("button", { name: "Thread actions" }).click();
+    await page.getByRole("menuitem", { name: "Rename…" }).click();
+    await page.getByRole("dialog", { name: "Rename thread" }).waitFor();
+  });
+  await shoot("agent-tabs", desktop, async (page) => {
+    await login(page);
+    await page
+      .locator("button.session")
+      .filter({ has: page.locator(".session-title", { hasText: /^Fix flaky websocket reconnect test$/ }) })
+      .click();
+    await page.getByRole("navigation", { name: "Agents in this thread" }).waitFor();
+  });
   await shoot("sidebar-collapsed", desktop, collapseAll);
   await shoot("sidebar-collapsed-dark", { ...desktop, colorScheme: "dark" }, collapseAll);
   await shoot("mobile-list", mobile, login);

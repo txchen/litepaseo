@@ -26,6 +26,8 @@ export interface AgentSummary {
   key: string;
   hostId: string;
   id: string;
+  /** The workspace (Paseo "thread") this agent belongs to. */
+  workspaceId: string | null;
   title: string | null;
   status: string;
   provider: string;
@@ -48,6 +50,29 @@ export interface AgentSummary {
 export const midSentence = (text: string) =>
   /^[A-Z][a-z]/.test(text) ? text[0].toLowerCase() + text.slice(1) : text;
 
+/** A Paseo workspace: what the official sidebar lists as a thread. */
+export interface WorkspaceSummary {
+  key: string;
+  hostId: string;
+  id: string;
+  /** Display name: the user's title if set, else derived from branch or directory. */
+  name: string;
+  /** The raw user title (null when the name is derived), for rename prefill and reset. */
+  title: string | null;
+  project: string;
+  projectKey: string | null;
+  rootPath: string;
+  directory: string;
+  kind: string;
+  branch: string | null;
+  /** Milliseconds; 0 when not pinned. */
+  pinnedAt: number;
+  activityAt: number;
+  state: AgentState;
+  attention: boolean;
+  unread: boolean;
+}
+
 export interface HostState {
   id: string;
   label: string;
@@ -62,6 +87,8 @@ export interface Change<T> {
 export type DirectoryMessage =
   | { type: "snapshot"; generation: string; seq: number; agents: AgentSummary[] }
   | { type: "changes"; generation: string; seq: number; changes: Change<AgentSummary>[] }
+  | { type: "workspaces-snapshot"; generation: string; seq: number; workspaces: WorkspaceSummary[] }
+  | { type: "workspaces-changes"; generation: string; seq: number; changes: Change<WorkspaceSummary>[] }
   | { type: "hosts"; hosts: HostState[] };
 
 export interface TimelineCursor {

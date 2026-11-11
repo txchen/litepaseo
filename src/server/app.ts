@@ -290,10 +290,12 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
 
   // Directory streams. Each remembers the last collection seq it delivered, so a flush sends
   // only entries changed since then: O(changes) per flush, independent of directory size.
-  const directoryStreams = new Set<{ last: number; send: (message: DirectoryMessage) => void }>();
+  type DirectoryStream = { last: number; lastWorkspaces: number; send: (message: DirectoryMessage) => void };
+  const directoryStreams = new Set<DirectoryStream>();
   let agentFlush: ReturnType<typeof setTimeout> | undefined;
   let hostFlush: ReturnType<typeof setTimeout> | undefined;
-  const deliverAgents = (stream: { last: number; send: (message: DirectoryMessage) => void }) => {
+  const deliverAgents = (stream: DirectoryStream) => {
+    deliverWorkspaces(stream);
     const { agents } = hosts;
     const changes = agents.changesSince(stream.last);
     if (changes === null)
@@ -306,6 +308,20 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
     else if (changes.length)
       stream.send({ type: "changes", generation: agents.generation, seq: agents.seq, changes });
     stream.last = agents.seq;
+  };
+  const deliverWorkspaces = (stream: DirectoryStream) => {
+    const { workspaces } = hosts;
+    const changes = workspaces.changesSince(stream.lastWorkspaces);
+    if (changes === null)
+      stream.send({
+        type: "workspaces-snapshot",
+        generation: workspaces.generation,
+        seq: workspaces.seq,
+        workspaces: workspaces.snapshot(),
+      });
+    else if (changes.length)
+      stream.send({ type: "workspaces-changes", generation: workspaces.generation, seq: workspaces.seq, changes });
+    stream.lastWorkspaces = workspaces.seq;
   };
   hosts.onAgentsChanged(() => {
     if (agentFlush || !directoryStreams.size) return;
@@ -328,8 +344,11 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
     const since = Number(c.req.query("since"));
     const resumable =
       c.req.query("generation") === hosts.agents.generation && Number.isInteger(since);
+    const wsince = Number(c.req.query("wsince"));
+    const wresumable =
+      c.req.query("wgeneration") === hosts.workspaces.generation && Number.isInteger(wsince);
     return eventStream(c.req.raw.signal, (send) => {
-      const stream = { last: resumable ? since : -1, send };
+      const stream: DirectoryStream = { last: resumable ? since : -1, lastWorkspaces: wresumable ? wsince : -1, send };
       send({ type: "hosts", hosts: hostStates() });
       deliverAgents(stream);
       directoryStreams.add(stream);
@@ -526,6 +545,42 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
   });
   app.post("/api/hosts/:host/agents/:agent/archive", async (c) => {
     await hosts.get(c.req.param("host")).api.agents.ref(c.req.param("agent")).archive();
+    return c.json({ ok: true });
+  });
+
+  // ---- Workspace (thread) actions: the same daemon operations Paseo's sidebar uses ------------------
+  const workspace = (c: { req: { param: (name: string) => string } }) => ({
+    driver: hosts.get(c.req.param("host")).driver,
+    id: c.req.param("workspace"),
+  });
+  /** Rename; null resets to the name derived from the branch or directory. */
+  app.post("/api/hosts/:host/workspaces/:workspace/title", async (c) => {
+    const { title } = z
+      .object({ title: z.string().trim().max(200).nullable() })
+      .parse(await c.req.json());
+    const { driver, id } = workspace(c);
+    await driver.setWorkspaceTitle(id, title ? title : null);
+    return c.json({ ok: true });
+  });
+  app.post("/api/hosts/:host/workspaces/:workspace/pin", async (c) => {
+    const { pinned } = z.object({ pinned: z.boolean() }).parse(await c.req.json());
+    const { driver, id } = workspace(c);
+    await driver.setWorkspacePinned(id, pinned);
+    return c.json({ ok: true });
+  });
+  app.post("/api/hosts/:host/workspaces/:workspace/unread", async (c) => {
+    const { driver, id } = workspace(c);
+    await driver.markWorkspaceUnread(id);
+    return c.json({ ok: true });
+  });
+  app.post("/api/hosts/:host/workspaces/:workspace/read", async (c) => {
+    const { driver, id } = workspace(c);
+    await driver.clearWorkspaceAttention(id);
+    return c.json({ ok: true });
+  });
+  app.post("/api/hosts/:host/workspaces/:workspace/archive", async (c) => {
+    const { driver, id } = workspace(c);
+    await driver.archiveWorkspace(id);
     return c.json({ ok: true });
   });
 

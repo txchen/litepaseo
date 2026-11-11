@@ -18,6 +18,7 @@ const summary = (extra: Partial<AgentSummary> = {}): AgentSummary => ({
   project: "repo",
   projectKey: null,
   activityAt: 1000,
+  workspaceId: null,
   attention: false,
   state: "done",
   unread: false,

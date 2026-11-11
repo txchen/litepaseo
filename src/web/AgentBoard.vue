@@ -2,11 +2,12 @@
 import { computed, reactive } from "vue";
 import { LANES, midSentence, type AgentSummary, type Lane } from "../shared/wire.ts";
 import type { DirectoryStore } from "./directory-store.ts";
+import type { AgentSummary as Agent } from "../shared/wire.ts";
 import Icon from "./Icon.vue";
 
 // Every agent in lanes by state, derived live from the directory (no storage of its own).
 const props = defineProps<{
-  store: DirectoryStore;
+  store: DirectoryStore<Agent>;
   hostLabels: Map<string, string>;
   busy: boolean;
 }>();

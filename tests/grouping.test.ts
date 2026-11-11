@@ -20,6 +20,7 @@ const agent = (id: string, project: string, extra: Partial<AgentSummary> = {}): 
   project,
   projectKey: null,
   activityAt: 0,
+  workspaceId: null,
   attention: false,
   state: "done",
   unread: false,
@@ -27,11 +28,11 @@ const agent = (id: string, project: string, extra: Partial<AgentSummary> = {}): 
   pendingPermissions: [],
   ...extra,
 });
-const describe = (rows: ReturnType<DirectoryStore["groupedRows"]>) =>
-  rows.map((r) => (r.kind === "group" ? `[${r.group.name}${r.collapsed ? "+" : ""}]@${r.top}` : `${r.agent.id}@${r.top}`));
+const describe = (rows: ReturnType<DirectoryStore<AgentSummary>["groupedRows"]>) =>
+  rows.map((r) => (r.kind === "group" ? `[${r.group.name}${r.collapsed ? "+" : ""}]@${r.top}` : `${r.item.id}@${r.top}`));
 
 test("projects and their sessions are ordered by most recent use, with counters", () => {
-  const store = new DirectoryStore();
+  const store = new DirectoryStore<AgentSummary>();
   store.apply({
     type: "snapshot",
     generation: "g",
@@ -83,7 +84,7 @@ test("randomized: windows over the grouped view match a brute-force layout", () 
   let seed = 9;
   const random = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
   const collapsed = new Set<string>();
-  const store = new DirectoryStore({ collapsed: [], persist: () => {} });
+  const store = new DirectoryStore<AgentSummary>({ collapsed: [], persist: () => {} });
   const live = new Map<string, AgentSummary>();
   let filter: string | null = null;
   let host: string | null = null;
@@ -185,7 +186,7 @@ test("randomized: windows over the grouped view match a brute-force layout", () 
 });
 
 test("grouped updates stay logarithmic with thousands of projects", () => {
-  const store = new DirectoryStore();
+  const store = new DirectoryStore<AgentSummary>();
   const agents = Array.from({ length: 50_000 }, (_, i) => agent("a" + i, "project-" + (i % 2000), { activityAt: i }));
   store.apply({ type: "snapshot", generation: "g", seq: 1, agents });
   const started = performance.now();
@@ -204,7 +205,7 @@ test("grouped updates stay logarithmic with thousands of projects", () => {
 });
 
 test("switching hosts does not rescan the directory", () => {
-  const store = new DirectoryStore();
+  const store = new DirectoryStore<AgentSummary>();
   const agents = Array.from({ length: 60_000 }, (_, i) =>
     agent("a" + i, "p" + (i % 300), { hostId: "h" + (i % 3), activityAt: i }),
   );
@@ -217,6 +218,6 @@ test("switching hosts does not rescan the directory", () => {
   assert.equal(store.size, 20_000);
   assert.ok(store.range(0, 50).every((a) => a.hostId === "h2"));
   assert.ok(
-    store.groupedRows(0, 2000).every((r) => r.kind === "group" || r.agent.hostId === "h2"),
+    store.groupedRows(0, 2000).every((r) => r.kind === "group" || r.item.hostId === "h2"),
   );
 });

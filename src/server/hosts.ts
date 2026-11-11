@@ -1,9 +1,9 @@
 import { createHostClient } from "@getpaseo/client/node";
 import { createPaseoApi } from "@getpaseo/client";
 import type { Host } from "./store.ts";
-import type { AgentSummary } from "../shared/wire.ts";
+import type { AgentSummary, WorkspaceSummary } from "../shared/wire.ts";
 import { VersionedCollection } from "./versioned-collection.ts";
-import { HostDirectory, type DirectoryDriver, type Transition } from "./host-directory.ts";
+import { HostDirectory, HostWorkspaces, type DirectoryDriver, type Transition } from "./host-directory.ts";
 import { TimelineView, type TimelineDriver } from "./timeline-view.ts";
 
 type Driver = ReturnType<typeof createHostClient>;
@@ -18,6 +18,7 @@ interface Client {
   driver: Driver;
   api: Api;
   directory: HostDirectory;
+  workspaces: HostWorkspaces;
   stopStatus: () => void;
 }
 
@@ -26,6 +27,7 @@ const TIMELINE_GRACE_MS = 30_000;
 
 export class Hosts {
   readonly agents = new VersionedCollection<AgentSummary>();
+  readonly workspaces = new VersionedCollection<WorkspaceSummary>();
   readonly clients = new Map<string, Client>();
   private readonly labels = new Map<string, string>();
   private readonly timelines = new Map<
@@ -34,7 +36,7 @@ export class Hosts {
   >();
   private readonly agentListeners = new Set<() => void>();
   private readonly hostListeners = new Set<() => void>();
-  private readonly transitionListeners = new Set<Transition>();
+  private readonly transitionListeners = new Set<Transition<AgentSummary>>();
 
   add(host: Host) {
     const driver = createHostClient(host.connection, {
@@ -60,9 +62,14 @@ export class Hosts {
         for (const listener of this.transitionListeners) listener(previous, next);
       },
     );
+    const workspaces = new HostWorkspaces(hostId, driver as unknown as DirectoryDriver, this.workspaces, () =>
+      this.emit(this.agentListeners),
+    );
     const stopStatus = driver.subscribeConnectionStatus(() => this.emit(this.hostListeners));
-    this.clients.set(hostId, { driver, api, directory, stopStatus });
+    this.clients.set(hostId, { driver, api, directory, workspaces, stopStatus });
     directory.start();
+    // Daemons that predate workspaces simply have none; agents still list.
+    if ((driver as unknown as DirectoryDriver).observeWorkspaces) workspaces.start();
     this.emit(this.hostListeners);
   }
 
@@ -87,6 +94,7 @@ export class Hosts {
       }
     if (c) {
       c.directory.dispose();
+      c.workspaces.dispose();
       c.stopStatus();
       await c.api.dispose();
       await c.driver.close();
@@ -104,7 +112,7 @@ export class Hosts {
   }
 
   /** Per-agent summary changes, for event detection (notifications). */
-  onTransition(listener: Transition) {
+  onTransition(listener: Transition<AgentSummary>) {
     this.transitionListeners.add(listener);
     return () => this.transitionListeners.delete(listener);
   }

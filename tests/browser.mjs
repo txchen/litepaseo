@@ -53,6 +53,7 @@ try {
     key: `${host}:shared-id`,
     hostId: host,
     id: "shared-id",
+    workspaceId: "w-" + host,
     title: host + " conversation",
     status: "idle",
     provider: "codex",
@@ -66,6 +67,29 @@ try {
     lastError: null,
     pendingPermissions: pending,
   });
+  // Threads (Paseo workspaces) are what the sidebar lists.
+  const thread = (host, extra = {}) => ({
+    key: `${host}:w-${host}`,
+    hostId: host,
+    id: "w-" + host,
+    name: host + " conversation",
+    title: null,
+    project: host === "alpha" ? "litepaseo" : "infra",
+    projectKey: host === "alpha" ? "litepaseo" : "infra",
+    rootPath: "/code/" + host,
+    directory: "/code/" + host,
+    kind: "local_checkout",
+    branch: "main",
+    pinnedAt: 0,
+    activityAt: 1,
+    state: host === "alpha" ? "unread" : "needs_input",
+    attention: host === "beta",
+    unread: host === "alpha",
+    ...extra,
+  });
+  const workspacesEvent = { type: "workspaces-snapshot", generation: "wgen-1", seq: 1, workspaces: [thread("alpha"), thread("beta")] };
+  // A second agent in beta's thread, to switch between.
+  const helper = { ...summary("beta", []), key: "beta:helper", id: "helper", title: "beta helper", activityAt: 0, state: "done", unread: false };
   const hostsEvent = {
     type: "hosts",
     hosts: [
@@ -78,13 +102,14 @@ try {
     const url = new URL(route.request().url());
     if (url.searchParams.get("generation") !== "gen-1")
       return route.fulfill(
-        sse(hostsEvent, {
+        sse(hostsEvent, workspacesEvent, {
           type: "snapshot",
           generation: "gen-1",
           seq: 1,
           agents: [
             summary("alpha", []),
             summary("beta", [{ id: "p-1", name: "Read file", kind: "tool", input: { path: "README.md" } }]),
+            helper,
           ],
         }),
       );
@@ -94,7 +119,7 @@ try {
     if (creations.length)
       changes.push({
         key: "alpha:new-1",
-        value: { ...summary("alpha", []), key: "alpha:new-1", id: "new-1", title: "Brand new session", activityAt: 9 },
+        value: { ...summary("alpha", []), key: "alpha:new-1", id: "new-1", workspaceId: "w-new", title: "Brand new session", activityAt: 9 },
       });
     return route.fulfill(
       changes.length
@@ -102,6 +127,7 @@ try {
         : sse(hostsEvent),
     );
   });
+  const threadActions = [];
   const creations = [],
     predictions = [],
     reads = [];
@@ -192,6 +218,10 @@ try {
           ],
         }),
       );
+    if (p.includes("/workspaces/")) {
+      threadActions.push({ host, action: p.split("/").pop(), ...(route.request().postDataJSON() ?? {}) });
+      return route.fulfill({ json: { ok: true } });
+    }
     if (p.endsWith("/suggestion")) {
       predictions.push({ host, ...route.request().postDataJSON() });
       return route.fulfill({ json: { status: "ready", text: "Now add tests for the board" } });
@@ -216,11 +246,11 @@ try {
   // A collapsed project keeps showing what it holds: litepaseo has a finished, unseen session.
   const litepaseoGroup = page.locator(".group-row", { hasText: "litepaseo" });
   await litepaseoGroup.locator(".group-toggle").click();
-  assert.equal(await page.getByRole("button", { name: /alpha conversation/ }).count(), 0, "collapsed");
+  assert.equal(await page.locator("button.session", { hasText: "alpha conversation" }).count(), 0, "collapsed");
   assert.equal(await litepaseoGroup.locator(".status-dot.is-unread").count(), 1);
   assert.match(await litepaseoGroup.locator(".group-marks").getAttribute("title"), /1 finished, not viewed/);
   await litepaseoGroup.locator(".group-toggle").click();
-  await page.getByRole("button", { name: /beta conversation/ }).click();
+  await page.locator("button.session", { hasText: "beta conversation" }).click();
   await page.getByText("Hello from beta", { exact: true }).waitFor();
   await page.locator(".composer textarea").fill("Hello beta");
   await page.getByRole("button", { name: "Send", exact: true }).click();
@@ -259,8 +289,38 @@ try {
   );
   assert.equal(await dialog.count(), 0, "the dialog closes after creation");
 
+  // Thread actions from the row menu (right click on desktop): pin, rename, unread, archive.
+  const betaRow = page.locator("button.session", { hasText: "beta conversation" });
+  await betaRow.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Pin to top" }).click();
+  await betaRow.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename…" }).click();
+  const renameDialog = page.getByRole("dialog", { name: "Rename thread" });
+  await renameDialog.getByLabel("Name").fill("Beta, renamed");
+  await renameDialog.getByRole("button", { name: "Save" }).click();
+  await renameDialog.waitFor({ state: "detached" });
+  await page.getByRole("button", { name: "Actions for alpha conversation" }).click();
+  await page.getByRole("menuitem", { name: "Mark as read" }).click();
+  page.once("dialog", (d) => d.accept());
+  await betaRow.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Archive…" }).click();
+  for (let i = 0; i < 30 && threadActions.length < 4; i++) await page.waitForTimeout(100);
+  assert.deepEqual(threadActions, [
+    { host: "beta", action: "pin", pinned: true },
+    { host: "beta", action: "title", title: "Beta, renamed" },
+    { host: "alpha", action: "read" },
+    { host: "beta", action: "archive" },
+  ]);
+
+  // A thread with two agents shows tabs to switch between them.
+  await betaRow.click();
+  await page.getByRole("navigation", { name: "Agents in this thread" }).waitFor();
+  await page.getByRole("button", { name: "beta helper" }).click();
+  await page.waitForFunction(() => document.querySelector(".agent-tabs .chosen")?.textContent?.includes("beta helper"));
+  await page.getByRole("button", { name: "beta conversation", exact: true }).click();
+
   // Plugin rows: turn speed, and a next-input suggestion predicted on demand and taken with Tab.
-  await page.getByRole("button", { name: /beta conversation/ }).click();
+  await page.locator("button.session", { hasText: "beta conversation" }).click();
   await page.getByText("87.2 tok/s · 12.3k tokens · 41.2s · 6 requests").waitFor();
   await page.getByText("Now add tests for the board").waitFor();
   assert.deepEqual(predictions.at(-1), { host: "beta", token: "tok-beta" });
@@ -270,7 +330,7 @@ try {
   await page.locator(".composer textarea").fill("");
 
   // Opening an unread conversation marks it read.
-  await page.getByRole("button", { name: /alpha conversation/ }).click();
+  await page.locator("button.session", { hasText: "alpha conversation" }).click();
   await page.waitForFunction(() => true);
   for (let i = 0; i < 50 && !reads.includes("alpha"); i++) await page.waitForTimeout(100);
   assert.ok(reads.includes("alpha"), "viewing an unread session clears its unread state");
@@ -338,7 +398,7 @@ try {
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   phone.on("pageerror", (e) => errors.push(e.message));
   await phone.route("**/api/stream**", (route) =>
-    route.fulfill(sse(hostsEvent, { type: "snapshot", generation: "gen-1", seq: 1, agents: [summary("alpha", [])] })),
+    route.fulfill(sse(hostsEvent, workspacesEvent, { type: "snapshot", generation: "gen-1", seq: 1, agents: [summary("alpha", [])] })),
   );
   await phone.route("**/timeline/stream", (route) =>
     route.fulfill(sse({ type: "ops", ops: [{ type: "reset", epoch: "e", hasOlder: false, startCursor: null, rows: [] }] })),
@@ -348,7 +408,7 @@ try {
   await phone.getByRole("button", { name: "Use the access token instead" }).click();
   await phone.getByLabel("Server access token").fill(readFileSync(join(directory, "token"), "utf8"));
   await phone.getByRole("button", { name: "Connect", exact: true }).click();
-  await phone.getByRole("button", { name: /alpha conversation/ }).click();
+  await phone.locator("button.session", { hasText: "alpha conversation" }).click();
   await phone.waitForFunction(() => document.querySelector(".shell.detail-open"));
   await phone.goBack();
   await phone.waitForFunction(() => !document.querySelector(".shell.detail-open"));

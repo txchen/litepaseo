@@ -15,6 +15,7 @@ const summary = (key: string, extra: Partial<AgentSummary> = {}): AgentSummary =
   project: "p",
   projectKey: null,
   activityAt: 0,
+  workspaceId: null,
   attention: false,
   state: "done",
   unread: false,
@@ -24,7 +25,7 @@ const summary = (key: string, extra: Partial<AgentSummary> = {}): AgentSummary =
 });
 
 test("DirectoryStore keeps most-recent-first order under deltas", () => {
-  const store = new DirectoryStore();
+  const store = new DirectoryStore<AgentSummary>();
   store.apply({
     type: "snapshot",
     generation: "g",
@@ -51,7 +52,7 @@ test("DirectoryStore keeps most-recent-first order under deltas", () => {
 });
 
 test("DirectoryStore applies a change in O(log n) even with a large directory", () => {
-  const store = new DirectoryStore();
+  const store = new DirectoryStore<AgentSummary>();
   const agents = Array.from({ length: 50_000 }, (_, i) => summary("h:" + i, { activityAt: i }));
   store.apply({ type: "snapshot", generation: "g", seq: 1, agents });
   const started = performance.now();

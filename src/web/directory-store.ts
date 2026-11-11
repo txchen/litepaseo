@@ -18,8 +18,23 @@ export interface ProjectGroup {
   agents: OrderedIndex<AgentSummary>;
   /** activityAt of the group's most recent session; the group's sort key. */
   recent: number;
+  /** Sessions per state, so a collapsed project can show what it hides. */
   attention: number;
+  failed: number;
   running: number;
+  unread: number;
+}
+
+/**
+ * The one state a collapsed project row stands for, most urgent first: Paseo's own order for
+ * collapsed projects (needs input, failed, running, then finished-but-unseen).
+ */
+export function groupState(group: ProjectGroup): "needs_input" | "failed" | "running" | "unread" | "done" {
+  if (group.attention) return "needs_input";
+  if (group.failed) return "failed";
+  if (group.running) return "running";
+  if (group.unread) return "unread";
+  return "done";
 }
 
 export type SidebarRow =
@@ -67,7 +82,16 @@ class View {
     let group = this.groups.get(key);
     if (group) this.index.remove(group); // its sort key may change below
     else {
-      group = { key, name: agent.project, agents: new OrderedIndex(compareAgents), recent: 0, attention: 0, running: 0 };
+      group = {
+        key,
+        name: agent.project,
+        agents: new OrderedIndex(compareAgents),
+        recent: 0,
+        attention: 0,
+        failed: 0,
+        running: 0,
+        unread: 0,
+      };
       this.groups.set(key, group);
     }
     group.agents.insert(agent);
@@ -137,7 +161,10 @@ class View {
       group.attention += delta;
       this.waiting += delta;
     }
-    if (agent.status === "running") group.running += delta;
+    const state = agent.state ?? (agent.status === "running" ? "running" : "done");
+    if (state === "failed") group.failed += delta;
+    else if (state === "running") group.running += delta;
+    else if (state === "unread") group.unread += delta;
   }
 }
 

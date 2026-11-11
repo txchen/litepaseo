@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import {
   AGENT_PITCH,
   GROUP_PITCH,
+  groupState,
   type DirectoryStore,
   type ProjectGroup,
   type SidebarRow,
@@ -46,6 +47,16 @@ const rows = computed<SidebarRow[]>(() => {
     .map((agent, i) => ({ kind: "agent", key: agent.key, top: (first + i) * AGENT_PITCH, agent }));
 });
 
+/** Tooltip for a project row: how many sessions are in each state. */
+const summary = (g: ProjectGroup) =>
+  [
+    g.attention && `${g.attention} need you`,
+    g.failed && `${g.failed} failed`,
+    g.running && `${g.running} running`,
+    g.unread && `${g.unread} finished, not viewed`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 function onScroll() {
   if (frame) return;
   frame = requestAnimationFrame(() => {
@@ -82,12 +93,14 @@ onUnmounted(() => {
           <Icon name="chevron" :size="13" class="group-chevron" />
           <Icon name="folder" :size="14" class="group-folder" />
           <span class="group-name">{{ row.group.name }}</span>
-          <span v-if="row.group.attention" class="group-flag is-attention" :title="row.group.attention + ' need you'">{{
-            row.group.attention
-          }}</span>
-          <span v-else-if="row.group.running" class="group-flag is-running" :title="row.group.running + ' running'"
-            ><span class="status-dot is-running"></span
-          ></span>
+          <!-- Every state present shows, most urgent first, so a collapsed project still says
+               "something is running" even while another session waits for you. -->
+          <span v-if="groupState(row.group) !== 'done'" class="group-marks" :title="summary(row.group)">
+            <span v-if="row.group.attention" class="group-flag is-attention">{{ row.group.attention }}</span>
+            <span v-if="row.group.failed" class="status-dot is-error"></span>
+            <span v-if="row.group.running" class="status-dot is-running"></span>
+            <span v-if="row.group.unread" class="status-dot is-unread"></span>
+          </span>
           <span class="group-count">{{ row.group.agents.size }}</span>
           </button>
           <button

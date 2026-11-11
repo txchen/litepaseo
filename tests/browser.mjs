@@ -213,6 +213,13 @@ try {
   await page.goto(`http://127.0.0.1:${port}`);
   await page.getByLabel("Server access token").fill(readFileSync(join(directory, "token"), "utf8"));
   await page.getByRole("button", { name: "Connect", exact: true }).click();
+  // A collapsed project keeps showing what it holds: litepaseo has a finished, unseen session.
+  const litepaseoGroup = page.locator(".group-row", { hasText: "litepaseo" });
+  await litepaseoGroup.locator(".group-toggle").click();
+  assert.equal(await page.getByRole("button", { name: /alpha conversation/ }).count(), 0, "collapsed");
+  assert.equal(await litepaseoGroup.locator(".status-dot.is-unread").count(), 1);
+  assert.match(await litepaseoGroup.locator(".group-marks").getAttribute("title"), /1 finished, not viewed/);
+  await litepaseoGroup.locator(".group-toggle").click();
   await page.getByRole("button", { name: /beta conversation/ }).click();
   await page.getByText("Hello from beta", { exact: true }).waitFor();
   await page.locator(".composer textarea").fill("Hello beta");

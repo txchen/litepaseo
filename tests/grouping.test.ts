@@ -155,6 +155,17 @@ test("randomized: windows over the grouped view match a brute-force layout", () 
       `recent order at step ${step}`,
     );
     assert.equal(store.groupedHeight, top, `height at step ${step}`);
+    // A collapsed project shows every state it holds: its counters must match its members.
+    for (const r of store.groupedRows(0, top + 1)) {
+      if (r.kind !== "group") continue;
+      const members = groups.get(r.group.key)!;
+      const count = (f: (a: AgentSummary) => boolean) => members.filter(f).length;
+      assert.deepEqual(
+        [r.group.attention, r.group.failed, r.group.running, r.group.unread],
+        [count((a) => a.attention), count((a) => a.state === "failed"), count((a) => a.state === "running"), count((a) => a.state === "unread")],
+        `counters of ${r.group.name} at step ${step}`,
+      );
+    }
     for (const lane of LANES) {
       const want = visible.filter((x) => laneOf(x.state) === lane).sort(compareAgents).map((x) => x.key);
       assert.equal(store.laneSize(lane), want.length, `lane ${lane} size at step ${step}`);

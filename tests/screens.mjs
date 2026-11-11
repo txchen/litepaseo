@@ -211,6 +211,16 @@ try {
     await page.reload();
     await page.getByLabel("Authenticator code").fill("1234");
   });
+  const collapseAll = async (page) => {
+    await login(page);
+    for (let i = 0; i < 12; i++) {
+      const open = page.locator(".group-row:not(.collapsed) .group-toggle");
+      if (!(await open.count())) break;
+      await open.first().click();
+    }
+  };
+  await shoot("sidebar-collapsed", desktop, collapseAll);
+  await shoot("sidebar-collapsed-dark", { ...desktop, colorScheme: "dark" }, collapseAll);
   await shoot("mobile-list", mobile, login);
   await shoot("mobile-chat", mobile, openChat);
   await shoot("mobile-chat-dark", { ...mobile, colorScheme: "dark" }, openChat);

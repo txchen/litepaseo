@@ -19,9 +19,11 @@
   --accent-soft: rgba(31, 122, 77, 0.1);
   --accent-fg: #ffffff;
   --accent-2: #5cc48f;
-  --pulse: rgba(31, 122, 77, 0.4);
+  --pulse: rgba(47, 111, 222, 0.4);
   --link: #1f7a4d;
-  --unread: #2f6fde;
+  --running: #2f6fde;
+  --running-soft: rgba(47, 111, 222, 0.12);
+  --unread: #1f9a57;
   --seg-track: #e9e9ec;
   --seg-thumb: #ffffff;
   --warn: #b26b00;
@@ -58,9 +60,11 @@
   --accent-soft: rgba(152, 195, 121, 0.14);
   --accent-fg: #1f2329;
   --accent-2: #61afef;
-  --pulse: rgba(152, 195, 121, 0.45);
+  --pulse: rgba(97, 175, 239, 0.45);
   --link: #61afef;
-  --unread: #61afef;
+  --running: #61afef;
+  --running-soft: rgba(97, 175, 239, 0.14);
+  --unread: #98c379;
   --seg-track: #1f2329;
   --seg-thumb: #3b4150;
   --warn: #e5c07b;
@@ -93,10 +97,11 @@
     --accent-soft: rgba(152, 195, 121, 0.14);
     --accent-fg: #1f2329;
     --accent-2: #61afef;
-    --pulse: rgba(152, 195, 121, 0.45);
+    --pulse: rgba(97, 175, 239, 0.45);
     --link: #61afef;
-    --unread: #61afef;
-  --unread: #61afef;
+    --running: #61afef;
+    --running-soft: rgba(97, 175, 239, 0.14);
+    --unread: #98c379;
   --seg-track: #1f2329;
   --seg-thumb: #3b4150;
     --warn: #e5c07b;
@@ -303,8 +308,8 @@ h3 {
   background: var(--fg-faint);
 }
 .status-dot.is-running {
-  background: var(--accent);
-  box-shadow: 0 0 0 0 var(--accent-soft);
+  background: var(--running);
+  box-shadow: 0 0 0 0 var(--running-soft);
   animation: pulse 1.6s ease-out infinite;
 }
 .status-dot.is-attention {
@@ -818,6 +823,15 @@ h3 {
   border-radius: 999px;
   font-size: 11px;
 }
+.group-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.group-marks .status-dot {
+  width: 7px;
+  height: 7px;
+}
 .group-flag.is-attention {
   background: var(--warn-soft);
   color: var(--warn);
@@ -1020,8 +1034,8 @@ h3 {
   text-transform: capitalize;
 }
 .badge.is-running {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--running-soft);
+  color: var(--running);
 }
 .badge.is-error {
   background: var(--danger-soft);
@@ -2086,7 +2100,7 @@ h3 {
   background: var(--warn);
 }
 .lane-running .lane-dot {
-  background: var(--accent);
+  background: var(--running);
 }
 .lane-review .lane-dot {
   background: var(--unread);

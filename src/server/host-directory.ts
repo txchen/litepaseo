@@ -111,7 +111,7 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
   }
 
   dispose() {
-    this.close();
+    const released = this.close();
     this.stopStatus?.();
     for (const [id, member] of this.members) {
       this.collection.delete(this.key(id));
@@ -119,6 +119,7 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
     }
     if (this.members.size) this.changed();
     this.members.clear();
+    return released;
   }
 
   private key(id: string) {
@@ -159,7 +160,7 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
     this.liveTouched = null;
     const subscription = this.subscription;
     this.subscription = null;
-    void subscription?.release().catch(() => {});
+    return subscription?.release().catch(() => {}) ?? Promise.resolve();
   }
 
   private fail(token: number) {

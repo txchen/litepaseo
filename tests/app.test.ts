@@ -301,9 +301,10 @@ test("two-host routing, permissions, uncertain sends, authentication and board p
       },
     ]);
     // Minimal request: provider default model, no prompt.
-    await request(`/hosts/${a.id}/agents`, "POST", { idempotencyKey: randomUUID(), cwd: "/x", provider: "pi", prompt: "  " });
-    assert.deepEqual((calls.at(-1) as any)[2].config, { provider: "pi" });
+    await request(`/hosts/${a.id}/agents`, "POST", { idempotencyKey: randomUUID(), cwd: "/x", provider: "codex", prompt: "  " });
+    assert.deepEqual((calls.at(-1) as any)[2].config, { provider: "codex/gpt-5" });
     assert.equal((calls.at(-1) as any)[2].prompt, undefined);
+    assert.equal((await request(`/hosts/${a.id}/agents`, "POST", { idempotencyKey: randomUUID(), cwd: "/x", provider: "pi" })).status, 400);
     const failed = await request(`/hosts/${a.id}/agents`, "POST", { idempotencyKey: randomUUID(), cwd: "/fails", provider: "codex" });
     assert.equal(failed.status, 502);
     assert.match((await failed.json()).error, /provider not authenticated/);

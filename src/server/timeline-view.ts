@@ -134,8 +134,9 @@ export class TimelineView {
     clearTimeout(this.flushTimer);
     clearTimeout(this.retryTimer);
     this.watchers.clear();
-    void this.subscription?.release().catch(() => {});
+    const released = this.subscription?.release().catch(() => {}) ?? Promise.resolve();
     this.subscription = null;
+    return released;
   }
 
   watch(watcher: Watcher) {

@@ -40,7 +40,7 @@ The tarball includes prebuilt frontend assets. Runtime installation does not req
 - Persistent Todo/Doing/Done cards, optionally linked to a conversation, with optimistic concurrency protection.
 - Background start/status/stop/restart, a private local control socket, and an authenticated browser API.
 
-Live updates are incremental end to end. The BFF holds one directory subscription per daemon and resumes it from the daemon's directory-sync cursor after reconnects. Browsers receive only the agents that changed since their own cursor, over a server-sent event stream. An open conversation streams row-level upsert/append operations, and older history is paged in on demand. A hidden tab closes its streams and resumes from its cursor when shown again. Conversation rendering is plain text. There is no automatic replay of uncertain sends.
+Live updates are incremental end to end. The BFF holds one directory subscription per daemon and resumes it from the daemon's directory-sync cursor after reconnects. Browsers receive only the agents that changed since their own cursor, over a server-sent event stream. An open conversation streams row-level upsert/append operations, and older history is paged in on demand. A hidden tab closes its streams and resumes from its cursor when shown again. Conversation rendering is plain text. Drafts and uncertain sends survive reload in browser-local storage. Different tabs preserve separate drafts, sign-out clears saved composer state, and storage failures show a warning. There is no automatic replay of uncertain sends.
 
 ## Validation and limitations
 
@@ -51,7 +51,7 @@ node tests/package.mjs
 
 Browser tests require Playwright Chromium (`npx playwright install chromium` if absent). Tests use temporary data directories and stop their servers afterward. Browser fixtures simulate daemon responses; they do not prove live protocol interoperability.
 
-Linux validation passed for TypeScript, production builds, API tests with two simulated hosts, background lifecycle, browser interactions and isolated tarball installation. The research SDK imports also passed on Node 24.11 and 26.12.1. The application itself has not yet been tested against an actual daemon or on macOS. Start live integration with **one existing daemon**; a second host is useful later for routing/failure-isolation acceptance, not a prerequisite to starting.
+Linux validation passed for TypeScript, production builds, API tests with two simulated hosts, background lifecycle, browser interactions and isolated tarball installation. The research SDK imports also passed on Node 24.11 and 26.12.1. A subsequent Linux run against a real 0.15.0 daemon validated creation, messages, timeline streaming and client reconnect; real approvals, active interruption, two-host isolation and macOS remain unverified. Start live integration with **one existing daemon**; a second host is useful later for routing/failure-isolation acceptance, not a prerequisite to starting.
 
 Full logout survival depends on OS session policy. Reboot autostart, crash supervision, automatic stale-socket recovery, log rotation, schema migrations, polished question forms remain unfinished. If a crash leaves `control.sock`, inspect the process before removing it; the CLI never kills a PID or deletes an unverified stale socket automatically. There are no CPU/energy results.
 

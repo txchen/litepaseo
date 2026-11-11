@@ -86,15 +86,15 @@ export class Hosts {
   async remove(id: string) {
     const c = this.clients.get(id);
     this.clients.delete(id);
+    const releases: Promise<void>[] = [];
     for (const [key, entry] of this.timelines)
       if (entry.hostId === id) {
         clearTimeout(entry.idle);
-        entry.view.dispose();
+        releases.push(entry.view.dispose());
         this.timelines.delete(key);
       }
     if (c) {
-      c.directory.dispose();
-      c.workspaces.dispose();
+      await Promise.all([...releases, c.directory.dispose(), c.workspaces.dispose()]);
       c.stopStatus();
       await c.api.dispose();
       await c.driver.close();

@@ -448,11 +448,19 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
     const hostId = c.req.param("host");
     const { api } = hosts.get(hostId);
     try {
+      let model = input.model;
+      if (!model) {
+        const snapshot = await api.providers.snapshot();
+        const provider = snapshot.entries.find(p => p.provider === input.provider && p.enabled !== false && p.status !== "unavailable");
+        const models = provider?.models?.filter(m => m.isSelectable !== false) ?? [];
+        model = models.find(m => m.isDefault)?.id ?? models[0]?.id;
+        if (!model) return c.json({ error: "No selectable model is available for this provider. Refresh providers and select a model." }, 400);
+      }
       const agent = await api.agents.create({
         idempotencyKey: input.idempotencyKey,
         cwd: input.cwd,
         config: {
-          provider: input.model ? `${input.provider}/${input.model}` : input.provider,
+          provider: `${input.provider}/${model}`,
           ...(input.modeId ? { modeId: input.modeId } : {}),
           ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
         },

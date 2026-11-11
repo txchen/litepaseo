@@ -4,6 +4,7 @@ import type { DirectoryMessage, HostState, Permission, TimelineMessage, Workspac
 import { DirectoryStore, comparePinnedFirst } from "./directory-store.ts";
 import ThreadMenu from "./ThreadMenu.vue";
 import RenameThread from "./RenameThread.vue";
+import { ComposerStore } from "./composer-store.ts";
 import { TimelineStore } from "./timeline-store.ts";
 import { openStream, type StreamState } from "./event-stream.ts";
 import SessionList from "./SessionList.vue";
@@ -81,20 +82,22 @@ const label = ref(""),
   board = ref<{ revision: number; cards: Card[] }>({ revision: 0, cards: [] });
 const permissionInputs = ref<Record<string, string>>({}),
   permissionActions = ref<Record<string, string>>({}),
-  composerStates = ref<Record<string, { text: string; uncertain: { messageId: string; text: string } | null }>>({});
-function composerFor(key: string) {
-  return composerStates.value[key] ??= { text: "", uncertain: null };
-}
+  composer = new ComposerStore(() => localStorage);
 const prompt = computed({
-  get: () => selectedKey.value ? composerFor(selectedKey.value).text : "",
-  set: (text: string) => { if (selectedKey.value) composerFor(selectedKey.value).text = text; },
+  get: () => selectedKey.value ? composer.state(selectedKey.value).text : "",
+  set: (text: string) => { if (selectedKey.value) composer.setText(selectedKey.value, text); },
 });
-const uncertain = computed({
-  get: () => selectedKey.value ? composerFor(selectedKey.value).uncertain : null,
-  set: (value: { messageId: string; text: string } | null) => {
-    if (selectedKey.value) composerFor(selectedKey.value).uncertain = value;
-  },
-});
+const uncertain = computed(() => selectedKey.value ? composer.unresolved(selectedKey.value)[0] ?? null : null);
+const savedDrafts = computed(() => selectedKey.value
+  ? composer.saved(selectedKey.value).filter(d => d.text !== prompt.value) : []);
+function acknowledgeMessage() {
+  if (selectedKey.value && uncertain.value) composer.resolve(selectedKey.value, uncertain.value.messageId);
+}
+function onComposerStorage(event: StorageEvent) {
+  if (event.key === "litepaseo-composer-signout") composer.clear();
+  else composer.refresh();
+}
+window.addEventListener("storage", onComposerStorage);
 
 const hostLabels = computed(() => new Map(hosts.value.map((h) => [h.id, h.label])));
 const hostStates = computed(() => new Map(hosts.value.map((h) => [h.id, h.state])));
@@ -209,6 +212,8 @@ function path(a: { hostId: string; id: string }) {
 function signOut(callServer = true) {
   if (callServer) void api("/logout", "POST", {}).catch(() => {});
   authenticated.value = false;
+  composer.clear();
+  try { localStorage.setItem("litepaseo-composer-signout", crypto.randomUUID()); } catch {}
   directoryStream?.close();
   timelineStream?.close();
   directoryStream = timelineStream = null;
@@ -217,8 +222,13 @@ function signOut(callServer = true) {
   if (!callServer) error.value = "Signed out. Sign in again to continue.";
 }
 async function loadAuth() {
-  authInfo.value = await api("/auth").catch(() => ({ authenticated: false, totp: false }));
+  try { authInfo.value = await api("/auth"); }
+  catch {
+    authInfo.value = { authenticated: false, totp: false };
+    return; // An unreachable server must not erase recoverable drafts.
+  }
   if (authInfo.value!.authenticated) await enter();
+  else composer.clear();
 }
 async function login() {
   await action(async () => {
@@ -599,18 +609,22 @@ async function send() {
 async function sendText(text: string, fromComposer = false) {
   const a = active.value;
   if (!a || !text.trim() || uncertain.value || busy.value) return;
-  const state = composerFor(a.key);
+  const state = composer.state(a.key);
+  const generation = composer.generation;
   const sent = { text, messageId: crypto.randomUUID() };
-  if (fromComposer) state.text = "";
+  composer.begin(a.key, sent);
+  if (fromComposer) composer.setText(a.key, "");
   await action(async () => {
     try {
       await api(path(a) + "/messages", "POST", { ...sent, behavior: behavior.value });
+      if (generation !== composer.generation) return;
+      composer.resolve(a.key, sent.messageId);
       if (selectedKey.value === a.key) suggestion.value = null;
       void nextTick(autosize);
       scrollToBottom();
     } catch (e) {
-      state.uncertain = sent;
-      if (fromComposer && !state.text) state.text = sent.text;
+      if (generation !== composer.generation) return;
+      if (fromComposer && !state.text) composer.setText(a.key, sent.text);
       throw e;
     }
   });
@@ -694,6 +708,7 @@ document.addEventListener("visibilitychange", () => {
 });
 onUnmounted(() => {
   clearInterval(usageTimer);
+  window.removeEventListener("storage", onComposerStorage);
   window.removeEventListener("popstate", onPopState);
   window.removeEventListener("keydown", onGlobalKey);
   directoryStream?.close();
@@ -1060,10 +1075,18 @@ onUnmounted(() => {
               </div>
             </section>
 
-            <div v-if="uncertain" class="uncertain">
+            <p v-if="composer.warning.value" role="status">{{ composer.warning.value }}</p>
+            <details v-if="savedDrafts.length">
+              <summary>Other saved drafts ({{ savedDrafts.length }})</summary>
+              <div v-for="draft in savedDrafts" :key="draft.slot">
+                <p style="white-space: pre-wrap">{{ draft.text }}</p>
+                <button class="btn btn-ghost" @click="selectedKey && composer.restore(selectedKey, draft.slot)">Restore draft</button>
+              </div>
+            </details>
+            <div v-if="uncertain && !busy" class="uncertain">
               <Icon name="alert" :size="15" />
               <span class="grow">Delivery unknown. Check the conversation before sending again. Message: {{ uncertain.text }}</span>
-              <button class="btn btn-ghost" @click="uncertain = null">I checked</button>
+              <button class="btn btn-ghost" @click="acknowledgeMessage">I checked</button>
             </div>
 
             <form class="composer" @submit.prevent="send">

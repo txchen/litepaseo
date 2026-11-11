@@ -276,6 +276,15 @@ try {
   await page.locator("button.session", { hasText: "beta conversation" }).click();
   await page.locator(".uncertain").waitFor();
   assert.equal(await page.locator(".composer textarea").inputValue(), "Next beta draft");
+  const sendsBeforeReload = messages.length;
+  await page.reload();
+  await page.locator("button.session", { hasText: "beta conversation" }).click();
+  await page.locator(".uncertain").waitFor();
+  assert.equal(await page.locator(".composer textarea").inputValue(), "Next beta draft");
+  assert.equal(messages.length, sendsBeforeReload, "reload never replays an uncertain send");
+  await page.locator("button.session", { hasText: "alpha conversation" }).click();
+  assert.equal(await page.locator(".composer textarea").inputValue(), "Alpha draft");
+  await page.locator("button.session", { hasText: "beta conversation" }).click();
   await page.getByRole("button", { name: "I checked", exact: true }).click();
   await page.locator(".composer textarea").fill("");
   assert.equal(messages[0].host, "beta");

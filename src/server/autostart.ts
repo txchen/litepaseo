@@ -15,10 +15,12 @@ export function serviceDefinition(options: ServiceOptions) {
   if (options.platform === "linux") {
     const name = id + ".service";
     return { name, path: join(options.env.XDG_CONFIG_HOME ?? join(options.home, ".config"), "systemd/user", name), content: [
-      "[Unit]", "Description=LitePaseo console", "After=network.target", "StartLimitIntervalSec=0", "",
+      "[Unit]", "Description=LitePaseo console", "After=network.target", "",
       "[Service]", "Type=simple", `ExecStart=${[options.node, options.cli, "serve"].map(v => quote(v).replace(/\$/g, "$$$$")).join(" ")}`,
       ...Object.entries(env).map(([key, value]) => `Environment=${quote(`${key}=${value}`)}`),
-      "Restart=on-failure", "RestartSec=3", "TimeoutStopSec=15", "UMask=0077", "", "[Install]", "WantedBy=default.target", "",
+      // The supervisor restarts crashed workers itself; its own non-zero exit is a deliberate
+      // failure (port in use, crash loop) and is not retried. Only a killed supervisor restarts.
+      "Restart=on-abnormal", "RestartSec=3", "TimeoutStopSec=15", "UMask=0077", "", "[Install]", "WantedBy=default.target", "",
     ].join("\n") };
   }
   if (options.platform === "darwin") {
@@ -29,7 +31,7 @@ export function serviceDefinition(options: ServiceOptions) {
 <key>Label</key><string>${xml(name)}</string>
 <key>ProgramArguments</key><array>${[options.node, options.cli, "serve"].map(v => `<string>${xml(v)}</string>`).join("")}</array>
 <key>EnvironmentVariables</key><dict>${Object.entries(env).map(([k, v]) => `<key>${xml(k)}</key><string>${xml(v)}</string>`).join("")}</dict>
-<key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>Crashed</key><true/></dict>
 <key>ThrottleInterval</key><integer>3</integer><key>ExitTimeOut</key><integer>15</integer>
 <key>Umask</key><integer>63</integer>
 </dict></plist>\n` };

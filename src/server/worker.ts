@@ -33,7 +33,14 @@ export async function runWorker(directory: string, webRoot: string) {
   process.once("SIGINT", () => void shutdown());
   process.once("SIGTERM", () => void shutdown());
   process.once("disconnect", () => void shutdown());
-  server.once("error", error => { console.error(error.message); process.exitCode = 1; void shutdown(); });
+  server.once("error", (error: NodeJS.ErrnoException) => {
+    const message = error.code === "EADDRINUSE" ? `Port ${port} on ${hostname} is already in use (set LITEPASEO_PORT to use another)`
+      : error.code === "EACCES" ? `Not permitted to listen on ${hostname}:${port}` : error.message;
+    console.error(message);
+    process.send?.({ type: "fatal", error: message });
+    process.exitCode = 1;
+    void shutdown();
+  });
   server.once("listening", () => {
     const address = server.address();
     const actualPort = typeof address === "object" && address ? address.port : port;

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { RotatingLog } from "./rotating-log.ts";
 import { manageService } from "./autostart.ts";
-import { supervise } from "./supervisor.ts";
+import { FAILED_EVENT, StartupFailure, supervise } from "./supervisor.ts";
 import { runWorker } from "./worker.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ import {
   mkdirSync,
   readFileSync,
   existsSync,
+  statSync,
 } from "node:fs";
 import { spawn } from "node:child_process";
 import { connect } from "node:net";
@@ -34,6 +35,20 @@ async function control(action: string): Promise<string> {
     s.on("data", (chunk) => (out += chunk));
     s.on("end", () => resolve(out));
   });
+}
+/** The reason recorded by the supervisor that just stopped, if any. */
+function lastFailure(since: number) {
+  if (!existsSync(log)) return null;
+  const bytes = readFileSync(log);
+  // A rotation since the start attempt means everything in the file is new.
+  const lines = bytes.subarray(bytes.length >= since ? since : 0).toString("utf8").trim().split("\n").reverse();
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry?.event === FAILED_EVENT || entry?.event === "supervisor_start_failed") return String(entry.error);
+    } catch {}
+  }
+  return null;
 }
 async function main() {
   if (command === "help" || command === "--help") {
@@ -101,15 +116,19 @@ async function main() {
       console.log(running);
       return;
     }
+    const logStart = existsSync(log) ? statSync(log).size : 0;
     const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "serve"], {
       detached: true,
       stdio: "ignore",
       env: process.env,
     });
+    let exited = false;
     child.on("error", () => {});
+    child.once("exit", () => { exited = true; });
     child.unref();
     for (let i = 0; i < 100; i++) {
       await new Promise((r) => setTimeout(r, 100));
+      if (exited) throw new Error(lastFailure(logStart) ?? "Startup failed. Run litepaseo logs for details.");
       const ready = await control("status").catch(() => null);
       if (ready && JSON.parse(ready).ready) {
         console.log(ready);
@@ -118,7 +137,7 @@ async function main() {
       }
     }
     throw new Error(
-      "Startup not ready. Run litepaseo logs or status; the supervisor may still be retrying.",
+      "Startup not ready after 10 s. Run litepaseo status or litepaseo logs.",
     );
   }
   if (command === "worker") return runWorker(directory, fileURLToPath(new URL("../web/", import.meta.url)));
@@ -127,7 +146,7 @@ async function main() {
 }
 main().catch((error) => {
   console.error(error.message);
-  if (command === "serve") {
+  if (command === "serve" && !(error instanceof StartupFailure)) {
     try { new RotatingLog(log).write(JSON.stringify({ event: "supervisor_start_failed", error: error.message }) + "\n"); } catch {}
   }
   process.exitCode = 1;

@@ -145,15 +145,20 @@ export class Auth {
 
   /** Resolves a session secret; extends it (at most hourly) while it is in use. */
   verify(secret: string | undefined, now = Date.now()): LoginSession | null {
+    return this.authenticate(secret, now)?.session ?? null;
+  }
+  /** Like verify; `renewed` says the expiry just moved, so the cookie must be reissued. */
+  authenticate(secret: string | undefined, now = Date.now()): { session: LoginSession; renewed: boolean } | null {
     if (!secret || secret.length > 200) return null;
     const session = this.store.sessionBySecret(sha256(secret));
     if (!session || session.expires < now) return null;
-    if (now - session.lastSeen > TOUCH_INTERVAL_MS) {
+    const renewed = now - session.lastSeen > TOUCH_INTERVAL_MS;
+    if (renewed) {
       session.lastSeen = now;
       session.expires = now + SESSION_TTL_MS;
       this.store.touchSession(session.id, session.lastSeen, session.expires);
     }
-    return session;
+    return { session, renewed };
   }
 
   /** Whether a session id is still valid; long-lived streams re-check this on heartbeat. */

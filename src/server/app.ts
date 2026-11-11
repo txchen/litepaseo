@@ -139,28 +139,28 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'",
     );
   });
-  app.use("/api/*", async (c, next) => {
-    const secret = getCookie(c, SESSION_COOKIE);
-    const session = auth.verify(secret);
-    if (session && secret) setCookie(c, SESSION_COOKIE, secret, {
-      httpOnly: true, secure: secure(c), sameSite: "Strict", path: "/",
-      maxAge: Math.max(0, Math.floor((session.expires - Date.now()) / 1000)),
-    });
-    await next();
-  });
   app.use("/api/*", (c, next) => bodyLimit({ maxSize: c.req.method === "POST" && c.req.path.endsWith("/attachments") ? MAX_FILE_BYTES : 1024 * 1024 })(c, next));
   app.use("/api/*", async (c, next) => {
     c.header("Cache-Control", "no-store");
-    if (PUBLIC_API.has(c.req.path)) {
-      c.set("session", auth.verify(getCookie(c, SESSION_COOKIE)));
-      return next();
-    }
     const bearer = c.req.header("authorization")?.replace(/^Bearer /, "");
-    if (bearer && auth.checkToken(bearer)) {
+    if (bearer && !PUBLIC_API.has(c.req.path) && auth.checkToken(bearer)) {
       c.set("session", null);
       return next();
     }
-    const session = auth.verify(getCookie(c, SESSION_COOKIE));
+    // One session lookup per request. The cookie is reissued only when the sliding expiry
+    // actually moved (at most hourly), and never on login/logout, which set their own cookie.
+    const secret = getCookie(c, SESSION_COOKIE);
+    const found = auth.authenticate(secret);
+    const session = found?.session ?? null;
+    if (found?.renewed && secret && c.req.path !== "/api/login" && c.req.path !== "/api/logout")
+      setCookie(c, SESSION_COOKIE, secret, {
+        httpOnly: true, secure: secure(c), sameSite: "Strict", path: "/",
+        maxAge: Math.floor(SESSION_TTL_MS / 1000),
+      });
+    if (PUBLIC_API.has(c.req.path)) {
+      c.set("session", session);
+      return next();
+    }
     if (!session) return c.json({ error: "Sign in required" }, 401);
     if (!["GET", "HEAD"].includes(c.req.method) && c.req.header(CSRF_HEADER) !== "1")
       return c.json({ error: "Missing request header" }, 403);

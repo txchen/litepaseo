@@ -77,13 +77,19 @@ test("cookie sign-in, CSRF header, revocation, and a daemon update becoming a pu
     assert.match(setCookie, /SameSite=Strict/i);
     const cookie = setCookie.split(";")[0];
     assert.deepEqual(await (await call("/auth", { cookie })).json(), { authenticated: true, totp: false });
-    assert.equal((await call("/hosts", { cookie })).status, 200);
+    const plain = await call("/hosts", { cookie });
+    assert.equal(plain.status, 200);
+    assert.equal(plain.headers.get("set-cookie"), null, "a fresh session is not reissued on every response");
 
     const savedSession = store.sessions()[0];
     store.touchSession(savedSession.id, Date.now() - 7200_000, savedSession.expires);
     const renewed = await call("/auth", { cookie });
     assert.match(renewed.headers.get("set-cookie")!, /Max-Age=259199[89]|Max-Age=2592000/);
     assert.ok(store.sessionById(savedSession.id)!.lastSeen > savedSession.lastSeen);
+    store.touchSession(savedSession.id, Date.now() - 7200_000, store.sessionById(savedSession.id)!.expires);
+    const relogin = await call("/login", { method: "POST", body: { token: "test-token" }, cookie });
+    assert.equal(relogin.headers.getSetCookie().length, 1, "login sets exactly one session cookie, even when the old one is due for renewal");
+    await call("/logout", { method: "POST", body: {}, cookie: relogin.headers.get("set-cookie")!.split(";")[0], csrf: true });
 
     // Writes with only a cookie must carry the same-origin header.
     const subscription = { endpoint: "https://push.example/device", keys: { p256dh: "p", auth: "a" } };

@@ -145,8 +145,11 @@ test("live text streaming reaches the browser as one coalesced append per flush"
   h.append({ type: "user_message", text: "hi" }, "t1");
   await sleep(240);
   assert.equal(h.received.at(-1)![0].type, "reset");
+  const before = h.received.length;
   h.emit(h.append({ type: "assistant_message", text: "Hel", messageId: "m" }, "t1"));
-  await sleep(240);
+  await sleep(90);
+  assert.equal(h.received.length, before, "body updates wait for the 200 ms batch instead of flushing at 50 ms");
+  await sleep(150);
   for (const text of ["lo", " wor", "ld"]) h.emit(h.append({ type: "assistant_message", text }, "t1"));
   await sleep(240);
   const last = h.received.at(-1)!;

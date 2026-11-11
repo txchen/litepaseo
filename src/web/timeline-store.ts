@@ -1,5 +1,5 @@
 import { shallowRef, type ShallowRef } from "vue";
-import type { TimelineCursor, TimelineOp, TimelinePage, TimelineRow } from "../shared/wire.ts";
+import type { TimelineCursor, TimelineOp, TimelineRow } from "../shared/wire.ts";
 
 export interface RowRef {
   seqStart: number;
@@ -59,20 +59,6 @@ export class TimelineStore {
       membership = true;
     }
     if (membership) this.membership.value++;
-  }
-
-  /** Adds an older history page; returns how many rows were new. */
-  prepend(page: TimelinePage) {
-    if (page.epoch !== this.epoch) return 0;
-    const first = this.rows[0]?.seqStart ?? Infinity;
-    const older = page.rows
-      .filter((row) => row.seqStart < first)
-      .map((row) => ({ seqStart: row.seqStart, row: shallowRef(row) }));
-    this.rows = older.concat(this.rows);
-    this.hasOlder = page.hasOlder;
-    this.startCursor = page.startCursor;
-    if (older.length) this.membership.value++;
-    return older.length;
   }
 
   private find(seqStart: number) {

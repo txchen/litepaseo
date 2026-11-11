@@ -514,7 +514,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
       cursor,
       limit: 100,
       projection: "projected",
-      wholeTurns: true,
+      wholeTurns: false,
     });
     return c.json({
       epoch: page.epoch,

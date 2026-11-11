@@ -68,7 +68,7 @@ test("DirectoryStore applies a change in O(log n) even with a large directory", 
   assert.equal(store.size, 50_000);
 });
 
-test("TimelineStore: appends update only the row; inserts and prepends change membership", () => {
+test("TimelineStore: appends update only the row; inserts change membership", () => {
   const store = new TimelineStore();
   const row = (seqStart: number, text: string) => ({
     seqStart,
@@ -87,13 +87,6 @@ test("TimelineStore: appends update only the row; inserts and prepends change me
   store.apply([{ type: "upsert", row: row(6, "mid") }]);
   assert.deepEqual(store.rows.map((r) => r.seqStart), [5, 6, 7]);
   assert.equal(store.membership.value, membership + 1);
-  assert.equal(
-    store.prepend({ epoch: "e", rows: [row(1, "old"), row(5, "dup")], hasOlder: false, startCursor: null }),
-    1,
-  );
-  assert.deepEqual(store.rows.map((r) => r.seqStart), [1, 5, 6, 7]);
-  assert.equal(store.rows[1].row.value.item.text, "a", "prepend never overwrites live rows");
-  assert.equal(store.prepend({ epoch: "old", rows: [row(0, "x")], hasOlder: false, startCursor: null }), 0);
 });
 
 test("renderMarkdown escapes all input and only emits safe links", async () => {

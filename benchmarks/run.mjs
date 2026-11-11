@@ -55,8 +55,9 @@ if (process.argv.includes('--motion-sweep')) {
 }
 const onlyScenario = process.argv.find(arg => arg.startsWith('--scenario='))?.split('=')[1];
 if (onlyScenario) {
-  const selected = cases.filter(spec => spec.name === onlyScenario);
-  if (!selected.length) throw new Error('Unknown scenario: ' + onlyScenario);
+  const names = onlyScenario.split(',');
+  const selected = cases.filter(spec => names.includes(spec.name));
+  if (names.some(name => !selected.some(spec => spec.name === name))) throw new Error('Unknown scenario: ' + onlyScenario);
   cases.splice(0, cases.length, ...selected);
 }
 manifest.cases = cases;
@@ -146,11 +147,11 @@ for (const spec of cases) {
       const cdp = await context.newCDPSession(page); cdps.push(cdp); await cdp.send('Performance.enable');
       const started = performance.now();
       await page.goto(ready.url + `/?session=h${i % 2}:a0`);
-      if (spec.animationHz) await page.addStyleTag({ content: `.status-dot.is-running { animation-duration: 2s; animation-timing-function: steps(${2 * spec.animationHz}, end); } .spinner { animation-duration: ${4 / spec.animationHz}s; animation-timing-function: steps(4, end); }` });
+      if (spec.animationHz) await page.addStyleTag({ content: `:root { --motion-step-ms: ${1000 / spec.animationHz}; } .status-dot.is-running { animation-duration: 2s; animation-timing-function: steps(${2 * spec.animationHz}, end); } .spinner { animation-duration: ${4 / spec.animationHz}s; animation-timing-function: steps(4, end); }` });
       await page.waitForFunction(count => Number(document.querySelector('.tabs .count')?.textContent) === count && document.querySelectorAll('.timeline-inner > .row').length === 60, spec.sessions);
       cold.push(performance.now() - started);
       if (await page.evaluate(() => document.hidden)) throw new Error('Expected a visible headless client');
-      if (motion) {
+      if (motion || spec.animationHz) {
         const clockCheck = await page.evaluate(async () => {
           const pulse = () => document.getAnimations().find(a => a instanceof CSSAnimation && a.animationName === 'pulse');
           let last = pulse()?.currentTime, changes = 0;
@@ -168,11 +169,11 @@ for (const spec of cases) {
           const stopped = before === pulse()?.currentTime;
           delete document.hidden;
           document.dispatchEvent(new Event('visibilitychange'));
-          return { changes, stopped };
+          return { changes, stopped, rate: 1000 / (Number(getComputedStyle(document.documentElement).getPropertyValue('--motion-step-ms')) || 1000) };
         });
         assert.ok(clockCheck.stopped, 'Hidden pages must stop the decorative clock');
-        assert.ok(spec.reducedMotion === 'reduce' ? clockCheck.changes === 0 : clockCheck.changes >= 3 && clockCheck.changes <= 6,
-          'Decorative animations must advance approximately five times/s (zero with reduced motion)');
+        assert.ok(spec.reducedMotion === 'reduce' ? clockCheck.changes === 0 : clockCheck.changes >= Math.max(1, clockCheck.rate - 2) && clockCheck.changes <= clockCheck.rate + 1,
+          'Decorative animations must follow the configured low-frequency clock (zero with reduced motion)');
         writeFileSync(join(folder, 'motion-clock-check.json'), JSON.stringify(clockCheck));
       }
     }

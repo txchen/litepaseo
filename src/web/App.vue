@@ -232,7 +232,7 @@ async function api(path: string, method = "GET", body?: unknown, timeoutMs = 200
     signal: AbortSignal.timeout(timeoutMs),
   });
   const data = await response.json().catch(() => ({}));
-  if (response.status === 401 && authenticated.value && path !== "/login") signOut(false);
+  if (response.status === 401 && authenticated.value && path !== "/login") signOut("ended");
   if (!response.ok) throw Object.assign(new Error((data.error ?? "Request failed") + (data.requestId ? ` (reference ${data.requestId})` : "")), { delivery: data.delivery });
   return data;
 }
@@ -250,18 +250,27 @@ async function action(fn: () => Promise<void>) {
 function path(a: { hostId: string; id: string }) {
   return `/hosts/${encodeURIComponent(a.hostId)}/agents/${encodeURIComponent(a.id)}`;
 }
-function signOut(callServer = true) {
-  if (callServer) void api("/logout", "POST", {}).catch(() => {});
+/**
+ * "user": the person chose to sign out (Settings) — drafts and staged files are erased here and
+ * in other tabs, as expected on a shared computer. "ended": the session expired or was revoked
+ * elsewhere — nothing the user wrote is erased; drafts and unconfirmed messages wait for sign-in.
+ */
+function signOut(reason: "user" | "ended") {
   authenticated.value = false;
-  composer.clear();
-  attachments.clear();
-  try { localStorage.setItem("litepaseo-composer-signout", crypto.randomUUID()); } catch {}
+  if (reason === "user") {
+    composer.clear();
+    attachments.clear();
+    try { localStorage.setItem("litepaseo-composer-signout", crypto.randomUUID()); } catch {}
+  } else {
+    // Staged uploads belonged to the old session; keep the files and let them upload again.
+    attachments.forgetRemote("Sign in again, then retry the upload.");
+  }
   directoryStream?.close();
   timelineStream?.close();
   directoryStream = timelineStream = null;
   token.value = code.value = "";
   void loadAuth();
-  if (!callServer) error.value = "Signed out. Sign in again to continue.";
+  error.value = reason === "ended" ? "Your session ended. Sign in again; your drafts are kept." : "";
 }
 async function loadAuth() {
   try { authInfo.value = await api("/auth"); }
@@ -269,8 +278,9 @@ async function loadAuth() {
     authInfo.value = { authenticated: false, totp: false };
     return; // An unreachable server must not erase recoverable drafts.
   }
+  // Not signed in (e.g. the session expired while the page was closed) is not a reason to erase
+  // drafts: only an explicit sign-out does that.
   if (authInfo.value!.authenticated) await enter();
-  else composer.clear();
 }
 async function login() {
   await action(async () => {
@@ -311,7 +321,7 @@ function openDirectory() {
       `&wgeneration=${encodeURIComponent(directory.generation)}&wsince=${directory.seq}`,
     onState: (state) => {
       directoryState.value = state;
-      if (state === "unauthorized") signOut(false);
+      if (state === "unauthorized") signOut("ended");
     },
     onMessage: (data) => {
       const message = data as DirectoryMessage;
@@ -604,7 +614,7 @@ watch(
   timelineStream = openStream({
     url: () => "/api" + path(agent) + "/timeline/stream",
     onState: (state) => {
-      if (state === "unauthorized") signOut(false);
+      if (state === "unauthorized") signOut("ended");
     },
     onMessage: (data) => {
       if (timeline.value !== store) return;
@@ -954,7 +964,7 @@ onUnmounted(() => {
         :request="api"
         :totp-enabled="!!authInfo?.totp"
         @back="closeDetail"
-        @signed-out="signOut(false)"
+        @signed-out="signOut('user')"
         @totp-changed="(on) => authInfo && (authInfo.totp = on)"
       />
 

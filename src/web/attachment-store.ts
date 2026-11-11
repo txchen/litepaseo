@@ -29,7 +29,10 @@ export class AttachmentStore {
       if (!response.ok) throw new Error(data.error ?? "Upload failed");
       entry.id = data.id;
       if (entry.cancelled) await this.discardRemote(entry);
-    } catch (error) { if (!entry.cancelled) entry.error = (error as Error).message; }
+    } catch (error) {
+      // An abort from forgetRemote already explains what to do; keep that message.
+      if (!entry.cancelled && !entry.controller?.signal.aborted) entry.error = (error as Error).message;
+    }
     finally { entry.uploading = false; }
   }
   private async discardRemote(entry: LocalAttachment) {
@@ -44,6 +47,16 @@ export class AttachmentStore {
   }
   consume(key: string, ids: string[]) {
     for (const entry of this.get(key)) if (entry.id && ids.includes(entry.id)) this.remove(key, entry, true);
+  }
+  /** The staging session is gone: keep the chosen files, mark them for a fresh upload. */
+  forgetRemote(message: string) {
+    for (const entries of this.entries.values())
+      for (const entry of entries) {
+        entry.controller?.abort();
+        entry.id = undefined;
+        entry.uploading = false;
+        entry.error = message;
+      }
   }
   clear() { for (const [key, entries] of this.entries) for (const entry of entries) this.remove(key, entry); this.entries.clear(); }
 }

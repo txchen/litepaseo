@@ -504,13 +504,13 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
       };
     }, streamValidity(c.get("session")));
   });
-  /** Bounded history pages in either direction; live rows come from the stream above. */
+  /** Bounded history pages; the browser bookmarks boundaries for forward navigation. */
   app.get("/api/hosts/:host/agents/:agent/timeline", async (c) => {
     const cursor = z
       .object({ epoch: z.string().min(1), seq: z.number().int().nonnegative() })
       .parse(parseJson(c.req.query("cursor")));
     const page = await hosts.get(c.req.param("host")).driver.fetchAgentTimeline(c.req.param("agent"), {
-      direction: z.enum(["before", "after"]).default("before").parse(c.req.query("direction")),
+      direction: "before",
       cursor,
       limit: 100,
       projection: "projected",

@@ -7,13 +7,19 @@ npm run build
 node benchmarks/run.mjs --smoke
 node benchmarks/run.mjs
 node benchmarks/run.mjs --motion
+node benchmarks/run.mjs --motion-sweep
 node benchmarks/run.mjs --scenario=markdown-large
+node benchmarks/run.mjs --scenario=plain,markdown-large,history-expanded
 node benchmarks/analyze.mjs benchmarks/runs/<timestamp>
 ```
 
 The complete run takes roughly 22 minutes. The separate `--motion` diagnostic takes
 about three minutes: three alternating-order pairs with default/reduced motion,
 20 seconds each, connected with running status badges but no incoming events.
+The current default advances persistent decorative animations twice per second;
+live timeline bodies flush every 500 ms. `--motion-sweep` overrides the motion
+clock and animation phases to compare two versus one animation updates/s.
+Motion diagnostics also check actual animation-clock changes and stopping while hidden.
 Run these sequentially to avoid competing benchmark processes.
 `BENCH_OUT` overrides the output directory;
 use a fresh directory for each invocation. A smoke run validates the harness only.
@@ -40,6 +46,14 @@ new message every 100 deltas; soak starts one every 3 deltas to cross retention 
 The large Markdown case starts with an unfinished 12,000-line code fence, then appends
 small deltas. This is an intentionally extreme single-message case, not typical prose.
 Directory churn updates 50 agent/workspace pairs per second across both hosts.
+
+After the history fix, `history-expanded` navigates 20 older pages inside a 150-row
+window, checks scroll anchors and newer-page navigation, then keeps that historical
+snapshot fixed during incoming output. It compares the displayed historical range
+to the fixture and checks return-to-latest afterward. Its CPU is therefore not a
+like-for-like comparison to the original benchmark's 2,066 live-updating rows;
+the old harness sources remain archived with that baseline. It still demonstrates
+the bounded rendering behavior and absence of history displacement during streaming.
 
 Summary tables use medians across repetitions, with min/max retained in `summary.json`.
 Multi-client cold time first takes the median across clients within each repetition.

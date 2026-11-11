@@ -72,6 +72,7 @@ const hosts = shallowRef<HostState[]>([]),
   timelineNotice = ref(""),
   historyRows = shallowRef<RowRef[] | null>(null),
   historyHasOlder = ref(false),
+  historyNewer = ref<number[]>([]),
   timelineElement = ref<HTMLElement | null>(null),
   composerElement = ref<HTMLTextAreaElement | null>(null),
   query = ref(""),
@@ -572,6 +573,7 @@ watch(
   const store = new TimelineStore();
   timeline.value = store;
   historyRows.value = null;
+  historyNewer.value = [];
   timelineNotice.value = "";
   const agent = agentDirectory.get(key);
   if (!agent) return;
@@ -590,6 +592,7 @@ watch(
       store.apply(ops);
       if (epoch && epoch !== store.epoch) {
         historyRows.value = null;
+        historyNewer.value = [];
         scrollToBottom();
       }
       if (stick) scrollToBottom();
@@ -599,6 +602,7 @@ watch(
 );
 function showLatest() {
   historyRows.value = null;
+  historyNewer.value = [];
   scrollToBottom();
 }
 async function moveHistory(direction: "before" | "after") {
@@ -615,14 +619,19 @@ async function moveHistory(direction: "before" | "after") {
   const anchor = direction === "before" ? onScreen[0] : onScreen.at(-1);
   const anchorSeq = anchor?.dataset.seqStart;
   const anchorTop = anchor?.getBoundingClientRect().top;
-  const cursor = { epoch, seq: edge.seqStart };
+  // Forward navigation uses the previous page's stable seqStart boundary. An `after`
+  // catch-up read can include old tool rows whose seqEnd changed much later.
+  const boundary = direction === "before" ? edge.seqStart : historyNewer.value.at(-1);
+  if (boundary === undefined) return;
+  const cursor = { epoch, seq: boundary };
   await action(async () => {
-    const page: TimelinePage = await api(path(agent) + "/timeline?direction=" + direction +
-      "&cursor=" + encodeURIComponent(JSON.stringify(cursor)));
+    const page: TimelinePage = await api(path(agent) + "/timeline?cursor=" + encodeURIComponent(JSON.stringify(cursor)));
     if (timeline.value !== store || store.epoch !== epoch) return;
     if (page.epoch !== epoch) { showLatest(); return; }
     const window = pageHistory(current, page, direction);
     if (direction === "after" && !window.added) { showLatest(); return; }
+    if (direction === "before" && window.added) historyNewer.value.push(current.at(-1)!.seqStart + 1);
+    if (direction === "after") historyNewer.value.pop();
     historyRows.value = window.rows;
     historyHasOlder.value = window.hasOlder;
     await nextTick();
@@ -1096,7 +1105,7 @@ onUnmounted(() => {
             <p v-if="timelineNotice" class="notice"><Icon name="alert" :size="14" />{{ timelineNotice }}</p>
             <TimelineRowView v-for="r in visibleRows" :key="r.seqStart" :entry="r.row" :data-seq-start="r.seqStart" />
             <div v-if="historyRows" class="older">
-              <button class="btn btn-ghost" :disabled="busy" @click="moveHistory('after')">Show newer messages</button>
+              <button v-if="historyNewer.length" class="btn btn-ghost" :disabled="busy" @click="moveHistory('after')">Show newer messages</button>
               <button class="btn btn-ghost" :disabled="busy" @click="showLatest">Back to latest</button>
             </div>
             <div v-if="!visibleRows.length" class="timeline-empty">

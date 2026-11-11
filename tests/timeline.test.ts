@@ -143,15 +143,15 @@ test("live text streaming reaches the browser as one coalesced append per flush"
   const daemon = new ReferenceDaemon();
   const h = harness(daemon);
   h.append({ type: "user_message", text: "hi" }, "t1");
-  await sleep(240);
+  await sleep(550);
   assert.equal(h.received.at(-1)![0].type, "reset");
   const before = h.received.length;
   h.emit(h.append({ type: "assistant_message", text: "Hel", messageId: "m" }, "t1"));
   await sleep(90);
-  assert.equal(h.received.length, before, "body updates wait for the 200 ms batch instead of flushing at 50 ms");
-  await sleep(150);
+  assert.equal(h.received.length, before, "body updates wait for the 500 ms batch instead of flushing at 50 ms");
+  await sleep(460);
   for (const text of ["lo", " wor", "ld"]) h.emit(h.append({ type: "assistant_message", text }, "t1"));
-  await sleep(240);
+  await sleep(550);
   const last = h.received.at(-1)!;
   assert.deepEqual(last.map((op) => op.type), ["append"]);
   assert.equal((last[0] as any).text, "lo world");
@@ -163,17 +163,17 @@ test("live text streaming reaches the browser as one coalesced append per flush"
 test("tool lifecycle updates replace their row; gaps recover with an incremental read", async () => {
   const daemon = new ReferenceDaemon();
   const h = harness(daemon);
-  await sleep(240);
+  await sleep(550);
   h.emit(h.append({ type: "tool_call", callId: "c1", status: "running", detail: { type: "unknown" } } as any, "t1"));
   h.emit(h.append({ type: "assistant_message", text: "working" }, "t1"));
   h.emit(h.append({ type: "tool_call", callId: "c1", status: "completed", detail: { type: "shell", command: "ls" } } as any, "t1"));
-  await sleep(240);
+  await sleep(550);
   assert.deepEqual(visible(h.store), expected(daemon, 1));
   // Drop two events: the next one exposes the gap.
   h.append({ type: "assistant_message", text: " more" }, "t1");
   h.append({ type: "user_message", text: "next" }, "t2");
   h.emit(h.append({ type: "assistant_message", text: "ok" }, "t2"));
-  await sleep(240);
+  await sleep(550);
   assert.equal((daemon.fetches.at(-1) as any).direction, "after");
   assert.deepEqual(visible(h.store), expected(daemon, 1));
   h.view.dispose();
@@ -183,7 +183,7 @@ test("a late watcher gets a bounded reset; epoch replacement reloads the tail", 
   const daemon = new ReferenceDaemon();
   for (let i = 0; i < 300; i++) daemon.append({ type: "user_message", text: "m" + i }, "t" + i);
   const h = harness(daemon);
-  await sleep(240);
+  await sleep(550);
   const reset = h.received[0][0] as Extract<TimelineOp, { type: "reset" }>;
   assert.equal(reset.rows.length, 60, "first load reads only the tail");
   assert.equal(reset.hasOlder, true);
@@ -196,7 +196,7 @@ test("a late watcher gets a bounded reset; epoch replacement reloads the tail", 
   daemon.nextSeq = 1;
   h.append({ type: "user_message", text: "fresh" });
   h.send({ type: "agent.timeline.replacement", payload: { agentId: "agent", epoch: "e2" } });
-  await sleep(240);
+  await sleep(550);
   assert.equal(h.store.epoch, "e2");
   assert.deepEqual(visible(h.store), expected(daemon, 1));
   h.view.dispose();
@@ -252,7 +252,7 @@ test("randomized: dropped events and reconnects converge to the daemon projectio
     }
     // A final event lets the view notice any trailing gap.
     h.emit(h.append({ type: "user_message", text: "end" }, "end"));
-    await sleep(240);
+    await sleep(550);
     const rows = visible(h.store);
     assert.ok(rows.length > 0);
     const bySeq = new Map(daemon.rows.map(({ sources, ...row }) => [row.seqStart, row]));

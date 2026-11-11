@@ -95,8 +95,8 @@ test("two-host routing, permissions, uncertain sends, authentication and board p
         startCursor: null,
         entries: [
           {
-            seqStart: options.cursor.seq + (options.direction === "after" ? 1 : -1),
-            seqEnd: options.cursor.seq + (options.direction === "after" ? 1 : -1),
+            seqStart: options.cursor.seq - 1,
+            seqEnd: options.cursor.seq - 1,
             timestamp: "t",
             provider: "codex",
             item: { type: "user_message", text: label },
@@ -205,9 +205,6 @@ test("two-host routing, permissions, uncertain sends, authentication and board p
     const page = await (await request(`/hosts/${b.id}/agents/same-id/timeline?cursor=${cursor}`)).json();
     assert.deepEqual([page.epoch, page.rows[0].seqStart, page.rows[0].item.text], ["Beta", 9, "Beta"]);
     assert.equal((await request(`/hosts/${b.id}/agents/same-id/timeline?cursor=bad`)).status, 400);
-    const newer = await (await request(`/hosts/${b.id}/agents/same-id/timeline?cursor=${cursor}&direction=after`)).json();
-    assert.equal(newer.rows[0].seqStart, 11);
-    assert.equal((await request(`/hosts/${b.id}/agents/same-id/timeline?cursor=${cursor}&direction=bad`)).status, 400);
     const messageId = randomUUID();
     assert.equal(
       (

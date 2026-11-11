@@ -3,7 +3,7 @@ export function startMotionClock() {
   const reduced = matchMedia("(prefers-reduced-motion: reduce)");
   let timer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
-  const interval = () => Math.max(200, Number(getComputedStyle(document.documentElement).getPropertyValue("--motion-step-ms")) || 1000);
+  const interval = () => Math.max(200, Number(getComputedStyle(document.documentElement).getPropertyValue("--motion-step-ms")) || 500);
   const stop = () => { clearTimeout(timer); timer = undefined; };
   const tick = () => {
     timer = undefined;

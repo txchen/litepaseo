@@ -169,7 +169,7 @@ for (const spec of cases) {
           const stopped = before === pulse()?.currentTime;
           delete document.hidden;
           document.dispatchEvent(new Event('visibilitychange'));
-          return { changes, stopped, rate: 1000 / (Number(getComputedStyle(document.documentElement).getPropertyValue('--motion-step-ms')) || 1000) };
+          return { changes, stopped, rate: 1000 / (Number(getComputedStyle(document.documentElement).getPropertyValue('--motion-step-ms')) || 500) };
         });
         assert.ok(clockCheck.stopped, 'Hidden pages must stop the decorative clock');
         assert.ok(spec.reducedMotion === 'reduce' ? clockCheck.changes === 0 : clockCheck.changes >= Math.max(1, clockCheck.rate - 2) && clockCheck.changes <= clockCheck.rate + 1,

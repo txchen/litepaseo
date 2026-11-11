@@ -1,4 +1,4 @@
-import { ref } from "vue";
+import { computed, ref } from "vue";
 
 export type ThemeChoice = "system" | "light" | "dark";
 const KEY = "litepaseo-theme";
@@ -9,6 +9,10 @@ const read = (): ThemeChoice => {
 
 /** "system" follows prefers-color-scheme; an explicit choice pins the theme. */
 export const theme = ref<ThemeChoice>(read());
+const systemDark = matchMedia("(prefers-color-scheme: dark)");
+const prefersDark = ref(systemDark.matches);
+systemDark.addEventListener("change", event => { prefersDark.value = event.matches; });
+export const isDark = computed(() => theme.value === "dark" || (theme.value === "system" && prefersDark.value));
 
 export function applyTheme(choice: ThemeChoice = theme.value) {
   theme.value = choice;

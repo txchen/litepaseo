@@ -192,6 +192,14 @@ const visibleRows = computed(() => {
   store.membership.value;
   return store.rows.slice(-RENDER_WINDOW);
 });
+const markdownSettled = computed(() => directoryState.value === "live"
+  && hostStates.value.get(active.value?.hostId ?? "") === "connected"
+  && active.value?.turnActive === false);
+const lastTimelineSeq = computed(() => {
+  const store = timeline.value;
+  store.membership.value;
+  return store.rows.at(-1)?.seqStart;
+});
 const canShowOlder = computed(() => {
   if (historyRows.value) return historyHasOlder.value;
   const store = timeline.value;
@@ -341,11 +349,27 @@ watch(query, (text) => {
   }, 120);
 });
 
+// Async Markdown nodes can acquire height after the SSE update's nextTick.
+// Follow that layout only while the reader remains at the live tail.
+let followLatest = true;
+watch(timelineElement, (element, _previous, cleanup) => {
+  const inner = element?.querySelector(".timeline-inner");
+  if (!element || !inner) return;
+  const onScroll = () => { followLatest = nearBottom(); };
+  const observer = new ResizeObserver(() => {
+    if (!historyRows.value && followLatest) scrollToBottom();
+  });
+  element.addEventListener("scroll", onScroll, { passive: true });
+  observer.observe(inner);
+  cleanup(() => { observer.disconnect(); element.removeEventListener("scroll", onScroll); });
+}, { flush: "post" });
+
 function nearBottom() {
   const el = timelineElement.value;
   return !el || el.scrollHeight - el.scrollTop - el.clientHeight < 120;
 }
 function scrollToBottom() {
+  followLatest = true;
   void nextTick(() => {
     const el = timelineElement.value;
     if (el) el.scrollTop = el.scrollHeight;
@@ -1103,7 +1127,7 @@ onUnmounted(() => {
               <button class="btn btn-ghost" :disabled="busy" @click="moveHistory('before')">Show earlier messages</button>
             </div>
             <p v-if="timelineNotice" class="notice"><Icon name="alert" :size="14" />{{ timelineNotice }}</p>
-            <TimelineRowView v-for="r in visibleRows" :key="r.seqStart" :entry="r.row" :data-seq-start="r.seqStart" />
+            <TimelineRowView v-for="r in visibleRows" :key="`${active?.key}:${timeline.epoch}:${r.seqStart}`" :entry="r.row" :final="r.seqStart !== lastTimelineSeq || markdownSettled" :data-seq-start="r.seqStart" />
             <div v-if="historyRows" class="older">
               <button v-if="historyNewer.length" class="btn btn-ghost" :disabled="busy" @click="moveHistory('after')">Show newer messages</button>
               <button class="btn btn-ghost" :disabled="busy" @click="showLatest">Back to latest</button>

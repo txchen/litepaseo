@@ -4,7 +4,6 @@ import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, cop
 import { resolve, join } from 'node:path';
 import { cpus, totalmem, release, platform } from 'node:os';
 import { createHash } from 'node:crypto';
-import { renderMarkdown } from '../src/web/markdown.ts';
 import assert from 'node:assert/strict';
 
 const smoke = process.argv.includes('--smoke');
@@ -247,12 +246,12 @@ for (const spec of cases) {
     for (let i = 0; i < pages.length; i++) {
       const actual = await pages[i].locator('.timeline-inner > .row').allTextContents();
       const expected = (await rpc('expected', { limit: actual.length, ...(historyBoundary ? { before: historyBoundary } : {}) }))['h' + (i % 2)];
-      const html = expected.map(row => row.item.type === 'assistant_message' ? renderMarkdown(row.item.text) : null);
-      const wanted = await pages[i].evaluate(({ expected, html }) => expected.map((row, j) => {
-        if (html[j] === null) return row.item.text;
-        const template = document.createElement('template'); template.innerHTML = html[j]; return template.content.textContent;
-      }), { expected, html });
-      correctness.push({ client: i, rows: actual.length, expectedHash: hash(JSON.stringify(wanted)), actualHash: hash(JSON.stringify(actual)), equal: JSON.stringify(actual) === JSON.stringify(wanted) });
+      // Fixtures contain plain paragraphs or one fenced code block. Compare
+      // their source text, independent of either renderer's HTML/whitespace.
+      const normalize = text => text.replace(/\s+/gu, ' ').trim();
+      const wanted = expected.map(row => normalize(row.item.text.replace(/^```[^\n]*\n/, '').replace(/\n```\s*$/, '')));
+      const rendered = actual.map(normalize);
+      correctness.push({ client: i, rows: actual.length, expectedHash: hash(JSON.stringify(wanted)), actualHash: hash(JSON.stringify(rendered)), equal: JSON.stringify(rendered) === JSON.stringify(wanted) });
     }
     const first = samples[0];
     const wall = (after.bff.at - first.bff.at) / 1000;

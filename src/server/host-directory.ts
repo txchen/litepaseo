@@ -329,6 +329,7 @@ export function summarize(
     workspaceId: agent.workspaceId ?? null,
     title: agent.title ?? null,
     status: agent.status,
+    turnActive: isRunning(agent) || agent.status === "initializing",
     provider: agent.provider,
     cwd: agent.cwd,
     project: project?.projectName || basename(agent.cwd) || "Other",

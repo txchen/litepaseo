@@ -1157,7 +1157,8 @@ h3 {
   border-top: 1px solid var(--border);
   margin: 1.2em 0;
 }
-.prose pre.code {
+.prose pre.code,
+.prose.markstream-vue pre {
   position: relative;
   background: var(--code-bg);
   border: 1px solid var(--border);
@@ -1166,7 +1167,8 @@ h3 {
   overflow-x: auto;
   font: 12.5px/1.6 var(--mono);
 }
-.prose pre.code code {
+.prose pre.code code,
+.prose.markstream-vue pre code {
   background: none;
   border: 0;
   padding: 0;
@@ -2517,4 +2519,19 @@ h3 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Markstream inherits the application's light/dark tokens and update cadence. */
+.prose.markstream-vue {
+  color: var(--fg);
+  --code-fg: var(--fg);
+  --markstream-code-fallback-bg: var(--code-bg);
+  --markstream-code-fallback-fg: var(--fg);
+}
+.prose.markstream-vue h1 { font-size: 1.35em; }
+.prose.markstream-vue h2 { font-size: 1.2em; }
+.prose.markstream-vue h1, .prose.markstream-vue h2 { margin: 1em 0 .5em; line-height: 1.4; }
+.prose.markstream-vue *, .prose.markstream-vue *::before, .prose.markstream-vue *::after {
+  animation: none !important;
+  transition: none !important;
 }

@@ -30,6 +30,7 @@ export interface AgentSummary {
   workspaceId: string | null;
   title: string | null;
   status: string;
+  turnActive?: boolean;
   provider: string;
   cwd: string;
   /** Display name of the daemon's project placement (falls back to the cwd folder). */

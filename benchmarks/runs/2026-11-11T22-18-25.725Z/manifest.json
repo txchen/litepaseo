@@ -1,0 +1,118 @@
+{
+  "startedAt": "2026-11-11T22:18:25.733Z",
+  "commit": "95d42dcbe5f35705713fd1aef0d8df9ef459409c",
+  "sourceStatus": " M benchmarks/run.mjs\n M package-lock.json\n M package.json\n M src/server/host-directory.ts\n M src/shared/wire.ts\n M src/web/App.vue\n M src/web/TimelineRowView.vue\n M src/web/main.ts\n M src/web/style.css\n M tests/browser.mjs\n?? benchmarks/runs/2026-11-11T22-18-25.725Z/\n?? src/web/MarkdownMessage.vue\n",
+  "node": "v26.12.1",
+  "os": "linux 7.2.13-200.fc44.x86_64",
+  "cpu": "Intel(R) Core(TM) Ultra 7 256V",
+  "logicalCpus": 8,
+  "totalMemory": 16272830464,
+  "governor": "powersave",
+  "acOnline": "1",
+  "batteryStatus": "Not charging",
+  "loadavg": "1.39 0.49 0.28 1/1137 810422",
+  "energy": {
+    "available": false,
+    "reason": "Energy counters are not sampled by this harness; no joule or battery-drain claims."
+  },
+  "harness": {
+    "server": "9f819d2ccc73235acf88d3c613f312769387466ed1649e0d678bb1a3c8de42b5",
+    "runner": "5eca28459744fc09212c45aaaad71de6047e0155ca712d80958f54e2387fc3d7"
+  },
+  "methodology": "Production frontend over real loopback HTTP/SSE, actual BFF/HostDirectory/TimelineView source loaded with Node type stripping; SDK facades are deterministic in-process doubles. BFF CPU/memory includes fixture generation/logging, not real daemon/network/provider costs. Fresh Chromium process and BFF per repetition. Browser CPU sums sampled /proc process-tree counters; RSS double-counts shared pages, PSS is also collected. Latency is event-generation to the rAF following a DOM mutation, sampled <=1Hz, not a physical paint/energy measurement. All clients use separate contexts in one headless Chromium process. Samples every 2s. No official-client comparison. Shared host, plugged in, powersave governor, no controlled thermal/brightness conditions.",
+  "cases": [
+    {
+      "name": "plain",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "duration": 30,
+      "rep": 1
+    },
+    {
+      "name": "plain",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "duration": 30,
+      "rep": 2
+    },
+    {
+      "name": "plain",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "duration": 30,
+      "rep": 3
+    },
+    {
+      "name": "markdown-large",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "kind": "markdown",
+      "prefillLines": 12000,
+      "rowEvery": 0,
+      "duration": 30,
+      "rep": 1
+    },
+    {
+      "name": "markdown-large",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "kind": "markdown",
+      "prefillLines": 12000,
+      "rowEvery": 0,
+      "duration": 30,
+      "rep": 2
+    },
+    {
+      "name": "markdown-large",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "kind": "markdown",
+      "prefillLines": 12000,
+      "rowEvery": 0,
+      "duration": 30,
+      "rep": 3
+    },
+    {
+      "name": "history-expanded",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "olderPages": 20,
+      "duration": 30,
+      "rep": 1
+    },
+    {
+      "name": "history-expanded",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "olderPages": 20,
+      "duration": 30,
+      "rep": 2
+    },
+    {
+      "name": "history-expanded",
+      "sessions": 1000,
+      "clients": 1,
+      "rate": 20,
+      "rowEvery": 100,
+      "olderPages": 20,
+      "duration": 30,
+      "rep": 3
+    }
+  ],
+  "chromium": "158.0.8127.18",
+  "finishedAt": "2026-11-11T22:23:57.601Z",
+  "failures": 0
+}

@@ -2,6 +2,7 @@ import { createApp } from "vue";
 import App from "./App.vue";
 import { applyTheme } from "./theme.ts";
 import { startMotionClock } from "./motion-clock.ts";
+import "markstream-vue/index.css";
 import "./style.css";
 applyTheme();
 const app = createApp(App);

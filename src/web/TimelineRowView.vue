@@ -1,19 +1,15 @@
 <script setup lang="ts">
 import { computed, ref, type ShallowRef } from "vue";
 import type { TimelineRow } from "../shared/wire.ts";
-import { renderMarkdown } from "./markdown.ts";
+import MarkdownMessage from "./MarkdownMessage.vue";
 import Icon from "./Icon.vue";
 import PluginRow from "./PluginRow.vue";
 
 // Receives the row's own ref: only this component re-renders when the row changes.
-const props = defineProps<{ entry: ShallowRef<TimelineRow> }>();
+const props = defineProps<{ entry: ShallowRef<TimelineRow>; final: boolean }>();
 const row = computed(() => props.entry.value);
 const item = computed(() => row.value.item as Record<string, any>);
 const open = ref(false);
-
-const html = computed(() =>
-  item.value.type === "assistant_message" ? renderMarkdown(String(item.value.text ?? "")) : "",
-);
 
 const TOOL_ICONS: Record<string, string> = {
   shell: "terminal",
@@ -51,7 +47,7 @@ const label = computed(() => String(item.value.type).replaceAll("_", " "));
   </div>
 
   <div v-else-if="item.type === 'assistant_message'" class="row row-assistant">
-    <div class="prose" v-html="html"></div>
+    <MarkdownMessage :content="String(item.text ?? '')" :final="final" />
   </div>
 
   <details

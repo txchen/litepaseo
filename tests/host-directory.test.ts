@@ -249,3 +249,14 @@ test("agent state follows Paseo's state bucket; a finished turn is unread, not n
   );
   assert.equal(s({ status: "error", lastError: "x".repeat(1000) }).lastError!.length, 300);
 });
+
+
+test("turn activity remains explicit while waiting for permission or initializing", async () => {
+  const { summarize } = await import("../src/server/host-directory.ts");
+  const s = (extra: Record<string, unknown>) => summarize("h", agent("a", extra));
+  assert.equal(s({ status: "idle" }).turnActive, false);
+  assert.equal(s({ status: "running" }).turnActive, true);
+  assert.equal(s({ status: "initializing" }).turnActive, true);
+  assert.equal(s({ status: "idle", activeTurn: { turnId: "t", startedAt: new Date().toISOString() },
+    pendingPermissions: [{ id: "p", name: "Bash", kind: "tool" }] }).turnActive, true);
+});

@@ -40,6 +40,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
+  let markdownOverride = null;
   let finishMessage = null;
   let messageFailure = false;
   let confirmDelivery = false;
@@ -213,7 +214,7 @@ try {
                   seqEnd: 1,
                   timestamp: "t",
                   provider: "codex",
-                  item: { type: "assistant_message", text: `Hello from ${host}` },
+                  item: { type: "assistant_message", text: markdownOverride ?? `Hello from ${host}\n\nHeading ${host}\n===\n\n[reference][dest]\n\n[dest]: https://example.com/${host}\n\n<script>window.markdownUnsafe = true</script>\n\n\`\`\`ts\nconst safe = "中文";\n\`\`\`` },
                 },
                 {
                   seqStart: 2,
@@ -229,7 +230,7 @@ try {
                   provider: "codex",
                   item: { type: "plugin", pluginId: "next-input", id: "suggestion-tok", kind: "next-input", version: 1, data: { agentId: "shared-id", workspaceId: "w", token: "tok-" + host, status: "idle", text: "" } },
                 },
-              ],
+              ].filter(row => markdownOverride === null || row.seqStart === 1),
             },
           ],
         }),
@@ -269,6 +270,40 @@ try {
   await litepaseoGroup.locator(".group-toggle").click();
   await page.locator("button.session", { hasText: "beta conversation" }).click();
   await page.getByText("Hello from beta", { exact: true }).waitFor();
+  await page.locator('.markstream-vue h1').filter({ hasText: 'Heading beta' }).waitFor();
+  assert.equal(await page.locator('.markstream-vue a').getAttribute('href'), 'https://example.com/beta');
+  assert.match(await page.locator('.markstream-vue pre').textContent(), /const safe = "中文";/);
+  assert.equal(await page.evaluate(() => window.markdownUnsafe), undefined);
+  assert.equal(await page.locator('.markstream-vue script').count(), 0);
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.locator('.markstream-vue.dark').waitFor();
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.locator('.markstream-vue:not(.dark)').waitFor();
+
+  // Appends retain settled paragraph DOM; full-source replacements invalidate it.
+  markdownOverride = 'Stable paragraph\n\nstream-tail-one';
+  await page.getByText('stream-tail-one', { exact: true }).waitFor();
+  await page.evaluate(() => { window.stableParagraph = [...document.querySelectorAll('.markstream-vue p')].find(p => p.textContent === 'Stable paragraph'); });
+  markdownOverride += '-中文-two';
+  await page.getByText('stream-tail-one-中文-two', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => window.stableParagraph === [...document.querySelectorAll('.markstream-vue p')].find(p => p.textContent === 'Stable paragraph')), true);
+  markdownOverride += '\n\n```ts\n' + 'const line = 1;\n'.repeat(300) + '```';
+  await page.waitForFunction(() => {
+    const el = document.querySelector('.timeline');
+    return el.querySelector('pre')?.textContent?.includes('const line = 1;')
+      && el.scrollHeight > el.clientHeight + 200 && el.scrollHeight - el.scrollTop - el.clientHeight < 5;
+  });
+  await page.locator('.timeline').evaluate(el => { el.scrollTop = 0; });
+  await page.waitForTimeout(100);
+  markdownOverride += '\n\nMore output';
+  await page.getByText('More output', { exact: true }).waitFor();
+  assert.equal(await page.locator('.timeline').evaluate(el => el.scrollTop), 0, 'Output must not steal the reader scroll');
+  markdownOverride = 'Replacement';
+  await page.getByText('Replacement', { exact: true }).waitFor();
+  assert.equal(await page.getByText('Stable paragraph', { exact: true }).count(), 0);
+  markdownOverride = null;
+
+
   await page.getByLabel("Choose attachments").setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("ATTACHMENT_CONTENT") });
   await page.locator(".attachment-item").filter({ hasText: "Ready" }).waitFor();
   await page.locator(".composer textarea").fill("Hello beta");

@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import MarkdownRender, { disableKatex, disableMermaid, disableD2, disableInfographic } from "markstream-vue";
+// Bundled with this lazily loaded component, so the first page does not wait for it.
+import "markstream-vue/index.css";
 
 import { isDark } from "./theme.ts";
 

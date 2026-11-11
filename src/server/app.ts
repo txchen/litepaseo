@@ -692,7 +692,17 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
         return c.notFound();
       }
     });
-  app.use("/*", serveStatic({ root: webRoot }));
+  // Hashed build assets never change under the same name: cache them for good.
+  app.use("/assets/*", async (c, next) => {
+    await next();
+    if (c.res.ok) c.header("Cache-Control", "public, max-age=31536000, immutable");
+  });
+  // The page names the current hashed assets, so it must always be revalidated.
+  app.use("/*", async (c, next) => {
+    await next();
+    if (c.res.headers.get("Content-Type")?.startsWith("text/html")) c.header("Cache-Control", "no-cache");
+  });
+  app.use("/*", serveStatic({ root: webRoot, precompressed: true }));
   return Object.assign(app, {
     /** Open directory streams; lets tests prove that disconnects release them. */
     openStreams: () => directoryStreams.size,

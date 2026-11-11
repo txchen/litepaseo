@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, type ShallowRef } from "vue";
 import type { TimelineRow } from "../shared/wire.ts";
-import MarkdownMessage from "./MarkdownMessage.vue";
+import { renderMarkdown } from "./markdown.ts";
+import { loadMarkstream, markstream } from "./markstream-loader.ts";
 import Icon from "./Icon.vue";
 import PluginRow from "./PluginRow.vue";
 
@@ -10,6 +11,12 @@ const props = defineProps<{ entry: ShallowRef<TimelineRow>; final: boolean }>();
 const row = computed(() => props.entry.value);
 const item = computed(() => row.value.item as Record<string, any>);
 const open = ref(false);
+// Markstream arrives asynchronously; until then the built-in renderer (escapes all input,
+// only http(s)/mailto links) shows the same message.
+const fallbackHtml = computed(() =>
+  !markstream.value && item.value.type === "assistant_message" ? renderMarkdown(String(item.value.text ?? "")) : "",
+);
+if (!markstream.value && item.value.type === "assistant_message") void loadMarkstream();
 
 const TOOL_ICONS: Record<string, string> = {
   shell: "terminal",
@@ -47,7 +54,8 @@ const label = computed(() => String(item.value.type).replaceAll("_", " "));
   </div>
 
   <div v-else-if="item.type === 'assistant_message'" class="row row-assistant">
-    <MarkdownMessage :content="String(item.text ?? '')" :final="final" />
+    <component :is="markstream" v-if="markstream" :content="String(item.text ?? '')" :final="final" />
+    <div v-else class="prose" v-html="fallbackHtml"></div>
   </div>
 
   <details

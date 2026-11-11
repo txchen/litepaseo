@@ -13,7 +13,7 @@
   "type": "module",
   "scripts": {
     "dev": "vp dev",
-    "build": "vp build && vp pack",
+    "build": "vp build && node scripts/compress-web.mjs dist/web && vp pack",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "typecheck": "vue-tsc --noEmit",
     "test:browser": "node tests/browser.mjs",

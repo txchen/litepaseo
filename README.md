@@ -25,6 +25,9 @@ Resource use shapes how it works:
   from their cursors when it becomes visible.
 - **Reuse rendered content.** Markstream retains settled Markdown blocks while the
   message tail grows, with smooth streaming and typewriter effects disabled.
+- **Load the heavy parts later.** Markstream (about 700 KB) loads after sign-in, while
+  the browser is idle; until then messages use a small built-in renderer. Built assets
+  are served precompressed (Brotli/gzip) and cached permanently by content hash.
 
 These are concrete design choices, not a claim of lower resource use in every
 workload. Very large single code blocks can still be expensive. See the

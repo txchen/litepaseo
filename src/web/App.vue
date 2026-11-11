@@ -23,6 +23,7 @@ import UsagePanel, { type UsageReport } from "./UsagePanel.vue";
 import { SUGGESTIONS } from "./suggestions.ts";
 import type { AgentSummary } from "../shared/wire.ts";
 import { registerServiceWorker, setBadge } from "./pwa.ts";
+import { preloadMarkstream } from "./markstream-loader.ts";
 
 type Card = {
   id: string;
@@ -296,6 +297,7 @@ async function enter() {
   board.value = await api("/board");
   openDirectory();
   void registerServiceWorker();
+  preloadMarkstream();
   void loadUsage();
   clearInterval(usageTimer);
   usageTimer = setInterval(() => void loadUsage(), 5 * 60_000);

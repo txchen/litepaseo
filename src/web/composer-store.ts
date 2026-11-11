@@ -1,8 +1,8 @@
 import { reactive, ref } from "vue";
 
 type StoragePort = Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "length">;
-export interface PendingMessage { messageId: string; text: string }
-interface SavedDraft { key: string; text: string; updated: number }
+export interface PendingMessage { messageId: string; text: string; attachmentIds?: string[]; attachmentNames?: string[] }
+interface SavedDraft { key: string; text: string; updated: number; restoredFrom?: string }
 const PREFIX = "litepaseo-composer-v1:";
 
 /** Each page owns a draft slot; concurrent tabs never overwrite one another's text. */
@@ -10,7 +10,7 @@ export class ComposerStore {
   readonly warning = ref("");
   readonly revision = ref(0);
   generation = 0;
-  private readonly drafts = reactive(new Map<string, { text: string; source?: string; sourceValue?: string }>());
+  private readonly drafts = reactive(new Map<string, { text: string; source?: string; sourceValue?: string; restoredFrom?: string }>());
   private readonly pending = reactive(new Map<string, PendingMessage[]>());
   private readonly owner = crypto.randomUUID();
   private storage: StoragePort | null;
@@ -48,18 +48,19 @@ export class ComposerStore {
     let state = this.drafts.get(key);
     if (!state) {
       const saved = this.saved(key)[0];
-      this.drafts.set(key, { text: saved?.text ?? "", source: saved?.slot,
+      this.drafts.set(key, { text: saved?.text ?? "", restoredFrom: saved?.restoredFrom, source: saved?.slot,
         sourceValue: saved ? this.attempt(s => s.getItem(saved.slot) ?? undefined, undefined) : undefined });
       state = this.drafts.get(key)!;
     }
     return state;
   }
-  setText(key: string, text: string) {
+  setText(key: string, text: string, restoredFrom?: string) {
     const state = this.state(key);
     state.text = text;
+    state.restoredFrom = restoredFrom;
     this.attempt(s => {
       // Persist first: a full disk must not destroy the recoverable source draft.
-      s.setItem(this.slot(key), JSON.stringify({ key, text, updated: Date.now() }));
+      s.setItem(this.slot(key), JSON.stringify({ key, text, restoredFrom, updated: Date.now() }));
       if (state.source && s.getItem(state.source) === state.sourceValue) s.removeItem(state.source);
       state.source = state.sourceValue = undefined;
       if (!text) s.removeItem(this.slot(key));
@@ -97,6 +98,14 @@ export class ComposerStore {
     this.pending.set(key, (this.pending.get(key) ?? []).filter(p => p.messageId !== messageId));
     this.attempt(s => { s.removeItem(PREFIX + "message:" + messageId); return true; }, false);
     this.revision.value++;
+  }
+  restoreFailed(key: string, message: PendingMessage) {
+    if (!this.state(key).text) this.setText(key, message.text, message.messageId);
+  }
+  confirm(key: string, messageId: string) {
+    const state = this.state(key);
+    if (state.restoredFrom === messageId) this.setText(key, "");
+    this.resolve(key, messageId);
   }
   refresh() { this.revision.value++; }
   clear() {

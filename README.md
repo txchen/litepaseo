@@ -15,7 +15,7 @@ node dist/server/cli.mjs token
 
 Open the address printed by `start`, enter the token, and add an existing daemon through **Hosts**. Use a connection URL, pairing offer, or SSH target accepted by the official Paseo SDK. No daemon is automatically discovered or modified. Adding a host establishes a connection; starting sessions, sending messages, stopping turns and responding to approvals are explicit actions in the UI.
 
-Other commands: `serve` (foreground), `status`, `stop`, `restart`, `logs`, `token`. Set `LITEPASEO_PORT` (default 8787), `LITEPASEO_BIND` (default 127.0.0.1), and optionally `LITEPASEO_HOME` before starting. All of LitePaseo's own data lives in one directory, `~/.litepaseo` by default (like Paseo's `~/.paseo`, and separate from it): `litepaseo.sqlite` (hosts and their connection strings, the Plan board, authenticator and push keys, signed-in devices, push subscriptions), `token`, `service.log` and `control.sock`. The directory is owner-only (0700, files 0600); treat it as secret. `LITEPASEO_DATA_DIR` is still accepted. Data from the earlier platform location (`~/.local/share/litepaseo` or `~/Library/Application Support/LitePaseo`) moves over automatically once that instance is stopped. Conversations stay on the daemons. Browsers sign in once and keep an HttpOnly session cookie; daemon credentials stay on the BFF.
+Other commands: `serve` (foreground), `status`, `stop`, `restart`, `logs`, `token`. Set `LITEPASEO_PORT` (default 8787), `LITEPASEO_BIND` (default 127.0.0.1), and optionally `LITEPASEO_HOME` before starting. All of LitePaseo's own data lives in one directory, `~/.litepaseo` by default (like Paseo's `~/.paseo`, and separate from it): `litepaseo.sqlite` (hosts and their connection strings, the Plan board, authenticator and push keys, signed-in devices, push subscriptions), `token`, rotating `service.log` files, `service-lock.sqlite` and `control.sock`. The directory is owner-only (0700, files 0600); treat it as secret. `LITEPASEO_DATA_DIR` is still accepted. Data from the earlier platform location (`~/.local/share/litepaseo` or `~/Library/Application Support/LitePaseo`) moves over automatically once that instance is stopped. Conversations stay on the daemons. Browsers sign in once and keep an HttpOnly session cookie; daemon credentials stay on the BFF.
 
 For development, run the built BFF with `serve` and `npm run dev` in another terminal; the development proxy targets port 8787.
 
@@ -40,7 +40,7 @@ The tarball includes prebuilt frontend assets. Runtime installation does not req
 - Persistent Todo/Doing/Done cards, optionally linked to a conversation, with optimistic concurrency protection.
 - Background start/status/stop/restart, a private local control socket, and an authenticated browser API.
 
-Live updates are incremental end to end. The BFF holds one directory subscription per daemon and resumes it from the daemon's directory-sync cursor after reconnects. Browsers receive only the agents that changed since their own cursor, over a server-sent event stream. An open conversation streams row-level upsert/append operations, and older history is paged in on demand. A hidden tab closes its streams and resumes from its cursor when shown again. Conversation rendering is plain text. Drafts and uncertain sends survive reload in browser-local storage. Different tabs preserve separate drafts, sign-out clears saved composer state, and storage failures show a warning. There is no automatic replay of uncertain sends.
+Live updates are incremental end to end. The BFF holds one directory subscription per daemon and resumes it from the daemon's directory-sync cursor after reconnects. Browsers receive only the agents that changed since their own cursor, over a server-sent event stream. An open conversation streams row-level upsert/append operations, and older history is paged in on demand. A hidden tab closes its streams and resumes from its cursor when shown again. Conversation rendering is plain text. Drafts and uncertain sends survive reload in browser-local storage. Different tabs preserve separate drafts, sign-out clears saved composer state, and storage failures show a warning. Uncertain sends are checked automatically against exact user-message IDs in daemon history; unconfirmed messages remain saved. There is no automatic replay.
 
 ## Validation and limitations
 
@@ -53,7 +53,7 @@ Browser tests require Playwright Chromium (`npx playwright install chromium` if 
 
 Linux validation passed for TypeScript, production builds, API tests with two simulated hosts, background lifecycle, browser interactions and isolated tarball installation. The research SDK imports also passed on Node 24.11 and 26.12.1. A subsequent Linux run against a real 0.15.0 daemon validated creation, messages, timeline streaming and client reconnect; real tool approvals, active interruption, two-host isolation and macOS remain unverified; a real Codex question/answer round trip has also passed. Start live integration with **one existing daemon**; a second host is useful later for routing/failure-isolation acceptance, not a prerequisite to starting.
 
-Full logout survival depends on OS session policy. Reboot autostart, crash supervision, automatic stale-socket recovery and log rotation remain unfinished. If a crash leaves `control.sock`, inspect the process before removing it; the CLI never kills a PID or deletes an unverified stale socket automatically. There are no CPU/energy results.
+Background start runs a supervisor that restarts crashed workers with backoff. Autostart is opt-in through systemd/launchd; see below for login and reboot behavior. Stale control sockets are recovered only under the runtime lock after a refused connection; live, changed, inaccessible or unresponsive endpoints are left alone. There are no CPU/energy results.
 
 ## Design and research
 
@@ -117,3 +117,70 @@ Hosts shows the last successful connection, retry attempt/time and a classified 
 suggested checks. SDK connection errors are classified without echoing remote text, connection
 URLs or credentials into the browser or logs. Unexpected API failures include a reference ID
 that can be matched to the `api_operation_failed` log entry.
+
+
+## Supervision, autostart and logs
+
+`start` launches a detached supervisor; `serve` runs it in the foreground. `status` reports the
+supervisor PID, worker PID, readiness and restart count. The supervisor keeps the control socket
+available while restarting a crashed worker, with delays from 250 ms up to 30 seconds. A worker
+exits when its supervisor disconnects. A separate SQLite runtime lock is released by the kernel
+even after SIGKILL, so a later supervisor can safely recover its dead control socket.
+
+Install autostart explicitly (the implementation does not install a service just by being built):
+
+```sh
+litepaseo service print        # inspect the generated configuration and path
+litepaseo stop                 # stop a manually launched instance before handing over
+litepaseo service install      # install and start systemd user unit / launchd LaunchAgent
+litepaseo service status
+litepaseo service restart      # preserve OS supervision when restarting
+litepaseo service stop
+litepaseo service start
+litepaseo service uninstall    # stop and remove autostart; preserve application data
+```
+
+Services are named per data directory, use the current absolute Node/CLI paths, and capture
+PATH plus LitePaseo bind/port/push/log settings. Reinstall after changing installation paths or
+those settings. Linux uses a systemd **user** unit: startup before login and survival after logout
+require user lingering (`loginctl enable-linger <username>`, subject to host policy). macOS uses
+a LaunchAgent and starts at login, not before login. macOS configuration generation is tested,
+but actual launchd operation still needs a Mac. Linux systemd process restart was tested with
+an isolated transient user unit. No persistent service was installed during development tests.
+
+The supervisor rotates worker stdout/stderr into `service.log`, with a default maximum of 5 MiB
+per file and three archives (`service.log.1` is the newest archive). Set `LITEPASEO_LOG_BYTES`
+(1024–104857600 bytes) and `LITEPASEO_LOG_ARCHIVES` (1–20) before starting/installing to change these limits.
+`logs` prints the tail of the current file. Files are owner-only.
+
+## Delivery checks and attachments
+
+Unknown sends are checked every 15 seconds while their conversation is open in a visible tab,
+and can be checked manually. Only an exact user-message `clientMessageId` (or legacy `messageId`)
+confirms delivery; identical text is not evidence. Each check examines at most five 200-row history
+pages. If the message was rewound away or lies outside that window, it stays uncertain. Confirmation
+clears only a draft restored from that failed send, preserving newer edits. No check resends a message.
+
+Use **Attach files**, paste images, or drop files on the composer. Up to four files per message,
+8 MiB each and 24 MiB staged per signed-in device are supported. The panel shows previews, upload
+state, cancellation/removal and retry. Attachments may be sent with an empty text message.
+PNG/JPEG/WebP/GIF use native image input for known Codex/Claude/Pi adapters; the selected model must
+support vision. Other files require an agent advertising tool invocation support and are uploaded
+to the daemon for it to read. Unsupported agents are disabled with an explanation.
+
+Selected files/previews remain in the current tab, not browser draft storage. BFF staging is memory-only,
+bounded to 64 MiB total and expires after 20 minutes; cancelling removes staged data, and server restart
+requires re-upload. Ordinary files reach the daemon only when Send is pressed. Once submitted (or when
+submission is uncertain), daemon-side uploads and provider-materialized images follow the daemon's
+retention policy; LitePaseo does not delete files that an agent may still need. Unknown-send records
+retain attachment names/IDs, not file bytes. A lost response is never retried automatically.
+
+Opt-in integration checks:
+
+```sh
+LITEPASEO_TEST_SYSTEMD=1 node tests/systemd.mjs
+LITEPASEO_TEST_HOST=127.0.0.1:6767 LITEPASEO_TEST_CREDENTIAL_FILE=/path/to/local-credential LITEPASEO_TEST_ATTACHMENTS=1 node tests/live-daemon.mjs
+```
+
+The second check creates a disposable agent, verifies an uploaded random file marker and a red image,
+archives the agent and deletes its test upload. It consumes provider quota.

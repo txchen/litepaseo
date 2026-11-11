@@ -85,7 +85,7 @@ test("live WAL backup restores all persisted data with private permissions; corr
     writeFileSync(join(archive, "token"), "b".repeat(64));
     const invalid = join(f.root, "invalid");
     await assert.rejects(restore(archive, invalid), /checksum/);
-    assert.deepEqual(readdirSync(invalid), []);
+    assert.deepEqual(readdirSync(invalid), ["service-lock.sqlite"]);
     const server = createServer();
     const locked = join(f.root, "locked"); mkdirSync(locked);
     await new Promise<void>(resolve => server.listen(join(locked, "control.sock"), resolve));

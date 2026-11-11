@@ -1,3 +1,4 @@
+import { acquireRuntimeLock } from "./runtime-lock.ts";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, constants } from "node:fs";
@@ -36,15 +37,16 @@ export async function restore(source: string, directory: string) {
   source = resolve(source);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
+  const releaseRuntime = acquireRuntimeLock(directory);
   const lock = createServer(socket => socket.destroy());
   await new Promise<void>((resolve, reject) => {
     lock.once("error", reject);
     lock.listen(join(directory, "control.sock"), resolve);
-  });
+  }).catch(error => { releaseRuntime(); throw error; });
   const stage = join(directory, ".restore-staging");
   let ownsStage = false;
   try {
-    if (readdirSync(directory).some(file => file !== "control.sock"))
+    if (readdirSync(directory).some(file => file !== "control.sock" && file !== "service-lock.sqlite" && file !== "service-lock.sqlite-journal"))
       throw new Error("Restore requires an empty LITEPASEO_HOME. Restore to a new directory, then start it.");
     mkdirSync(stage, { mode: 0o700 });
     ownsStage = true;
@@ -72,5 +74,6 @@ export async function restore(source: string, directory: string) {
   } finally {
     if (ownsStage) rmSync(stage, { recursive: true, force: true });
     await new Promise<void>(resolve => lock.close(() => resolve()));
+    releaseRuntime();
   }
 }

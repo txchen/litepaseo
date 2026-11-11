@@ -32,6 +32,25 @@ test("packaged CLI background readiness, duplicate start, HTTP authentication an
       200,
     );
     assert.match(run("status"), /"ready":true/);
+    process.kill(first.workerPid, "SIGKILL");
+    let recovered: any;
+    for (let i = 0; i < 60; i++) {
+      recovered = JSON.parse(run("status"));
+      if (recovered.ready && recovered.workerPid !== first.workerPid) break;
+      await new Promise(r => setTimeout(r, 100));
+    }
+    assert.equal(recovered.ready, true);
+    assert.notEqual(recovered.workerPid, first.workerPid);
+    assert.equal(recovered.pid, first.pid, "supervisor survives a worker crash");
+    assert.equal((await fetch(recovered.url)).status, 200);
+    // Killing the supervisor releases the kernel lock. Its worker exits on IPC disconnect.
+    process.kill(recovered.pid, "SIGKILL");
+    await new Promise(r => setTimeout(r, 300));
+    const restarted = JSON.parse(run("start").split("\n")[0]);
+    assert.equal(restarted.ready, true);
+    assert.notEqual(restarted.pid, first.pid);
+    assert.equal((await fetch(restarted.url)).status, 200);
+    assert.match(readFileSync(join(directory, "service.log"), "utf8"), /worker_restart/);
     const archive = join(directory, "snapshot");
     assert.match(run("backup", archive), /Backup complete/);
     const restoredHome = join(directory, "restored");

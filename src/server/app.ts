@@ -1,3 +1,5 @@
+import { Attachments, MAX_FILE_BYTES } from "./attachments.ts";
+import { confirmedMessages } from "./message-status.ts";
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -113,6 +115,7 @@ type Env = { Variables: { session: LoginSession | null } };
 export function createApp(store: Store, hosts: Hosts, token: string, webRoot: string, options: AppOptions = {}) {
   const app = new Hono<Env>();
   const auth = new Auth(store, token);
+  const attachments = new Attachments();
   const viewers = new Map<string, Map<string, number>>();
   const notifier = new Notifier({
     store,
@@ -133,7 +136,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
     c.header("Referrer-Policy", "no-referrer");
     c.header(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'",
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'",
     );
   });
   app.use("/api/*", async (c, next) => {
@@ -145,7 +148,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
     });
     await next();
   });
-  app.use("/api/*", bodyLimit({ maxSize: 1024 * 1024 }));
+  app.use("/api/*", (c, next) => bodyLimit({ maxSize: c.req.method === "POST" && c.req.path.endsWith("/attachments") ? MAX_FILE_BYTES : 1024 * 1024 })(c, next));
   app.use("/api/*", async (c, next) => {
     c.header("Cache-Control", "no-store");
     if (PUBLIC_API.has(c.req.path)) {
@@ -195,7 +198,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
   });
   app.post("/api/logout", (c) => {
     const session = c.get("session");
-    if (session) auth.revoke(session.id);
+    if (session) { auth.revoke(session.id); attachments.clearOwner(session.id); }
     deleteCookie(c, SESSION_COOKIE, { path: "/" });
     return c.json({ ok: true });
   });
@@ -527,19 +530,49 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
       })),
     } satisfies TimelinePage);
   });
+  const attachmentOwner = (c: { get: (key: "session") => LoginSession | null }) => c.get("session")?.id ?? "bearer";
+  app.get("/api/hosts/:host/agents/:agent/attachments/capabilities", async c =>
+    c.json(await attachments.capabilities(hosts, c.req.param("host"), c.req.param("agent"))));
+  app.post("/api/hosts/:host/agents/:agent/attachments", async c => {
+    hosts.get(c.req.param("host"));
+    try {
+      const name = decodeURIComponent(c.req.header("x-file-name") ?? "");
+      const mime = c.req.header("content-type")?.split(";")[0] ?? "application/octet-stream";
+      return c.json(attachments.put(attachmentOwner(c), c.req.param("host"), c.req.param("agent"), name, mime, Buffer.from(await c.req.arrayBuffer())), 201);
+    } catch (error) { return c.json({ error: (error as Error).message }, 400); }
+  });
+  app.delete("/api/hosts/:host/agents/:agent/attachments/:id", c => {
+    try { attachments.remove(c.req.param("id"), attachmentOwner(c), c.req.param("host"), c.req.param("agent")); }
+    catch { return c.json({ error: "Attachment already expired or unavailable" }, 404); }
+    return c.json({ ok: true });
+  });
+  app.post("/api/hosts/:host/agents/:agent/messages/status", async c => {
+    const { messageIds } = z.object({ messageIds: z.array(z.string().uuid()).min(1).max(20) }).parse(await c.req.json());
+    const { driver } = hosts.get(c.req.param("host"));
+    return c.json({ confirmed: await confirmedMessages(driver, c.req.param("agent"), messageIds) });
+  });
   app.post("/api/hosts/:host/agents/:agent/messages", async (c) => {
     const input = z
       .object({
-        text: z.string().trim().min(1).max(100000),
+        text: z.string().trim().max(100000),
+        attachmentIds: z.array(z.string().uuid()).max(4).refine(ids => new Set(ids).size === ids.length).default([]),
         messageId: z.string().uuid(),
         behavior: z.enum(["steer", "interrupt"]),
       })
+      .refine(input => !!input.text || input.attachmentIds.length > 0)
       .parse(await c.req.json());
+    let prepared;
+    try { prepared = await attachments.prepare(hosts, attachmentOwner(c), c.req.param("host"), c.req.param("agent"), input.attachmentIds); }
+    catch (error) { return c.json({ error: (error as Error).message, delivery: "not-sent" }, 400); }
     try {
       await hosts
         .get(c.req.param("host"))
         .api.agents.ref(c.req.param("agent"))
-        .send(input.text, { messageId: input.messageId, activeTurnBehavior: input.behavior });
+        .send(input.text, { messageId: input.messageId, activeTurnBehavior: input.behavior,
+          ...(prepared.images.length ? { images: prepared.images } : {}),
+          ...(prepared.attachments.length ? { attachments: prepared.attachments } : {}),
+        });
+      attachments.consumed(input.attachmentIds);
       return c.json({ status: "acknowledged", messageId: input.messageId });
     } catch {
       return c.json(
@@ -663,5 +696,6 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
   return Object.assign(app, {
     /** Open directory streams; lets tests prove that disconnects release them. */
     openStreams: () => directoryStreams.size,
+    dispose: () => attachments.close(),
   });
 }

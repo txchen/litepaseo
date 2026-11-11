@@ -42,6 +42,8 @@ try {
   page.on("pageerror", (e) => errors.push(e.message));
   let finishMessage = null;
   let messageFailure = false;
+  let confirmDelivery = false;
+  const uploads = [];
   const messages = [],
     permissions = [];
   // Each mocked stream response ends after its events; the client reconnects with its cursor,
@@ -164,6 +166,14 @@ try {
   await page.route("**/api/hosts**", async (route) => {
     const p = new URL(route.request().url()).pathname;
     const host = p.split("/")[3];
+    if (p.endsWith("/attachments/capabilities")) return route.fulfill({ json: { images: true, files: true, maxBytes: 8 * 1024 * 1024 } });
+    if (p.endsWith("/attachments") && route.request().method() === "POST") {
+      const id = crypto.randomUUID();
+      uploads.push({ id, name: route.request().headers()["x-file-name"], text: route.request().postDataBuffer().toString() });
+      return route.fulfill({ status: 201, json: { id } });
+    }
+    if (p.endsWith("/messages/status")) return route.fulfill({ json: { confirmed: confirmDelivery ? route.request().postDataJSON().messageIds : [] } });
+
     if (p.endsWith("/providers"))
       return route.fulfill({
         json: [
@@ -259,6 +269,8 @@ try {
   await litepaseoGroup.locator(".group-toggle").click();
   await page.locator("button.session", { hasText: "beta conversation" }).click();
   await page.getByText("Hello from beta", { exact: true }).waitFor();
+  await page.getByLabel("Choose attachments").setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("ATTACHMENT_CONTENT") });
+  await page.locator(".attachment-item").filter({ hasText: "Ready" }).waitFor();
   await page.locator(".composer textarea").fill("Hello beta");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await page.waitForFunction(() => document.querySelector(".composer textarea").value === "");
@@ -289,9 +301,16 @@ try {
   await page.locator("button.session", { hasText: "alpha conversation" }).click();
   assert.equal(await page.locator(".composer textarea").inputValue(), "Alpha draft");
   await page.locator("button.session", { hasText: "beta conversation" }).click();
-  await page.getByRole("button", { name: "I checked", exact: true }).click();
+  confirmDelivery = true;
+  await page.getByRole("button", { name: "Check delivery", exact: true }).click();
+  await page.locator(".uncertain").waitFor({ state: "detached" });
+  assert.equal(messages.length, sendsBeforeReload, "history confirmation never sends a message");
+  assert.equal(await page.locator(".composer textarea").inputValue(), "", "confirmed recovered draft is cleared");
   await page.locator(".composer textarea").fill("");
   assert.equal(messages[0].host, "beta");
+  assert.deepEqual(messages[0].attachmentIds, [uploads[0].id]);
+  assert.equal(uploads[0].text, "ATTACHMENT_CONTENT");
+  assert.equal(await page.locator(".attachment-item").count(), 0);
   assert.equal(messages[0].behavior, "steer");
   await page.getByRole("button", { name: "Allow / submit" }).click();
   await page.getByRole("alert").filter({ hasText: "Answer Strategy" }).waitFor();

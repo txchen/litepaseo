@@ -1,24 +1,20 @@
 #!/usr/bin/env node
-import { serve } from "@hono/node-server";
+import { RotatingLog } from "./rotating-log.ts";
+import { manageService } from "./autostart.ts";
+import { supervise } from "./supervisor.ts";
+import { runWorker } from "./worker.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   mkdirSync,
   readFileSync,
-  writeFileSync,
   existsSync,
-  openSync,
-  closeSync,
-  unlinkSync,
 } from "node:fs";
-import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import { createServer, connect } from "node:net";
+import { connect } from "node:net";
 import { backup, restore } from "./backup.ts";
 import { Store } from "./store.ts";
-import { Hosts } from "./hosts.ts";
-import { createApp } from "./app.ts";
 import { resolveDataDirectory } from "./data-dir.ts";
 const command = process.argv[2] ?? "help";
 const { directory, notice } = await resolveDataDirectory(process.env, homedir(), process.platform);
@@ -39,12 +35,11 @@ async function control(action: string): Promise<string> {
     s.on("end", () => resolve(out));
   });
 }
-let cleanupOnFailure = () => {};
 async function main() {
   if (command === "help" || command === "--help") {
     console.log(
       [
-        "LitePaseo: start | serve | status | stop | restart | logs | token | totp-reset | signout-all | backup <directory> | restore <directory>",
+        "LitePaseo: start | serve | status | stop | restart | logs | token | totp-reset | signout-all | backup <directory> | restore <directory> | service print|install|uninstall|status|start|stop|restart",
         "  token        print the access token (sign-in fallback)",
         "  totp-reset   turn off authenticator sign-in (lost phone)",
         "  signout-all  revoke every signed-in browser and its notifications",
@@ -55,10 +50,17 @@ async function main() {
     );
     return;
   }
+  if (command === "service") {
+    console.log(manageService(process.argv[3] ?? "print", {
+      platform: process.platform, home: homedir(), directory, node: process.execPath,
+      cli: fileURLToPath(import.meta.url), env: process.env, uid: process.getuid?.() ?? 0,
+    }));
+    return;
+  }
   if (command === "backup" || command === "restore") {
     const path = process.argv[3];
     if (!path) throw new Error(`Usage: litepaseo ${command} <backup-directory>`);
-    if (command === "backup") backup(directory, path);
+      if (command === "backup") backup(directory, path);
     else await restore(path, directory);
     console.log(command === "backup" ? "Backup complete. Keep this directory private: it contains credentials." : "Restore complete. Start LitePaseo with this LITEPASEO_HOME.");
     return;
@@ -90,7 +92,7 @@ async function main() {
   if (command === "stop" || command === "restart") {
     console.log(await control("stop").catch(() => "Not running"));
     if (command === "stop") return;
-    for (let i = 0; i < 50 && existsSync(socket); i++) await new Promise((r) => setTimeout(r, 100));
+    for (let i = 0; i < 150 && existsSync(socket); i++) await new Promise((r) => setTimeout(r, 100));
     if (existsSync(socket)) throw new Error("Previous instance has not stopped");
   }
   if (command === "start" || command === "restart") {
@@ -99,15 +101,13 @@ async function main() {
       console.log(running);
       return;
     }
-    const fd = openSync(log, "a", 0o600);
     const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "serve"], {
       detached: true,
-      stdio: ["ignore", fd, fd],
+      stdio: "ignore",
       env: process.env,
     });
     child.on("error", () => {});
     child.unref();
-    closeSync(fd);
     for (let i = 0; i < 100; i++) {
       await new Promise((r) => setTimeout(r, 100));
       const ready = await control("status").catch(() => null);
@@ -118,88 +118,17 @@ async function main() {
       }
     }
     throw new Error(
-      "Startup failed. Run litepaseo logs. A stale control.sock requires manual inspection; no process will be killed automatically.",
+      "Startup not ready. Run litepaseo logs or status; the supervisor may still be retrying.",
     );
   }
-  if (command !== "serve") throw new Error("Unknown command. Run litepaseo --help");
-  // Exclusive socket binding is the instance lock. Never unlink an unverified stale socket.
-  const controlServer = createServer({ allowHalfOpen: true }, (s) => {
-    s.setTimeout(2000, () => s.destroy());
-    let input = "";
-    s.on("error", () => {});
-    s.on("data", (b) => {
-      input += b;
-      if (input.length > 64) s.destroy();
-    });
-    s.on("end", () => {
-      if (input === "status") s.end(JSON.stringify({ ready, url, pid: process.pid }) + "\n");
-      else if (input === "stop") {
-        s.end("Stopping\n");
-        void shutdown();
-      } else s.end("Unknown command\n");
-    });
-  });
-  let ready = false,
-    url = "",
-    shutdown = async () => {};
-  await new Promise<void>((resolve, reject) => {
-    controlServer.once("error", reject);
-    controlServer.listen(socket, resolve);
-  });
-  cleanupOnFailure = () => {
-    controlServer.close();
-    if (existsSync(socket)) unlinkSync(socket);
-  };
-  if (!existsSync(tokenPath))
-    writeFileSync(tokenPath, randomBytes(32).toString("hex"), { mode: 0o600, flag: "wx" });
-  const store = new Store(directory),
-    hosts = new Hosts();
-  for (const host of store.hosts()) {
-    try {
-      hosts.add(host);
-    } catch {
-      console.error("Could not initialize host", host.id);
-    }
-  }
-  const port = Number(process.env.LITEPASEO_PORT ?? 8787),
-    hostname = process.env.LITEPASEO_BIND ?? "127.0.0.1";
-  const app = createApp(
-    store,
-    hosts,
-    readFileSync(tokenPath, "utf8").trim(),
-    fileURLToPath(new URL("../web/", import.meta.url)),
-    { pushSubject: process.env.LITEPASEO_PUSH_SUBJECT },
-  );
-  const server = serve({ fetch: app.fetch, port, hostname });
-  let stopping = false;
-  shutdown = async () => {
-    if (stopping) return;
-    stopping = true;
-    ready = false;
-    const timer = setTimeout(() => process.exit(1), 5000);
-    timer.unref();
-    await hosts.close();
-    await new Promise<void>((r) => server.close(() => r()));
-    store.close();
-    controlServer.close();
-    if (existsSync(socket)) unlinkSync(socket);
-    clearTimeout(timer);
-  };
-  process.once("SIGINT", () => void shutdown());
-  process.once("SIGTERM", () => void shutdown());
-  server.once("error", async (error) => {
-    console.error(error.message);
-    await shutdown();
-    process.exitCode = 1;
-  });
-  server.once("listening", () => {
-    ready = true;
-    url = `http://${hostname}:${port}`;
-    console.log(`LitePaseo ready at ${url}`);
-  });
+  if (command === "worker") return runWorker(directory, fileURLToPath(new URL("../web/", import.meta.url)));
+  if (command === "serve") return supervise(directory, fileURLToPath(import.meta.url));
+  throw new Error("Unknown command. Run litepaseo --help");
 }
 main().catch((error) => {
   console.error(error.message);
-  cleanupOnFailure();
+  if (command === "serve") {
+    try { new RotatingLog(log).write(JSON.stringify({ event: "supervisor_start_failed", error: error.message }) + "\n"); } catch {}
+  }
   process.exitCode = 1;
 });

@@ -11,6 +11,8 @@ import SessionList from "./SessionList.vue";
 import TimelineRowView from "./TimelineRowView.vue";
 import NewSession from "./NewSession.vue";
 import type { ProjectGroup } from "./directory-store.ts";
+import AttachmentPanel from "./AttachmentPanel.vue";
+import { AttachmentStore } from "./attachment-store.ts";
 import PermissionForm from "./PermissionForm.vue";
 import Icon from "./Icon.vue";
 import { cycleTheme, theme } from "./theme.ts";
@@ -82,6 +84,13 @@ const label = ref(""),
   cardTitle = ref(""),
   board = ref<{ revision: number; cards: Card[] }>({ revision: 0, cards: [] });
 const composer = new ComposerStore(() => localStorage);
+const attachments = new AttachmentStore();
+const attachmentPanel = ref<InstanceType<typeof AttachmentPanel> | null>(null);
+const selectedAttachments = computed(() => selectedKey.value ? attachments.get(selectedKey.value) : []);
+const attachmentsReady = computed(() => selectedAttachments.value.every(e => !!e.id && !e.uploading && !e.error));
+function pasteFiles(event: ClipboardEvent) {
+  if (event.clipboardData?.files.length) { event.preventDefault(); void attachmentPanel.value?.addFiles(event.clipboardData.files); }
+}
 const prompt = computed({
   get: () => selectedKey.value ? composer.state(selectedKey.value).text : "",
   set: (text: string) => { if (selectedKey.value) composer.setText(selectedKey.value, text); },
@@ -89,6 +98,28 @@ const prompt = computed({
 const uncertain = computed(() => selectedKey.value ? composer.unresolved(selectedKey.value)[0] ?? null : null);
 const savedDrafts = computed(() => selectedKey.value
   ? composer.saved(selectedKey.value).filter(d => d.text !== prompt.value) : []);
+const checkingDelivery = ref(false), deliveryNotice = ref("");
+async function checkDelivery() {
+  const agent = active.value;
+  if (!agent || busy.value || checkingDelivery.value || document.hidden) return;
+  const pending = composer.unresolved(agent.key);
+  if (!pending.length) return;
+  const generation = composer.generation;
+  checkingDelivery.value = true;
+  try {
+    const result = await api(path(agent) + "/messages/status", "POST", { messageIds: pending.slice(0, 20).map(p => p.messageId) });
+    if (generation !== composer.generation) return;
+    for (const id of result.confirmed ?? []) {
+      const message = pending.find(p => p.messageId === id);
+      if (message) { attachments.consume(agent.key, message.attachmentIds ?? []); composer.confirm(agent.key, id); }
+    }
+    if (active.value?.key === agent.key) deliveryNotice.value = result.confirmed?.length ? "Delivery confirmed from conversation history." : "Not confirmed yet. No message has been resent.";
+  } catch {
+    if (active.value?.key === agent.key) deliveryNotice.value = "Unable to check delivery. Your message remains saved.";
+  } finally { checkingDelivery.value = false; }
+}
+const deliveryTimer = setInterval(() => void checkDelivery(), 15_000);
+watch([selectedKey, busy], () => { deliveryNotice.value = ""; void checkDelivery(); });
 function acknowledgeMessage() {
   if (selectedKey.value && uncertain.value) composer.resolve(selectedKey.value, uncertain.value.messageId);
 }
@@ -191,7 +222,7 @@ async function api(path: string, method = "GET", body?: unknown, timeoutMs = 200
   });
   const data = await response.json().catch(() => ({}));
   if (response.status === 401 && authenticated.value && path !== "/login") signOut(false);
-  if (!response.ok) throw new Error((data.error ?? "Request failed") + (data.requestId ? ` (reference ${data.requestId})` : ""));
+  if (!response.ok) throw Object.assign(new Error((data.error ?? "Request failed") + (data.requestId ? ` (reference ${data.requestId})` : "")), { delivery: data.delivery });
   return data;
 }
 async function action(fn: () => Promise<void>) {
@@ -212,6 +243,7 @@ function signOut(callServer = true) {
   if (callServer) void api("/logout", "POST", {}).catch(() => {});
   authenticated.value = false;
   composer.clear();
+  attachments.clear();
   try { localStorage.setItem("litepaseo-composer-signout", crypto.randomUUID()); } catch {}
   directoryStream?.close();
   timelineStream?.close();
@@ -607,10 +639,12 @@ async function send() {
 }
 async function sendText(text: string, fromComposer = false) {
   const a = active.value;
-  if (!a || !text.trim() || uncertain.value || busy.value) return;
+  if (!a || (!text.trim() && (!fromComposer || !selectedAttachments.value.length)) || uncertain.value || busy.value || (fromComposer && !attachmentsReady.value)) return;
   const state = composer.state(a.key);
   const generation = composer.generation;
-  const sent = { text, messageId: crypto.randomUUID() };
+  const selected = fromComposer ? [...selectedAttachments.value] : [];
+  const sent = { text, messageId: crypto.randomUUID(),
+    attachmentIds: selected.map(e => e.id!), attachmentNames: selected.map(e => e.file.name) };
   composer.begin(a.key, sent);
   if (fromComposer) composer.setText(a.key, "");
   await action(async () => {
@@ -618,12 +652,17 @@ async function sendText(text: string, fromComposer = false) {
       await api(path(a) + "/messages", "POST", { ...sent, behavior: behavior.value });
       if (generation !== composer.generation) return;
       composer.resolve(a.key, sent.messageId);
+      attachments.consume(a.key, sent.attachmentIds);
       if (selectedKey.value === a.key) suggestion.value = null;
       void nextTick(autosize);
       scrollToBottom();
     } catch (e) {
       if (generation !== composer.generation) return;
-      if (fromComposer && !state.text) composer.setText(a.key, sent.text);
+      if (fromComposer && !state.text) composer.restoreFailed(a.key, sent);
+      if ((e as { delivery?: string }).delivery === "not-sent") {
+        composer.resolve(a.key, sent.messageId);
+        for (const entry of selected) entry.error = "Not sent. Retry the upload or remove this attachment.";
+      }
       throw e;
     }
   });
@@ -703,6 +742,8 @@ document.addEventListener("visibilitychange", () => {
 });
 onUnmounted(() => {
   clearInterval(usageTimer);
+  clearInterval(deliveryTimer);
+  attachments.clear();
   window.removeEventListener("storage", onComposerStorage);
   window.removeEventListener("popstate", onPopState);
   window.removeEventListener("keydown", onGlobalKey);
@@ -1047,6 +1088,7 @@ onUnmounted(() => {
           <div class="dock-inner">
             <PermissionForm v-for="p in active.pendingPermissions" :key="active.key + ':' + p.id" :permission="p" :busy="busy" @respond="respond(p, $event)" />
 
+            <p v-if="deliveryNotice" role="status">{{ deliveryNotice }}</p>
             <p v-if="composer.warning.value" role="status">{{ composer.warning.value }}</p>
             <details v-if="savedDrafts.length">
               <summary>Other saved drafts ({{ savedDrafts.length }})</summary>
@@ -1057,17 +1099,19 @@ onUnmounted(() => {
             </details>
             <div v-if="uncertain && !busy" class="uncertain">
               <Icon name="alert" :size="15" />
-              <span class="grow">Delivery unknown. Check the conversation before sending again. Message: {{ uncertain.text }}</span>
+              <span class="grow">Delivery unknown. Check the conversation before sending again. Message: {{ uncertain.text }} {{ uncertain.attachmentNames?.join(", ") }}</span>
+              <button class="btn btn-ghost" :disabled="checkingDelivery" @click="checkDelivery">{{ checkingDelivery ? "Checking…" : "Check delivery" }}</button>
               <button class="btn btn-ghost" @click="acknowledgeMessage">I checked</button>
             </div>
 
-            <form class="composer" @submit.prevent="send">
+            <AttachmentPanel ref="attachmentPanel" :store="attachments" :agent-key="active.key" :base="'/api' + path(active)" :busy="busy || !!uncertain" />
+            <form class="composer" @submit.prevent="send" @dragover.prevent @drop.prevent="attachmentPanel?.addFiles($event.dataTransfer?.files)" @paste="pasteFiles">
               <textarea
                 ref="composerElement"
                 v-model="prompt"
                 rows="1"
 :placeholder="composerSuggestion && !coarsePointer ? composerSuggestion : 'Message this agent…'"
-                required
+                :required="!selectedAttachments.length"
                 @input="autosize"
                 @keydown="onComposerKey"
               ></textarea>
@@ -1097,7 +1141,7 @@ onUnmounted(() => {
                   >
                     <Icon name="stop" :size="14" />
                   </button>
-                  <button class="disc disc-send" aria-label="Send" title="Send" :disabled="busy || !!uncertain || !prompt.trim()">
+                  <button class="disc disc-send" aria-label="Send" title="Send" :disabled="busy || !!uncertain || !attachmentsReady || (!prompt.trim() && !selectedAttachments.length)">
                     <Icon name="send" :size="17" />
                   </button>
                 </div>

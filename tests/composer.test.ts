@@ -60,3 +60,16 @@ test("unavailable or full storage keeps in-memory drafts and exposes a warning",
   assert.ok(full.warning.value);
   assert.equal(new ComposerStore(() => disk).state("h:a").text, "recover me");
 });
+
+test("automatic confirmation clears only the draft restored from that failed send", () => {
+  const disk = storage(), original = new ComposerStore(() => disk);
+  const message = { messageId: "sent", text: "old text" };
+  original.begin("h:a", message); original.restoreFailed("h:a", message);
+  const reloaded = new ComposerStore(() => disk);
+  reloaded.confirm("h:a", "sent");
+  assert.equal(reloaded.state("h:a").text, "");
+  original.setText("h:b", "new text");
+  original.begin("h:b", message); original.restoreFailed("h:b", message);
+  original.confirm("h:b", "sent");
+  assert.equal(original.state("h:b").text, "new text");
+});

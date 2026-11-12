@@ -9,6 +9,7 @@
     "dist",
     "README.md",
     "CHANGELOG.md",
+    "docs/cloudflare-access.md",
     "docs/markstream-integration-validation.md",
     "docs/performance-plan.md"
   ],

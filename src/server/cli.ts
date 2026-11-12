@@ -13,8 +13,9 @@ import { connect } from "node:net";
 import { backup, restore } from "./backup.ts";
 import { Store } from "./store.ts";
 import { resolveDataDirectory } from "./data-dir.ts";
+import { generateToken, tokenProblem, writeTokenFile } from "./auth.ts";
 import {
-  COMMANDS, SERVICE_ACTIONS, UsageError, colorEnabled, commandHelp, findCommand, formatStatus, lastLines,
+  COMMANDS, SERVICE_ACTIONS, TOKEN_ACTIONS, UsageError, colorEnabled, commandHelp, findCommand, formatStatus, lastLines,
   mainHelp, makeStyle, parseArgs, suggest, versionNote, type Parsed, type Status,
 } from "./cli-format.ts";
 
@@ -158,6 +159,76 @@ async function logs(paths: Paths, args: Parsed) {
   }
 }
 
+/** Reads a line from the terminal without echoing it. */
+function promptHidden(question: string): Promise<string> {
+  return new Promise((done, reject) => {
+    const input = process.stdin;
+    process.stderr.write(question);
+    input.setRawMode(true);
+    input.setEncoding("utf8");
+    input.resume();
+    let value = "";
+    const finish = (error?: Error) => {
+      input.setRawMode(false);
+      input.pause();
+      input.removeListener("data", onData);
+      process.stderr.write("\n");
+      if (error) reject(error);
+      else done(value);
+    };
+    const onData = (chunk: string) => {
+      for (const char of chunk) {
+        if (char === "\r" || char === "\n") return finish();
+        if (char === "\u0003" || char === "\u0004") return finish(new Error("Cancelled; the token is unchanged."));
+        if (char === "\u007f" || char === "\b") value = value.slice(0, -1);
+        else value += char;
+      }
+    };
+    input.on("data", onData);
+  });
+}
+
+/** The new token from the terminal (typed twice) or from standard input, never from argv. */
+async function chosenToken() {
+  if (process.stdin.isTTY) {
+    const first = (await promptHidden("New access token: ")).trim();
+    const problem = tokenProblem(first);
+    if (problem) throw new Error(problem);
+    if ((await promptHidden("Repeat it: ")).trim() !== first) throw new Error("The tokens differ; the token is unchanged.");
+    return first;
+  }
+  const value = readFileSync(0, "utf8").trim();
+  const problem = tokenProblem(value);
+  if (problem) throw new Error(problem);
+  return value;
+}
+
+async function token(paths: Paths, action: string | undefined) {
+  if (action === undefined) {
+    if (!existsSync(paths.token)) throw new Error("No access token yet: it is created on first start. Run 'litepaseo start'.");
+    return console.log(readFileSync(paths.token, "utf8").trim());
+  }
+  if (!(TOKEN_ACTIONS as readonly string[]).includes(action)) {
+    const guess = suggest(action, TOKEN_ACTIONS);
+    throw new UsageError(`Unknown token action '${action}'.${guess ? ` Did you mean '${guess}'?` : ""} Actions: ${TOKEN_ACTIONS.join(", ")}.`);
+  }
+  const value = action === "set" ? await chosenToken() : generateToken();
+  writeTokenFile(paths.token, value);
+  // Whoever held the old token may have signed in with it.
+  const store = new Store(paths.directory);
+  try {
+    store.revokeSessions();
+  } finally {
+    store.close();
+  }
+  if (action === "rotate") console.log(value);
+  console.error(`${action === "set" ? "Access token saved" : "New access token above"}. Every browser is signed out; sign in again with the new token.`);
+  const running = await status(paths);
+  // Versions before 0.3.1 read the token only at startup.
+  const note = running && versionNote(running, VERSION, err);
+  if (note) console.error(note);
+}
+
 async function version(args: Parsed) {
   const paths = await dataDirectory();
   const state = await status(paths);
@@ -227,8 +298,7 @@ async function run(): Promise<void> {
     case "serve":
       return supervise(paths.directory, fileURLToPath(import.meta.url));
     case "token":
-      if (!existsSync(paths.token)) throw new Error("No access token yet: it is created on first start. Run 'litepaseo start'.");
-      return console.log(readFileSync(paths.token, "utf8").trim());
+      return token(paths, args.positional[0]);
     case "totp-reset":
     case "signout-all": {
       const store = new Store(paths.directory);

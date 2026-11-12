@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import type { LoginSession, Store } from "./store.ts";
 
 /** Sliding session lifetime: a device that keeps using the console stays signed in. */
@@ -72,15 +73,57 @@ export function matchTotp(secret: Buffer, code: string, now = Date.now()) {
 }
 
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
-const equalSecret = (a: string, b: string) => {
-  const x = Buffer.from(a),
-    y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual(x, y);
-};
+/** Compares digests, so neither the content nor the length of the secret leaks through timing. */
+const equalSecret = (a: string, b: string) =>
+  timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
+
+// ---- The access token -----------------------------------------------------------------------
+
+export const MIN_TOKEN_LENGTH = 16;
+export const MAX_TOKEN_LENGTH = 200;
+const MIN_DISTINCT_CHARACTERS = 8;
+
+export const generateToken = () => randomBytes(32).toString("hex");
+
+/** Why a chosen access token is refused, or null when it is acceptable. */
+export function tokenProblem(token: string) {
+  if (token.length < MIN_TOKEN_LENGTH) return `The token needs at least ${MIN_TOKEN_LENGTH} characters.`;
+  if (token.length > MAX_TOKEN_LENGTH) return `The token can have at most ${MAX_TOKEN_LENGTH} characters.`;
+  // Printable ASCII without spaces: it must survive JSON bodies and HTTP headers unchanged.
+  if (!/^[\x21-\x7e]+$/.test(token)) return "Use letters, digits and punctuation only (no spaces or other characters).";
+  if (new Set(token).size < MIN_DISTINCT_CHARACTERS) return `Use at least ${MIN_DISTINCT_CHARACTERS} different characters.`;
+  return null;
+}
+
+/** Replaces the token file in one step, readable only by its owner. */
+export function writeTokenFile(path: string, token: string) {
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, token + "\n", { mode: 0o600 });
+  renameSync(temporary, path);
+}
+
+/**
+ * The current token from its file. Re-read when the file changes, so `litepaseo token set` and
+ * `token rotate` take effect in a running server. A missing or unreadable file admits nobody.
+ */
+export function tokenFile(path: string) {
+  let cached = { key: "", token: "" };
+  return () => {
+    try {
+      const info = statSync(path);
+      const key = `${info.ino}:${info.mtimeMs}:${info.size}`;
+      if (key !== cached.key) cached = { key, token: readFileSync(path, "utf8").trim() };
+      return cached.token;
+    } catch {
+      return "";
+    }
+  };
+}
 
 export type LoginResult =
   | { ok: true; session: LoginSession; secret: string }
   | { ok: false; status: 401 | 429; retryAfter?: number };
+export type BearerResult = { ok: true } | { ok: false; status: 401 | 429; retryAfter?: number };
 
 /**
  * Login and sessions. A browser signs in once, with the access token and, when enabled, an authenticator code,
@@ -89,15 +132,15 @@ export type LoginResult =
  */
 export class Auth {
   private readonly store: Store;
-  private readonly token: string;
+  private readonly token: () => string;
   private readonly codeFailures = new Map<string, { count: number; reset: number }>();
   private readonly tokenFailures = new Map<string, { count: number; reset: number }>();
   private global = { count: 0, reset: 0, lockMs: WINDOW_MS };
   private pendingTotp: { secret: string; sessionId: string; expires: number } | null = null;
 
-  constructor(store: Store, token: string) {
+  constructor(store: Store, token: string | (() => string)) {
     this.store = store;
-    this.token = token;
+    this.token = typeof token === "string" ? () => token : token;
     const saved = store.setting("totp_login_limit");
     if (saved) this.global = JSON.parse(saved);
     // Old versions issued sessions for a code alone. Invalidate them once.
@@ -115,9 +158,24 @@ export class Auth {
     return this.store.setting("totp_secret") !== null;
   }
 
-  /** Validates a bearer token (CLI, tests) without creating a session. */
+  /** Whether `token` is the current access token. */
   checkToken(token: string) {
-    return equalSecret(token, this.token);
+    const expected = this.token();
+    return !!expected && equalSecret(token, expected);
+  }
+
+  /**
+   * A bearer token (scripts on this machine) authenticates without creating a session. It
+   * draws on the same failure budget as sign-in, so it cannot be used to guess the token.
+   */
+  bearer(token: string, client: string, now = Date.now()): BearerResult {
+    const limit = this.limited(client, false, now);
+    if (limit) return { ok: false, status: 429, retryAfter: limit };
+    if (!this.checkToken(token)) {
+      this.fail(client, false, now);
+      return { ok: false, status: 401 };
+    }
+    return { ok: true };
   }
 
   login(input: { token?: string; code?: string }, client: string, label: string, now = Date.now()): LoginResult {

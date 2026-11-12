@@ -65,7 +65,8 @@ export async function restore(source: string, directory: string) {
       for (const table of ["hosts", "board", "settings", "sessions", "push_subscriptions"])
         db.prepare(`SELECT * FROM ${table} LIMIT 0`).all();
     } finally { db.close(); }
-    if (!/^[a-f0-9]{64}\s*$/.test(readFileSync(join(stage, "token"), "utf8"))) throw new Error("Invalid backup access token.");
+    // Generated tokens are 64 hex digits; `litepaseo token set` admits chosen printable ones.
+    if (!/^[\x21-\x7e]{1,200}$/.test(readFileSync(join(stage, "token"), "utf8").trim())) throw new Error("Invalid backup access token.");
     // The marker prevents startup after interruption between publishing the two files.
     writeFileSync(join(directory, ".restore-incomplete"), "Restore interrupted: restore the backup to a fresh home.\n", { mode: 0o600, flag: "wx" });
     renameSync(join(stage, "token"), join(directory, "token"));

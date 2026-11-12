@@ -90,7 +90,10 @@ port on your machine.
 3. Open `https://agents.example.com` and sign in with your LitePaseo access token.
 
 Keep LitePaseo's default localhost binding; Cloudflare handles HTTPS in front of
-it. An existing HTTPS reverse proxy works too, provided it supports streaming
+it. A signed-in session can run commands through your agents, so on a public
+hostname also enable **Cloudflare Access** and an authenticator code: see
+[Protecting LitePaseo with Cloudflare Access](docs/cloudflare-access.md). Push
+notifications keep working behind Access. An existing HTTPS reverse proxy works too, provided it supports streaming
 responses (SSE) without buffering.
 
 ### Phone app & notifications
@@ -104,6 +107,12 @@ before starting the server for Apple push delivery.
 Optional two-factor sign-in is under **Settings → Authenticator code**; signed-in
 devices can be revoked in Settings. If you lose your authenticator, run
 `litepaseo totp-reset` on the server.
+
+The access token is generated on first start. Choose your own with
+`litepaseo token set`, or replace it with `litepaseo token rotate` if it may have leaked.
+Both take effect immediately and sign out every browser. A token sent as
+`Authorization: Bearer` (for scripts) is accepted only on direct connections, never
+through a tunnel or proxy, and only while authenticator sign-in is off.
 
 ### Voice input
 
@@ -135,6 +144,8 @@ field, LitePaseo retries once with the other format.
 | `litepaseo restart` | Restart a manually launched instance (also after an upgrade) |
 | `litepaseo logs` | Show recent logs (`-n 500` for more, `-f` to follow) |
 | `litepaseo token` | Print the sign-in token |
+| `litepaseo token set` | Choose your own token (at least 16 characters; typed without echo or read from stdin) |
+| `litepaseo token rotate` | Replace the token with a new random one |
 | `litepaseo serve` | Run in the foreground |
 | `litepaseo version` | Show the installed and running versions (`-v` prints just the number) |
 | `litepaseo --help` | List commands; `litepaseo help <command>` explains one |
@@ -244,6 +255,8 @@ node tests/package.mjs
 ```
 
 ## Further reading
+
+- [Protecting LitePaseo with Cloudflare Access](docs/cloudflare-access.md).
 
 - [Markstream integration and measurements](docs/markstream-integration-validation.md).
 - [LitePaseo vs. official Paseo web UI](docs/performance-plan.md) and the

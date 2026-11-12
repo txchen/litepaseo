@@ -12,8 +12,22 @@
 - Completion logs include audio duration, first-text latency, and time from Stop to final
   text, without recording audio or transcript content.
 
+### Sign-in hardening
+
+- Fixed: with authenticator sign-in off, a bearer token in the `Authorization` header was checked
+  without any limit on failed attempts. Bearer tokens now share the sign-in failure budget, and
+  are accepted only on direct connections: never through Cloudflare Tunnel or another proxy,
+  where only browser sign-in admits anyone. Upgrade if LitePaseo is reachable from the internet.
+- `litepaseo token set` chooses your own access token (at least 16 characters, typed without
+  echo or read from standard input); `litepaseo token rotate` replaces it with a new random one.
+  Both take effect in the running server without a restart, sign out every browser, and end
+  open streams that used the old token.
+- New guide: [Protecting LitePaseo with Cloudflare Access](docs/cloudflare-access.md), including
+  the bypass rule that keeps app install and notifications working.
+
 **Upgrading from 0.3.0:** existing transcription settings and model selection are preserved.
-Reverse proxies must allow WebSocket upgrades on `/api/dictation/stream`.
+Reverse proxies must allow WebSocket upgrades on `/api/dictation/stream`. Scripts that sent the
+bearer token through a tunnel or proxy must sign in instead or run on the LitePaseo machine.
 
 ## 0.3.0
 

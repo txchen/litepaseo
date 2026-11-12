@@ -69,9 +69,19 @@ export interface AppOptions {
   fetch?: typeof fetch;
 }
 
-type Env = { Variables: { session: LoginSession | null } };
+/** `session` for a browser, or `bearer` (the accepted token) for a script on a direct connection. */
+type Env = { Variables: { session: LoginSession | null; bearer: string | null } };
 
-export function createApp(store: Store, hosts: Hosts, token: string, webRoot: string, options: AppOptions = {}) {
+/**
+ * Requests that arrived through a tunnel or reverse proxy. A bearer token is never accepted from
+ * them: over the network, only the browser sign-in (with its rate limits and optional
+ * authenticator code) admits anyone.
+ */
+const proxied = (c: { req: { header: (name: string) => string | undefined } }) =>
+  ["cf-connecting-ip", "x-forwarded-for", "x-real-ip", "forwarded"].some((name) => c.req.header(name) !== undefined);
+
+/** `token` is the access token, or a function returning the current one (it can be rotated). */
+export function createApp(store: Store, hosts: Hosts, token: string | (() => string), webRoot: string, options: AppOptions = {}) {
   const app = new Hono<Env>();
   const auth = new Auth(store, token);
   const dictationStreams = new DictationStreams(options.fetch, (metrics) => console.info(JSON.stringify({ event: "dictation_complete", ...metrics })));
@@ -108,9 +118,16 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
   })(c, next));
   app.use("/api/*", async (c, next) => {
     c.header("Cache-Control", "no-store");
-    const bearer = c.req.header("authorization")?.replace(/^Bearer /, "");
-    if (bearer && !PUBLIC_API.has(c.req.path) && !auth.totpEnabled() && auth.checkToken(bearer)) {
+    c.set("bearer", null);
+    const bearer = /^Bearer (.+)$/.exec(c.req.header("authorization") ?? "")?.[1];
+    if (bearer && !PUBLIC_API.has(c.req.path) && !auth.totpEnabled() && !proxied(c)) {
+      const result = auth.bearer(bearer, clientId(c));
+      if (!result.ok) {
+        if (result.retryAfter) c.header("Retry-After", String(result.retryAfter));
+        return c.json({ error: result.status === 429 ? "Too many attempts. Try again later." : "Sign in required" }, result.status);
+      }
       c.set("session", null);
+      c.set("bearer", bearer);
       return next();
     }
     // One session lookup per request. The cookie is reissued only when the sliding expiry
@@ -324,8 +341,12 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
       for (const stream of directoryStreams) stream.send(message);
     }, HOST_FLUSH_MS);
   });
-  const streamValidity = (session: LoginSession | null) =>
-    session ? () => auth.stillValid(session.id) : () => !auth.totpEnabled();
+  /** Re-checked on heartbeat: a revoked session, or a rotated token, loses its open streams. */
+  const streamValidity = (c: { get: <K extends keyof Env["Variables"]>(key: K) => Env["Variables"][K] }) => {
+    const session = c.get("session"), bearer = c.get("bearer");
+    if (session) return () => auth.stillValid(session.id);
+    return () => !!bearer && !auth.totpEnabled() && auth.checkToken(bearer);
+  };
   app.get("/api/stream", (c) => {
     const since = Number(c.req.query("since"));
     const resumable =
@@ -339,7 +360,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
       deliverAgents(stream);
       directoryStreams.add(stream);
       return () => directoryStreams.delete(stream);
-    }, streamValidity(c.get("session")));
+    }, streamValidity(c));
   });
   app.post("/api/hosts", async (c) => {
     const input = z
@@ -481,7 +502,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
           if (!devices.size) viewers.delete(key);
         }
       };
-    }, streamValidity(c.get("session")));
+    }, streamValidity(c));
   });
   /** Bounded history pages; the browser bookmarks boundaries for forward navigation. */
   app.get("/api/hosts/:host/agents/:agent/timeline", async (c) => {
@@ -625,9 +646,8 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
   app.post("/api/dictation/session", (c) => {
     const config = dictationConfig(store);
     if (!config) return c.json({ error: "Voice input is not set up. Add a transcription service in Settings." }, 409);
-    const session = c.get("session");
     try {
-      return c.json(dictationStreams.issue(config, () => session ? auth.stillValid(session.id) : !auth.totpEnabled()));
+      return c.json(dictationStreams.issue(config, streamValidity(c)));
     } catch (error) {
       return c.json({ error: (error as Error).message }, 429);
     }
@@ -794,7 +814,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
   });
 
   // ---- Usage across hosts ------------------------------------------------------------------------
-  registerWorkspaceRoutes(app, hosts, store, (c) => streamValidity(c.get("session")));
+  registerWorkspaceRoutes(app, hosts, store, (c) => streamValidity(c));
   app.get("/api/usage", async (c) => c.json(await usage.report(c.req.query("refresh") === "1")));
 
   app.get("/api/board", (c) => c.json(store.board()));

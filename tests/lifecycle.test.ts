@@ -40,6 +40,27 @@ test("packaged CLI background readiness, duplicate start, HTTP authentication an
         .status,
       200,
     );
+    // Rotating and choosing the token take effect in the running server, without a restart.
+    const bearer = (value: string) =>
+      fetch(first.url + "/api/hosts", { headers: { authorization: "Bearer " + value } }).then((r) => r.status);
+    const rotated = run("token", "rotate").trim();
+    assert.match(rotated, /^[0-9a-f]{64}$/);
+    assert.equal(run("token").trim(), rotated);
+    assert.equal(await bearer(token.trim()), 401);
+    assert.equal(await bearer(rotated), 200);
+    const chosen = "my-own-access-token-42";
+    execFileSync(process.execPath, [resolve("dist/server/cli.mjs"), "token", "set"], {
+      env, input: chosen + "\n", encoding: "utf8", timeout: 15000, stdio: ["pipe", "pipe", "pipe"],
+    });
+    assert.equal(run("token").trim(), chosen);
+    assert.equal(await bearer(chosen), 200);
+    assert.throws(
+      () => execFileSync(process.execPath, [resolve("dist/server/cli.mjs"), "token", "set"], {
+        env, input: "too-short\n", encoding: "utf8", timeout: 15000, stdio: ["pipe", "pipe", "pipe"],
+      }),
+      (error: any) => /at least 16/.test(String(error.stderr)),
+    );
+    assert.equal(run("token").trim(), chosen, "a refused token leaves the old one");
     assert.match(status(), /"ready":true/);
     assert.equal(JSON.parse(status()).version, JSON.parse(readFileSync("package.json", "utf8")).version);
     process.kill(first.workerPid, "SIGKILL");
@@ -68,7 +89,7 @@ test("packaged CLI background readiness, duplicate start, HTTP authentication an
       env: { ...env, LITEPASEO_HOME: restoredHome }, encoding: "utf8", timeout: 15000,
     });
     assert.match(restored, /Restore complete/);
-    assert.equal(readFileSync(join(restoredHome, "token"), "utf8"), token);
+    assert.equal(readFileSync(join(restoredHome, "token"), "utf8").trim(), chosen);
 
   } finally {
     assert.match(run("stop"), /stopped/);

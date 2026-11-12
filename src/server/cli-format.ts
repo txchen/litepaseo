@@ -19,6 +19,7 @@ export type Command = {
 
 const json: Flag = { name: "json", summary: "Print machine-readable JSON" };
 
+export const TOKEN_ACTIONS = ["set", "rotate"] as const;
 export const SERVICE_ACTIONS = ["print", "install", "uninstall", "status", "start", "stop", "restart"] as const;
 
 export const COMMANDS: Command[] = [
@@ -43,7 +44,21 @@ export const COMMANDS: Command[] = [
   },
   { name: "serve", group: "Service", summary: "Run in the foreground (for service managers)" },
 
-  { name: "token", group: "Sign-in", summary: "Print the access token", details: ["The token is required to sign in from a browser."] },
+  {
+    name: "token", group: "Sign-in", args: "[set|rotate]", summary: "Print, choose or replace the access token",
+    details: [
+      "The token is required to sign in from a browser.",
+      "",
+      "Actions:",
+      "  (none)    print the current token",
+      "  set       choose your own token: typed twice without echo, or read from standard input",
+      "  rotate    replace it with a new random token and print it",
+      "",
+      `A chosen token needs at least 16 characters (letters, digits, punctuation; no spaces).`,
+      "Both actions take effect immediately and sign out every browser.",
+    ],
+    examples: ["litepaseo token", "litepaseo token set", "litepaseo token rotate"],
+  },
   { name: "totp-reset", group: "Sign-in", summary: "Turn off authenticator sign-in (lost phone)" },
   { name: "signout-all", group: "Sign-in", summary: "Sign out every browser and stop its notifications" },
 

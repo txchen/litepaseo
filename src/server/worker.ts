@@ -1,21 +1,21 @@
 import { serve } from "@hono/node-server";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { Store } from "./store.ts";
 import { Hosts } from "./hosts.ts";
 import { createApp } from "./app.ts";
+import { generateToken, tokenFile } from "./auth.ts";
 
 export async function runWorker(directory: string, webRoot: string) {
   if (!process.send) throw new Error("worker is an internal supervised command");
   const tokenPath = join(directory, "token");
-  if (!existsSync(tokenPath)) writeFileSync(tokenPath, randomBytes(32).toString("hex"), { mode: 0o600, flag: "wx" });
+  if (!existsSync(tokenPath)) writeFileSync(tokenPath, generateToken(), { mode: 0o600, flag: "wx" });
   const store = new Store(directory), hosts = new Hosts();
   for (const host of store.hosts()) {
     try { hosts.add(host); } catch { console.error("Could not initialize host", host.id); }
   }
   const port = Number(process.env.LITEPASEO_PORT ?? 8787), hostname = process.env.LITEPASEO_BIND ?? "127.0.0.1";
-  const app = createApp(store, hosts, readFileSync(tokenPath, "utf8").trim(), webRoot,
+  const app = createApp(store, hosts, tokenFile(tokenPath), webRoot,
     { pushSubject: process.env.LITEPASEO_PUSH_SUBJECT });
   const server = serve({ fetch: app.fetch, port, hostname });
   app.dictationStreams.attach(server as import("node:http").Server);

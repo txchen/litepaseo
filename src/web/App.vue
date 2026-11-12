@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, provide, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, onUnmounted, provide, reactive, ref, shallowRef, watch } from "vue";
 import type { DirectoryMessage, HostState, Permission, TimelineMessage, TimelinePage, WorkspaceSummary } from "../shared/wire.ts";
 import { DirectoryStore, comparePinnedFirst } from "./directory-store.ts";
 import ThreadMenu from "./ThreadMenu.vue";
@@ -26,6 +26,12 @@ import { registerServiceWorker, setBadge, setFavicon } from "./pwa.ts";
 import { preloadMarkstream } from "./markstream-loader.ts";
 import { formatElapsed } from "./elapsed.ts";
 import AgentControls from "./AgentControls.vue";
+import SchedulesPage from "./SchedulesPage.vue";
+import { defineAsyncComponent } from "vue";
+// The side panel loads on first use: the file viewer and xterm.js stay out of the first page.
+const FilesPanel = defineAsyncComponent(() => import("./FilesPanel.vue"));
+const FileViewer = defineAsyncComponent(() => import("./FileViewer.vue"));
+const TerminalPanel = defineAsyncComponent(() => import("./TerminalPanel.vue"));
 import DictationButton from "./DictationButton.vue";
 import { TIMELINE_CONTEXT, turnFooters, type TimelineContext } from "./timeline-display.ts";
 
@@ -36,9 +42,67 @@ type Card = {
   hostId: string | null;
   agentId: string | null;
 };
-type Tab = "chat" | "board" | "hosts" | "settings";
+type Tab = "chat" | "board" | "hosts" | "settings" | "schedules";
 const COLUMNS = ["Todo", "Doing", "Done"] as const;
 const coarsePointer = matchMedia("(pointer: coarse)").matches;
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+const viewMenu = ref(false);
+// Workspace side panel (files / terminal), remembered per browser.
+const panel = ref<"files" | "terminal" | null>((localStorage.getItem("litepaseo-panel") as "files" | "terminal" | null) || null);
+watch(panel, (p) => (p ? localStorage.setItem("litepaseo-panel", p) : localStorage.removeItem("litepaseo-panel")));
+const togglePanel = (p: "files" | "terminal") => (panel.value = panel.value === p ? null : p);
+// Files opened as tabs, per thread (kept while the page lives; at most a dozen per thread).
+const fileTabs = reactive(new Map<string, { paths: string[]; active: string | null }>());
+const tabOwner = computed(() => selectedThread.value ?? selectedKey.value ?? "");
+const openFiles = computed(() => fileTabs.get(tabOwner.value)?.paths ?? []);
+const activeFile = computed({
+  get: () => fileTabs.get(tabOwner.value)?.active ?? null,
+  set: (path: string | null) => {
+    const entry = fileTabs.get(tabOwner.value);
+    if (entry) entry.active = path;
+  },
+});
+function openFile(path: string) {
+  const owner = tabOwner.value;
+  if (!owner) return;
+  const entry = fileTabs.get(owner) ?? { paths: [], active: null };
+  if (!entry.paths.includes(path)) entry.paths = [...entry.paths, path].slice(-12);
+  entry.active = path;
+  fileTabs.set(owner, entry);
+  if (compact.matches) panel.value = null; // phones: show the file, not the tree on top of it
+}
+function closeFile(path: string) {
+  const entry = fileTabs.get(tabOwner.value);
+  if (!entry) return;
+  const index = entry.paths.indexOf(path);
+  entry.paths = entry.paths.filter((p) => p !== path);
+  if (entry.active === path) entry.active = entry.paths[Math.min(index, entry.paths.length - 1)] ?? null;
+}
+const PANEL_MIN = 280, PANEL_MAX = 900, PANEL_DEFAULT = 420;
+const clampPanel = (w: number) => Math.round(Math.min(PANEL_MAX, Math.max(PANEL_MIN, w)));
+const panelWidth = ref(clampPanel(Number(localStorage.getItem("litepaseo-panel-width")) || PANEL_DEFAULT));
+function setPanelWidth(w: number) {
+  panelWidth.value = clampPanel(w);
+  localStorage.setItem("litepaseo-panel-width", String(panelWidth.value));
+}
+function startPanelResize(event: PointerEvent) {
+  if (event.button !== 0) return;
+  const handle = event.currentTarget as HTMLElement;
+  const startX = event.clientX, startW = panelWidth.value;
+  handle.setPointerCapture(event.pointerId);
+  resizing.value = true;
+  const move = (e: PointerEvent) => (panelWidth.value = clampPanel(startW - (e.clientX - startX)));
+  const end = () => {
+    resizing.value = false;
+    setPanelWidth(panelWidth.value);
+    handle.removeEventListener("pointermove", move);
+    handle.removeEventListener("pointerup", end);
+    handle.removeEventListener("pointercancel", end);
+  };
+  handle.addEventListener("pointermove", move);
+  handle.addEventListener("pointerup", end);
+  handle.addEventListener("pointercancel", end);
+}
 // Resizable sidebar (desktop): width persists per browser.
 const SIDEBAR_MIN = 220,
   SIDEBAR_MAX = 520,
@@ -263,6 +327,8 @@ const hostCounts = computed(() => {
   directory.version.value;
   return new Map(hosts.value.map((h) => [h.id, directory.hostSize(h.id)]));
 });
+/** The open thread's working directory: the workspace checkout, else the agent's cwd. */
+const workspaceCwd = computed(() => activeThread.value?.directory || active.value?.cwd || "");
 const activeProject = computed(() => {
   const cwd = active.value?.cwd ?? "";
   return cwd.replace(/\/+$/, "").split("/").pop() || cwd;
@@ -1029,88 +1095,68 @@ onUnmounted(() => {
         @keydown.left.prevent="setSidebarWidth(sidebarWidth - 16)"
         @keydown.right.prevent="setSidebarWidth(sidebarWidth + 16)"
       ></div>
-      <div class="sidebar-head">
-        <div class="brand"><img class="brand-mark" src="/icons/mark.svg" alt="" width="22" height="22" />LitePaseo</div>
-        <div class="head-actions">
-        <span class="live" :class="'is-' + directoryState" :title="'Directory stream: ' + directoryState">
-          <span class="live-dot"></span>{{ liveLabel }}
-        </span>
-        <button
-          class="icon-btn theme-btn"
-          :class="{ chosen: tab === 'settings' }"
-          title="Settings"
-          aria-label="Settings"
-          @click="openTab('settings')"
-        >
-          <Icon name="gear" :size="15" />
+      <!-- Compact navigation, as in Paseo: search and the few pages, then the workspace list. -->
+      <nav class="side-nav" aria-label="Pages">
+        <label class="side-row side-search" :class="{ active: !!query }">
+          <Icon name="search" :size="15" />
+          <input
+            ref="searchInput"
+            v-model="query"
+            type="search"
+            placeholder="Search"
+            aria-label="Search sessions, projects, hosts"
+            aria-keyshortcuts="/ Control+K Meta+K"
+          />
+          <kbd class="hide-sm">{{ isMac ? "⌘K" : "Ctrl K" }}</kbd>
+        </label>
+        <button class="side-row" :class="{ chosen: tab === 'schedules' }" @click="openTab('schedules')">
+          <Icon name="clock" :size="15" />Schedules
         </button>
-        <button
-          class="icon-btn theme-btn"
-          :title="'Theme: ' + theme + ' (click to change)'"
-          :aria-label="'Theme: ' + theme"
-          @click="cycleTheme"
-        >
-          <Icon :name="theme === 'dark' ? 'moon' : theme === 'light' ? 'sun' : 'monitor'" :size="15" />
+        <button class="side-row" :class="{ chosen: tab === 'board' }" @click="openTab('board')">
+          <Icon name="board" :size="15" />Kanban
         </button>
-        </div>
-      </div>
-      <nav class="tabs">
-        <button :class="{ chosen: tab === 'chat' }" @click="openTab('chat')">
-          <Icon name="chat" />Sessions<span class="count">{{ sessionCount }}</span>
-        </button>
-        <button :class="{ chosen: tab === 'board' }" @click="openTab('board')">
-          <Icon name="board" />Kanban
-        </button>
-        <button :class="{ chosen: tab === 'hosts' }" @click="openTab('hosts')">
-          <Icon name="server" />Hosts<span class="count">{{ connectedHosts }}/{{ hosts.length }}</span>
+        <button class="side-row" :class="{ chosen: tab === 'hosts' }" @click="openTab('hosts')">
+          <Icon name="server" :size="15" />Hosts<span class="count">{{ connectedHosts }}/{{ hosts.length }}</span>
         </button>
       </nav>
-      <button class="new-session" @click="startNew()">
-        <Icon name="plus" :size="15" />New session<kbd class="hide-sm">N</kbd>
-      </button>
-      <label class="search">
-        <Icon name="search" :size="15" />
-        <input
-          ref="searchInput"
-          v-model="query"
-          type="search"
-          placeholder="Search sessions, projects, hosts"
-          aria-keyshortcuts="/ Control+K Meta+K"
-        />
-        <kbd class="search-key hide-sm">/</kbd>
-      </label>
-      <div v-if="hosts.length > 1" class="host-filter" role="radiogroup" aria-label="Filter by host">
+      <div class="side-section">
+        <span class="side-label">{{ listMode === "projects" ? "Workspaces" : "Recent" }}</span>
+        <span class="list-summary">{{ listMode === "projects" ? projectCount : viewSize }}</span>
         <button
-          role="radio"
-          :aria-checked="hostFilter === null"
-          :class="{ chosen: hostFilter === null }"
-          @click="hostFilter = null"
+          class="icon-btn side-tool"
+          :class="{ chosen: viewMenu || hostFilter !== null || listMode !== 'projects' }"
+          aria-label="View options"
+          title="Group and filter"
+          :aria-expanded="viewMenu"
+          @click="viewMenu = !viewMenu"
         >
-          All<span class="chip-count">{{ sessionCount }}</span>
-        </button>
-        <button
-          v-for="h in hosts"
-          :key="h.id"
-          role="radio"
-          :aria-checked="hostFilter === h.id"
-          :class="{ chosen: hostFilter === h.id }"
-          :title="h.label + ' · ' + h.state"
-          @click="hostFilter = h.id"
-        >
-          <span class="status-dot" :class="h.state === 'connected' ? 'is-idle-ok' : 'is-offline'"></span
-          >{{ h.label }}<span class="chip-count">{{ hostCounts.get(h.id) }}</span>
+          <Icon name="sliders" :size="15" />
         </button>
       </div>
-      <div class="list-toolbar">
+      <div v-if="viewMenu" class="view-menu">
         <div class="segmented segmented-sm" role="radiogroup" aria-label="Group sessions">
-          <button :class="{ chosen: listMode === 'projects' }" @click="listMode = 'projects'">
-            Projects
+          <button role="radio" :aria-checked="listMode === 'projects'" :class="{ chosen: listMode === 'projects' }" @click="listMode = 'projects'">
+            By project
           </button>
-          <button :class="{ chosen: listMode === 'recent' }" @click="listMode = 'recent'">Recent</button>
+          <button role="radio" :aria-checked="listMode === 'recent'" :class="{ chosen: listMode === 'recent' }" @click="listMode = 'recent'">Recent</button>
         </div>
-        <span class="list-summary">{{
-          listMode === "projects" ? `${projectCount} projects` : `${viewSize} threads`
-        }}</span>
+        <div v-if="hosts.length > 1" class="host-filter" role="radiogroup" aria-label="Filter by host">
+          <button role="radio" :aria-checked="hostFilter === null" :class="{ chosen: hostFilter === null }" @click="hostFilter = null">
+            All<span class="chip-count">{{ sessionCount }}</span>
+          </button>
+          <button
+            v-for="h in hosts"
+            :key="h.id"
+            role="radio"
+            :aria-checked="hostFilter === h.id"
+            :class="{ chosen: hostFilter === h.id }"
+            :title="h.label + ' · ' + h.state"
+            @click="hostFilter = h.id"
+          >
+            <span class="status-dot" :class="h.state === 'connected' ? 'is-idle-ok' : 'is-offline'"></span
+            >{{ h.label }}<span class="chip-count">{{ hostCounts.get(h.id) }}</span>
+          </button>
+        </div>
       </div>
       <SessionList
         :mode="listMode"
@@ -1124,6 +1170,22 @@ onUnmounted(() => {
         @menu="openMenu"
       />
       <UsagePanel :report="usage" :loading="usageLoading" @refresh="loadUsage(true)" />
+      <div class="side-foot">
+        <span class="live" :class="'is-' + directoryState" :title="'Directory stream: ' + directoryState">
+          <span class="live-dot"></span>{{ liveLabel }}
+        </span>
+        <button
+          class="icon-btn"
+          :title="'Theme: ' + theme + ' (click to change)'"
+          :aria-label="'Theme: ' + theme"
+          @click="cycleTheme"
+        >
+          <Icon :name="theme === 'dark' ? 'moon' : theme === 'light' ? 'sun' : 'monitor'" :size="15" />
+        </button>
+        <button class="icon-btn" :class="{ chosen: tab === 'settings' }" title="Settings" aria-label="Settings" @click="openTab('settings')">
+          <Icon name="gear" :size="15" />
+        </button>
+      </div>
     </aside>
 
     <main class="main">
@@ -1221,6 +1283,8 @@ onUnmounted(() => {
       </section>
 
       <!-- Kanban -->
+      <SchedulesPage v-else-if="tab === 'schedules'" :hosts="hosts" :api="api" @back="closeDetail" @open-agent="select" />
+
       <section v-else-if="tab === 'board'" class="page">
         <header class="page-head">
           <button class="icon-btn back" aria-label="Back" @click="closeDetail">
@@ -1290,51 +1354,84 @@ onUnmounted(() => {
       </section>
 
       <!-- Conversation -->
-      <section v-else-if="active" class="chat">
+      <div v-else-if="active" class="chat-split" :style="{ '--panel-w': panelWidth + 'px' }">
+      <section class="chat">
         <header class="chat-head">
           <button class="icon-btn back" aria-label="Back to sessions" @click="closeDetail">
             <Icon name="back" :size="18" />
           </button>
-          <div class="grow">
-            <h1 class="chat-title">
-              <Icon v-if="activeThread?.pinnedAt" name="pin" :size="13" class="title-pin" />{{
-                activeThread?.name || active.title || "Untitled session"
-              }}
-            </h1>
-            <div class="chat-meta">
-              <span class="badge" :class="'is-' + active.status">
-                <span class="status-dot" :class="'is-' + active.status"></span>{{ active.status }}
-              </span>
-              <span><Icon name="folder" :size="13" />{{ activeProject }}</span>
-              <span><Icon name="server" :size="13" />{{ hostLabels.get(active.hostId) }}</span>
-              <span v-if="activeThread?.branch" class="hide-sm"><Icon name="branch" :size="13" />{{ activeThread.branch }}</span>
-              <span class="hide-sm">{{ active.provider }}</span>
-            </div>
-          </div>
+          <span class="status-dot chat-status" :class="'is-' + (active.attention ? 'attention' : active.state === 'failed' ? 'error' : active.state === 'running' ? 'running' : 'idle')" :title="active.status"></span>
+          <h1 class="chat-title" :title="activeThread?.name || active.title || ''">
+            <Icon v-if="activeThread?.pinnedAt" name="pin" :size="12" class="title-pin" />{{ activeThread?.name || active.title || "Untitled session" }}
+          </h1>
+          <span
+            class="chat-context hide-sm"
+            :title="[activeProject, hostLabels.get(active.hostId), activeThread?.branch, active.provider].filter(Boolean).join(' · ')"
+          >{{ activeProject }}<template v-if="hosts.length > 1"> · {{ hostLabels.get(active.hostId) }}</template><template v-if="activeThread?.branch"> · {{ activeThread.branch }}</template></span>
+          <span class="grow"></span>
+          <button
+            class="icon-btn head-tool"
+            :class="{ chosen: panel === 'files' }"
+            aria-label="Files"
+            title="Files"
+            @click="togglePanel('files')"
+          >
+            <Icon name="folder" :size="16" />
+          </button>
+          <button
+            class="icon-btn head-tool"
+            :class="{ chosen: panel === 'terminal' }"
+            aria-label="Terminal"
+            title="Terminal"
+            @click="togglePanel('terminal')"
+          >
+            <Icon name="terminal" :size="16" />
+          </button>
           <button
             v-if="activeThread"
-            class="icon-btn"
+            class="icon-btn head-tool"
             aria-label="Thread actions"
             title="Rename, pin, mark unread, archive"
             @click="openHeaderMenu"
           >
-            <Icon name="more" :size="18" />
+            <Icon name="more" :size="16" />
           </button>
         </header>
-        <!-- A thread with several agents: switch between them. -->
-        <nav v-if="threadAgents.length > 1" class="agent-tabs" aria-label="Agents in this thread">
+        <!-- Tabs: the thread's agents, then files opened from the side panel (Paseo's workspace tabs). -->
+        <nav v-if="threadAgents.length > 1 || openFiles.length" class="agent-tabs" aria-label="Tabs">
           <button
-            v-for="a in threadAgents"
+            v-for="a in threadAgents.length ? threadAgents : [active]"
             :key="a.key"
-            :class="{ chosen: a.key === selectedKey }"
-            @click="selectedKey = a.key"
+            :class="{ chosen: a.key === selectedKey && !activeFile }"
+            @click="selectedKey = a.key; activeFile = null"
           >
             <span class="status-dot" :class="'is-' + (a.attention ? 'attention' : a.state === 'failed' ? 'error' : a.state === 'running' ? 'running' : a.unread ? 'unread' : 'idle')"></span>
             <span class="agent-tab-name">{{ a.title || a.provider }}</span>
           </button>
+          <button
+            v-for="f in openFiles"
+            :key="'file:' + f"
+            class="file-tab"
+            :class="{ chosen: activeFile === f }"
+            :title="f"
+            @click="activeFile = f"
+            @auxclick.prevent="$event.button === 1 && closeFile(f)"
+          >
+            <Icon name="file" :size="13" />
+            <span class="agent-tab-name">{{ f.split("/").pop() }}</span>
+            <span class="tab-close" role="button" :aria-label="'Close ' + f" @click.stop="closeFile(f)"><Icon name="close" :size="11" /></span>
+          </button>
         </nav>
+        <FileViewer
+          v-if="activeFile"
+          :key="active.hostId + ':' + workspaceCwd + ':' + activeFile"
+          :host-id="active.hostId"
+          :cwd="workspaceCwd"
+          :path="activeFile"
+          :api="api"
+        />
 
-        <div ref="timelineElement" class="timeline" @click="onTimelineClick">
+        <div v-show="!activeFile" ref="timelineElement" class="timeline" @click="onTimelineClick">
           <div class="timeline-inner">
             <div v-if="canShowOlder" class="older">
               <button class="btn btn-ghost" :disabled="busy" @click="moveHistory('before')">Show earlier messages</button>
@@ -1373,7 +1470,7 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="dock">
+        <div v-show="!activeFile" class="dock">
           <div class="dock-inner">
             <PermissionForm v-for="p in active.pendingPermissions" :key="active.key + ':' + p.id" :permission="p" :busy="busy" @respond="respond(p, $event)" />
 
@@ -1479,6 +1576,38 @@ onUnmounted(() => {
           </div>
         </div>
       </section>
+      <aside v-if="panel" class="side-panel" :aria-label="panel === 'files' ? 'Files' : 'Terminal'">
+        <div
+          class="panel-resize"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize panel"
+          tabindex="0"
+          @pointerdown="startPanelResize"
+          @dblclick="setPanelWidth(PANEL_DEFAULT)"
+        ></div>
+        <div class="panel-tabs">
+          <button :class="{ chosen: panel === 'files' }" @click="panel = 'files'"><Icon name="folder" :size="14" />Files</button>
+          <button :class="{ chosen: panel === 'terminal' }" @click="panel = 'terminal'"><Icon name="terminal" :size="14" />Terminal</button>
+          <span class="grow"></span>
+          <button class="icon-btn" aria-label="Close panel" title="Close panel" @click="panel = null"><Icon name="close" :size="14" /></button>
+        </div>
+        <div class="panel-body">
+          <KeepAlive>
+            <FilesPanel
+              v-if="panel === 'files'"
+              :key="'f:' + active.hostId + workspaceCwd"
+              :host-id="active.hostId"
+              :cwd="workspaceCwd"
+              :api="api"
+              :active-path="activeFile"
+              @open="openFile"
+            />
+            <TerminalPanel v-else :key="'t:' + active.hostId + workspaceCwd" :host-id="active.hostId" :cwd="workspaceCwd" :api="api" />
+          </KeepAlive>
+        </div>
+      </aside>
+      </div>
 
       <section v-else-if="tab === 'chat' && pendingSelection" class="empty">
         <span class="spinner"></span>

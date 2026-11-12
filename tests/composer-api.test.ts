@@ -30,6 +30,7 @@ function setup(dictation: "ok" | "disabled" = "ok") {
     sendDictationStreamChunk: (_id: string, seq: number, audio: string) => calls.push(["chunk", seq, Buffer.from(audio, "base64").length]),
     finishDictationStream: async (id: string, finalSeq: number) => (calls.push(["finish", finalSeq]), { dictationId: id, text: "hello world" }),
     cancelDictationStream: () => calls.push(["cancel"]),
+    scheduleUpdate: async (options: unknown) => (calls.push(["scheduleUpdate", options]), { schedule: { id: "s1" }, error: null }),
     close: async () => {},
   };
   hosts.attach(host.id, driver as never, {
@@ -131,6 +132,26 @@ test("a host without dictation says so", async () => {
     });
     assert.equal(response.status, 502);
     assert.match((await response.json()).error, /not enabled/);
+  } finally {
+    await done();
+  }
+});
+
+test("editing a schedule sends only the fields that changed shape, as one update", async () => {
+  const { host, calls, request, done } = setup();
+  try {
+    const response = await request(`/hosts/${host.id}/schedules/s1`, {
+      method: "PATCH",
+      body: JSON.stringify({ name: "", prompt: "Check in", cron: "0 9 * * 1-5", timezone: "UTC", cwd: "/repo", provider: "pi", model: null, archiveOnFinish: false }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(calls, [["scheduleUpdate", {
+      id: "s1",
+      name: null,
+      prompt: "Check in",
+      cadence: { type: "cron", expression: "0 9 * * 1-5", timezone: "UTC" },
+      newAgentConfig: { provider: "pi", model: null, cwd: "/repo", archiveOnFinish: false },
+    }]]);
   } finally {
     await done();
   }

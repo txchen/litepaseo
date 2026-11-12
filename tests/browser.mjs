@@ -440,7 +440,7 @@ try {
 
   // A thread with two agents shows tabs to switch between them.
   await betaRow.click();
-  await page.getByRole("navigation", { name: "Agents in this thread" }).waitFor();
+  await page.getByRole("navigation", { name: "Tabs" }).waitFor();
   await page.getByRole("button", { name: "beta helper" }).click();
   await page.waitForFunction(() => document.querySelector(".agent-tabs .chosen")?.textContent?.includes("beta helper"));
   await page.getByRole("button", { name: "beta conversation", exact: true }).click();
@@ -486,7 +486,6 @@ try {
   await page.getByText("Validate two hosts", { exact: true }).waitFor();
   assert.equal(await page.locator(".card select").inputValue(), "Doing");
   // Keyboard: "/" focuses search from anywhere outside a text field.
-  await page.getByRole("button", { name: "Sessions" }).click();
   await page.keyboard.press("/");
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("type")), "search");
   assert.deepEqual(errors, []);
@@ -519,7 +518,7 @@ try {
   await page.getByLabel("Server access token").fill(readFileSync(join(directory, "token"), "utf8"));
   await codeInput.fill(totp(secret, step + 1));
   await page.getByRole("button", { name: "Connect", exact: true }).click();
-  await page.getByRole("button", { name: "New session" }).first().waitFor();
+  await page.getByRole("button", { name: "Schedules" }).waitFor();
   assert.deepEqual(errors, []);
 
   // Phone: opening a conversation is a history entry; system back returns to the list.

@@ -208,8 +208,9 @@ const dayIndex = (d: Date) => Math.floor((d.getTime() - d.getTimezoneOffset() * 
 export function formatMessageTimestamp(at: Date, now = new Date()): string {
   const t = timeOfDay(at);
   const days = dayIndex(now) - dayIndex(at);
-  if (days <= 0) return t;
-  if (days < 7) return `${at.toLocaleDateString(undefined, { weekday: "long" })} ${t}`;
+  if (days === 0) return t;
+  if (days === -1) return `Tomorrow ${t}`;
+  if (days < 7 && days > -7) return `${at.toLocaleDateString(undefined, { weekday: "long" })} ${t}`;
   return `${at.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}, ${t}`;
 }
 

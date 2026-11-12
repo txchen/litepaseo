@@ -1,4 +1,6 @@
 import { VERSION } from "./version.ts";
+import { eventStream } from "./sse.ts";
+import { registerWorkspaceRoutes } from "./workspace-routes.ts";
 import { Attachments, MAX_FILE_BYTES } from "./attachments.ts";
 import { confirmedMessages } from "./message-status.ts";
 import { IconCache, MAX_IMAGE_BYTES, imageMime, isLocalConnection, isMaterializedImagePath, readMaterializedImage } from "./media.ts";
@@ -36,7 +38,6 @@ const AGENT_FLUSH_MS = 100;
 /** Five minutes of 16 kHz, 16-bit mono speech. */
 const MAX_DICTATION_BYTES = 5 * 60 * 16_000 * 2;
 const HOST_FLUSH_MS = 100;
-const HEARTBEAT_MS = 20_000;
 
 function parseJson(text: string | undefined): unknown {
   try {
@@ -46,57 +47,6 @@ function parseJson(text: string | undefined): unknown {
   }
 }
 
-/** Server-sent events over a plain fetch response, so the bearer header still authenticates. */
-function eventStream(
-  signal: AbortSignal,
-  open: (send: (data: unknown) => void) => () => void,
-  /** Re-checked on every heartbeat: a revoked session loses its open streams. */
-  valid: () => boolean = () => true,
-) {
-  const encoder = new TextEncoder();
-  let cleanup: (() => void) | undefined;
-  const stop = () => {
-    cleanup?.();
-    cleanup = undefined;
-  };
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      const write = (text: string) => {
-        try {
-          controller.enqueue(encoder.encode(text));
-        } catch {
-          stop();
-        }
-      };
-      const heartbeat = setInterval(() => {
-        if (valid()) return write(": ping\n\n");
-        stop();
-        try {
-          controller.close();
-        } catch {}
-      }, HEARTBEAT_MS);
-      const close = open((data) => write(`data: ${JSON.stringify(data)}\n\n`));
-      cleanup = () => {
-        clearInterval(heartbeat);
-        close();
-      };
-      signal.addEventListener("abort", () => {
-        stop();
-        try {
-          controller.close();
-        } catch {}
-      });
-    },
-    cancel: stop,
-  });
-  return new Response(body, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      "X-Accel-Buffering": "no",
-    },
-  });
-}
 const card = z
   .object({
     id: z.string().uuid(),
@@ -825,6 +775,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
   });
 
   // ---- Usage across hosts ------------------------------------------------------------------------
+  registerWorkspaceRoutes(app, hosts, store, (c) => streamValidity(c.get("session")));
   app.get("/api/usage", async (c) => c.json(await usage.report(c.req.query("refresh") === "1")));
 
   app.get("/api/board", (c) => c.json(store.board()));

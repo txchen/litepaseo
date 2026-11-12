@@ -174,6 +174,43 @@ try {
         ],
       }),
     );
+    await page.route("**/fs/list?*", (route) => {
+      const path = new URL(route.request().url()).searchParams.get("path");
+      const entries = path === "src"
+        ? [{ name: "server", path: "src/server", kind: "directory", size: 0 }, { name: "web", path: "src/web", kind: "directory", size: 0 }, { name: "main.ts", path: "src/main.ts", kind: "file", size: 812 }]
+        : [
+            { name: "docs", path: "docs", kind: "directory", size: 0 },
+            { name: "src", path: "src", kind: "directory", size: 0 },
+            { name: "tests", path: "tests", kind: "directory", size: 0 },
+            { name: "package.json", path: "package.json", kind: "file", size: 1853 },
+            { name: "README.md", path: "README.md", kind: "file", size: 6879 },
+            { name: "tsconfig.json", path: "tsconfig.json", kind: "file", size: 412 },
+          ];
+      return route.fulfill({ json: { path, entries, truncated: false } });
+    });
+    await page.route("**/fs/read?*", (route) =>
+      route.fulfill({ json: { path: "package.json", kind: "text", mime: "application/json", size: 1853, text: JSON.stringify({ name: "litepaseo", version: "0.1.1", type: "module", scripts: { build: "vp build", test: "node --test" } }, null, 2) } }),
+    );
+    await page.route("**/api/schedules", (route) =>
+      route.fulfill({
+        json: [{
+          hostId: "mac",
+          error: null,
+          schedules: [
+            { id: "s1", name: "Daily check-in", prompt: "Run tasks/daily-checkin and report.", cadence: { type: "cron", expression: "0 10 * * *", timezone: "America/Los_Angeles" }, target: { type: "new-agent", config: { provider: "pi", cwd: "/home/me/code/automation" } }, status: "active", nextRunAt: new Date(Date.now() + 5 * 3600_000).toISOString(), lastRunAt: new Date(Date.now() - 19 * 3600_000).toISOString() },
+            { id: "s2", name: "Weekly dependency audit", prompt: "Audit npm dependencies.", cadence: { type: "cron", expression: "0 9 * * 1", timezone: "America/Los_Angeles" }, target: { type: "new-agent", config: { provider: "codex", cwd: "/home/me/code/litepaseo" } }, status: "paused", nextRunAt: null, lastRunAt: new Date(Date.now() - 6 * 86400_000).toISOString() },
+          ],
+        }, { hostId: "gpu", schedules: [], error: "Host is offline" }],
+      }),
+    );
+    await page.route("**/terminals?*", (route) => route.fulfill({ json: [{ id: "t1", name: "zsh", title: "zsh", cwd: "/home/me/code/litepaseo" }] }));
+    await page.route("**/terminals/t1/stream?*", (route) =>
+      route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+        body: `data: ${JSON.stringify({ t: "reset" })}\n\ndata: ${JSON.stringify({ t: "o", d: Buffer.from("\u001b[32m~/code/litepaseo\u001b[0m main\r\n\u276f npm test\r\n\r\n> litepaseo@0.1.1 test\r\n\u001b[32m\u2714\u001b[0m 87 tests passed\r\n\r\n\u001b[32m~/code/litepaseo\u001b[0m main\r\n\u276f ").toString("base64") })}\n\n`,
+      }),
+    );
     await page.route("**/agents/*/config", (route) =>
       route.fulfill({
         json: {
@@ -207,7 +244,12 @@ try {
       route.fulfill({ json: projects.map((name) => ({ key: name, name, rootPath: `/home/me/code/${name}`, kind: "git" })) }),
     );
     await page.goto(`http://127.0.0.1:${port}`);
-    await steps(page);
+    try {
+      await steps(page);
+    } catch (error) {
+      await page.screenshot({ path: join(out, name + "-failed.png") });
+      throw error;
+    }
     await page.waitForTimeout(400);
     await page.screenshot({ path: join(out, name + ".png") });
     await context.close();
@@ -254,6 +296,34 @@ try {
     await shoot(`palette-${palette}-light`, { ...desktop, palette }, openChat);
     await shoot(`palette-${palette}-dark`, { ...desktop, colorScheme: "dark", palette }, openChat);
   }
+  await shoot("desktop-files", { ...desktop, colorScheme: "dark" }, async (page) => {
+    await openChat(page);
+    await page.getByRole("button", { name: "Files", exact: true }).click();
+    await page.getByRole("treeitem", { name: /src/ }).first().click();
+    await page.getByRole("treeitem", { name: /main.ts/ }).waitFor();
+  });
+  await shoot("desktop-file-open", desktop, async (page) => {
+    await openChat(page);
+    await page.getByRole("button", { name: "Files", exact: true }).click();
+    await page.getByRole("treeitem", { name: /package.json/ }).click();
+    await page.locator(".file-view .code-gutter").waitFor();
+  });
+  await shoot("desktop-terminal", { ...desktop, colorScheme: "dark" }, async (page) => {
+    await openChat(page);
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    await page.locator(".xterm-rows").getByText("87 tests passed").waitFor();
+  });
+  await shoot("desktop-schedules", desktop, async (page) => {
+    await login(page);
+    await page.getByRole("button", { name: "Schedules" }).click();
+    await page.getByText("Daily check-in").waitFor();
+  });
+  await shoot("desktop-schedule-edit", desktop, async (page) => {
+    await login(page);
+    await page.getByRole("button", { name: "Schedules" }).click();
+    await page.getByRole("button", { name: "Edit schedule" }).first().click();
+    await page.getByText("Edit schedule", { exact: true }).waitFor();
+  });
   await shoot("desktop-hosts", desktop, async (page) => {
     await login(page);
     await page.getByRole("button", { name: /Hosts/ }).click();
@@ -280,6 +350,7 @@ try {
   });
   await shoot("desktop-host-filter", desktop, async (page) => {
     await login(page);
+    await page.getByRole("button", { name: "View options" }).click();
     await page.getByRole("radio", { name: /build-01/ }).click();
   });
   const openNew = async (page) => {
@@ -335,7 +406,7 @@ try {
       .locator("button.session")
       .filter({ has: page.locator(".session-title", { hasText: /^Fix flaky websocket reconnect test$/ }) })
       .click();
-    await page.getByRole("navigation", { name: "Agents in this thread" }).waitFor();
+    await page.getByRole("navigation", { name: "Tabs" }).waitFor();
   });
   await shoot("sidebar-collapsed", desktop, collapseAll);
   await shoot("sidebar-collapsed-dark", { ...desktop, colorScheme: "dark" }, collapseAll);

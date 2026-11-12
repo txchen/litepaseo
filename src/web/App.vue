@@ -1572,7 +1572,7 @@ onUnmounted(() => {
                     :disabled="busy"
                     @click="stop"
                   >
-                    <Icon name="stop" :size="14" />
+                    <Icon name="stop" :size="18" />
                   </button>
                   <button
                     v-if="!running || composerHasContent"

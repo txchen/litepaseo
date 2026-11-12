@@ -8,7 +8,7 @@ const paths: Record<string, string> = {
   search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35",
   back: "M15 18l-6-6 6-6",
   send: "M12 19V5M5 12l7-7 7 7",
-  stop: "M7 7h10v10H7z",
+  stop: "M7.5 5h9A2.5 2.5 0 0 1 19 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 5 16.5v-9A2.5 2.5 0 0 1 7.5 5z",
   plus: "M12 5v14M5 12h14",
   close: "M18 6 6 18M6 6l12 12",
   check: "M20 6 9 17l-5-5",

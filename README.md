@@ -188,6 +188,5 @@ node tests/package.mjs
 - [Operations guide](docs/operations.md): phone setup, notifications, backups,
   service management, diagnostics and attachment limits.
 - [Markstream integration and measurements](docs/markstream-integration-validation.md).
-- [Technical design](docs/technical-design.md) and
-  [protocol integration](docs/protocol-integration-detail.md): architecture
-  background; these documents also contain earlier design decisions.
+- [Performance measurements](docs/performance-plan.md) and the
+  [benchmark harness](benchmarks/README.md).

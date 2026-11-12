@@ -27,7 +27,7 @@ The runner exits nonzero on a failed case and records the failure with other res
 
 The production frontend talks over real loopback HTTP/SSE to the application's BFF,
 directory and timeline code. Two in-process SDK facade doubles provide deterministic
-session metadata and timeline deltas. They never contact the user's daemon, agents,
+session metadata and timeline deltas. They never contact a real daemon, agents,
 providers or stored configuration. The BFF is loaded from TypeScript source using
 Node's type stripping, rather than from the packaged CLI. Fixture generation, storage
 and event logging are included in its CPU and memory counters.

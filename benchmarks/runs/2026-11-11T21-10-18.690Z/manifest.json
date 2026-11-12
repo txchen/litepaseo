@@ -1,6 +1,6 @@
 {
   "startedAt": "2026-11-11T21:10:18.699Z",
-  "commit": "68b190fa8deb207358d3fcced183efb2e67c538a",
+  "commit": "aa742b8938d68a46d5e4ab59fd3fa628c652f042",
   "sourceStatus": " M benchmarks/fixture-server.mjs\n M benchmarks/run.mjs\n M src/server/app.ts\n M src/server/timeline-view.ts\n M src/web/App.vue\n M src/web/style.css\n M tests/app.test.ts\n M tests/timeline.test.ts\n?? benchmarks/runs/2026-11-11T21-07-04.552Z-motion/\n?? benchmarks/runs/2026-11-11T21-10-18.690Z/\n?? src/web/timeline-window.ts\n?? tests/timeline-window.test.ts\n",
   "node": "v26.12.1",
   "os": "linux 7.2.13-200.fc44.x86_64",

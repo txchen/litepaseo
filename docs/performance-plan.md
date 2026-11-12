@@ -5,7 +5,7 @@ and energy protocol below remain unexecuted; no energy savings are claimed.
 
 ## Local baseline, 2026-11-11
 
-Application commit: `5f1e337a7b89de61126de4c018f56f2929bdc574`. Hardware: the test laptop,
+Application commit: `363906948f047272bb41fe1c56baea7e60c54a06`. Hardware: the test laptop,
 Core Ultra 7 256V, 8 logical CPUs, 15.2 GiB RAM, AC connected, powersave governor.
 Linux `7.2.13-200.fc44.x86_64`, Node `26.12.1`, headless Chromium `158.0.8127.18`.
 The host was shared with other processes; thermal state and power policy were not
@@ -129,7 +129,7 @@ records the subsequent implementation and calibration.
 
 Final requested configuration: **persistent decorative animation at 2 updates/s,
 timeline message batches every 500 ms**. Input and clicks are not rate limited.
-The implementation is recorded in application commit `ef0ccb6`.
+The implementation is recorded in application commit `61104ca`.
 
 The animation experiments used three repetitions per setting, 20 seconds each,
 with a connected 1,000-session directory and no incoming messages. CPU remains
@@ -150,7 +150,7 @@ Sources: [CSS 5/s](../benchmarks/runs/2026-11-11T21-07-04.552Z-motion/summary.js
 [CSS 2/s and 1/s](../benchmarks/runs/2026-11-11T21-10-18.690Z/summary.json),
 [clock 5/s](../benchmarks/runs/2026-11-11T21-15-33.485Z-motion/summary.json),
 [clock 2/s and 1/s](../benchmarks/runs/2026-11-11T21-19-55.565Z/summary.json).
-The final frequency was chosen by the user, keeping message and decorative-motion
+The final frequency was chosen to favour battery life, keeping message and decorative-motion
 cadences separate. No claim about measured display FPS or energy follows from these
 CPU counters. The clock tests directly inspect animation-time changes and verify
 that those changes stop when the application receives a hidden visibility signal.
@@ -177,9 +177,9 @@ before dispatch, plus rendering time; the sampled newest-marker p95 is not the
 latency of the oldest event in each batch.
 
 Calibration provenance: CSS-step runs used the frontend
-before the motion-clock implementation (its build archive is not kept in Git). The clock 2/s–1/s sweep used `ef79b05` plus
+before the motion-clock implementation (its build archive is not kept in Git). The clock 2/s–1/s sweep used `4fee44a` plus
 its recorded `application.patch`. A 1/s-motion, 200 ms-streaming comparison was
-interrupted when the user selected the final 2/s, 500 ms policy; its partial samples
+interrupted when the final 2/s, 500 ms policy was selected; its partial samples
 are not kept in Git and are not final-configuration results.
 
 ### Final configuration results

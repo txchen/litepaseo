@@ -1,6 +1,6 @@
 {
   "startedAt": "2026-11-11T22:18:25.733Z",
-  "commit": "95d42dcbe5f35705713fd1aef0d8df9ef459409c",
+  "commit": "498111073b28e99d7d940e9024746fa4915f6cec",
   "sourceStatus": " M benchmarks/run.mjs\n M package-lock.json\n M package.json\n M src/server/host-directory.ts\n M src/shared/wire.ts\n M src/web/App.vue\n M src/web/TimelineRowView.vue\n M src/web/main.ts\n M src/web/style.css\n M tests/browser.mjs\n?? benchmarks/runs/2026-11-11T22-18-25.725Z/\n?? src/web/MarkdownMessage.vue\n",
   "node": "v26.12.1",
   "os": "linux 7.2.13-200.fc44.x86_64",

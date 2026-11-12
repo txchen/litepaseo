@@ -1,8 +1,8 @@
 # Markstream integration validation
 
-2026-11-11. The user chose to adopt Markstream after reviewing the tradeoffs.
-Assistant messages now use `markstream-vue@2.0.25`. The old `markdown.ts` remains
-only as the historical renderer used by comparison probes and its unit tests.
+2026-11-11. Markstream was adopted after reviewing the tradeoffs below.
+Assistant messages use `markstream-vue@2.0.25`, loaded asynchronously after sign-in.
+The small built-in `markdown.ts` renderer shows messages until Markstream has loaded.
 
 ## Configuration
 

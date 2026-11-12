@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import type { AgentConfigChange, AgentConfigOptions, AgentSummary } from "../shared/wire.ts";
 import Icon from "./Icon.vue";
+import ProviderIcon from "./ProviderIcon.vue";
 
 /**
  * The composer's agent switches, as in Paseo: model, thinking level, mode and provider features,
@@ -53,8 +54,11 @@ const thinkingLabel = computed(() => thinkingOptions.value.find((t) => t.id === 
 const mode = computed(() => (pending.value.mode as string | undefined) ?? props.agent.modeId ?? null);
 const modes = computed(() => options.value?.modes ?? []);
 const modeLabel = computed(() => modes.value.find((m) => m.id === mode.value)?.label ?? "Mode");
+const fullAccess = computed(() => /full|bypass|danger|unrestricted/i.test(`${mode.value} ${modeLabel.value}`));
+const isPlan = (f: { id: string; label: string }) => /^(plan|plan[-_ ]?mode)$/i.test(f.id) || /^plan(?: mode)?$/i.test(f.label);
+const isFast = (f: { id: string; label: string }) => /fast|speed/i.test(`${f.id} ${f.label}`);
 const features = computed(() =>
-  (options.value?.features ?? []).map((f) => {
+  (options.value?.features ?? []).filter((f) => !isPlan(f)).map((f) => {
     const value = pending.value["feature:" + f.id] ?? f.value;
     return f.type === "toggle"
       ? { ...f, value: value as boolean }
@@ -111,8 +115,8 @@ const RING = 2 * Math.PI * 7;
 
 <template>
   <div class="agent-controls">
-    <label class="chip" :class="{ 'is-disabled': disabled || !options?.models.length }" :title="'Model: ' + modelLabel">
-      <Icon name="sparkle" :size="13" /><span class="chip-text">{{ modelLabel }}</span><Icon name="chevron" :size="11" class="chip-caret" />
+    <label class="chip" :class="{ 'is-disabled': disabled || !options?.models.length }" :title="agent.provider + ' · Model: ' + modelLabel">
+      <ProviderIcon :provider="agent.provider" /><span class="chip-text">{{ modelLabel }}</span><Icon name="chevron" :size="11" class="chip-caret" />
       <select
         aria-label="Model"
         :disabled="disabled || !options?.models.length"
@@ -124,7 +128,7 @@ const RING = 2 * Math.PI * 7;
       </select>
     </label>
     <label v-if="thinkingOptions.length" class="chip" :class="{ 'is-disabled': disabled }" :title="'Thinking: ' + thinkingLabel">
-      <Icon name="brain" :size="13" /><span class="chip-text">{{ thinkingLabel }}</span><Icon name="chevron" :size="11" class="chip-caret" />
+      <Icon name="brain" :size="18" /><span class="chip-text">{{ thinkingLabel }}</span><Icon name="chevron" :size="11" class="chip-caret" />
       <select
         aria-label="Thinking"
         :disabled="disabled"
@@ -135,7 +139,7 @@ const RING = 2 * Math.PI * 7;
       </select>
     </label>
     <label v-if="modes.length" class="chip" :class="{ 'is-disabled': disabled }" :title="'Mode: ' + modeLabel">
-      <Icon name="shield" :size="13" /><span class="chip-text">{{ modeLabel }}</span><Icon name="chevron" :size="11" class="chip-caret" />
+      <Icon :name="fullAccess ? 'shield-off' : 'shield'" :size="18" /><span class="chip-text">{{ modeLabel }}</span><Icon name="chevron" :size="11" class="chip-caret" />
       <select aria-label="Mode" :disabled="disabled" :value="mode ?? ''" @change="change('mode', { modeId: pick($event) }, pick($event))">
         <option v-if="!mode" value="" disabled>Mode</option>
         <option v-for="m in modes" :key="m.id" :value="m.id" :title="m.description">{{ m.label }}</option>
@@ -146,16 +150,18 @@ const RING = 2 * Math.PI * 7;
         v-if="f.type === 'toggle'"
         type="button"
         class="chip chip-toggle"
-        :class="{ chosen: f.value }"
+        :class="{ chosen: f.value, 'chip-icon-only': isFast(f) }"
+        :aria-label="f.label"
         :aria-pressed="f.value"
         :title="f.tooltip ?? f.label"
         :disabled="disabled"
         @click="change('feature:' + f.id, { feature: { id: f.id, value: !f.value } }, !f.value)"
       >
-        <Icon name="bolt" :size="13" /><span class="chip-text">{{ f.label }}</span>
+        <Icon :name="isFast(f) ? 'bolt' : 'sliders'" :size="18" /><span v-if="!isFast(f)" class="chip-text">{{ f.label }}</span>
       </button>
-      <label v-else class="chip" :class="{ 'is-disabled': disabled }" :title="f.tooltip ?? f.label">
-        <span class="chip-text"><span class="chip-key">{{ f.label }}:</span> {{ f.current || "Default" }}</span><Icon name="chevron" :size="11" class="chip-caret" />
+      <label v-else class="chip" :class="{ 'is-disabled': disabled, 'chip-icon-only': isFast(f), chosen: isFast(f) && f.value === 'fast' }" :title="[f.label, f.current, f.tooltip].filter(Boolean).join(' · ')">
+        <Icon v-if="isFast(f)" name="bolt" :size="18" />
+        <span v-if="!isFast(f)" class="chip-text"><span class="chip-key">{{ f.label }}:</span> {{ f.current || "Default" }}</span><Icon v-if="!isFast(f)" name="chevron" :size="11" class="chip-caret" />
         <select
           :aria-label="f.label"
           :disabled="disabled"
@@ -181,7 +187,7 @@ const RING = 2 * Math.PI * 7;
   flex: 1;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
@@ -194,16 +200,28 @@ const RING = 2 * Math.PI * 7;
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 30px;
+  gap: 7px;
+  height: 34px;
   max-width: 220px;
   padding: 0 8px;
   border-radius: 999px;
-  font-size: 12.5px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 400;
   color: var(--fg-muted);
   cursor: pointer;
   white-space: nowrap;
+}
+.chip :deep(.icon) {
+  flex-shrink: 0;
+}
+.chip-icon-only {
+  width: 34px;
+  justify-content: center;
+  padding: 0;
+}
+.chip:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .chip-text {
   overflow: hidden;
@@ -227,7 +245,7 @@ const RING = 2 * Math.PI * 7;
   cursor: default;
   opacity: 0.6;
 }
-.chip-toggle.chosen {
+.chip.chosen {
   color: var(--accent);
   background: var(--accent-soft);
 }
@@ -245,8 +263,8 @@ const RING = 2 * Math.PI * 7;
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 30px;
+  gap: 7px;
+  height: 34px;
   padding: 0 8px;
   font-size: 12px;
   font-variant-numeric: tabular-nums;

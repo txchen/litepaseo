@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
 
-/** SCREENS=mobile renders only the shots whose names contain "mobile". */
+/** SCREENS=mobile (or readme) renders only shots whose names contain that string. */
 const only = process.env.SCREENS;
 const out = resolve(process.argv[2] ?? join(tmpdir(), "litepaseo-screens"));
 mkdirSync(out, { recursive: true });
@@ -127,7 +127,7 @@ let browser;
 try {
   run("start");
   browser = await chromium.launch({ headless: true });
-  const shoot = async (name, { palette, ...options }, steps) => {
+  const shoot = async (name, { palette, timelineRows = rows, ...options }, steps) => {
     if (only && !name.includes(only)) return;
     const context = await browser.newContext(options);
     const page = await context.newPage();
@@ -142,7 +142,7 @@ try {
       ),
     );
     await page.route("**/timeline/stream", (route) =>
-      route.fulfill(sse({ type: "ops", ops: [{ type: "reset", epoch: "e", rows, hasOlder: true, startCursor: { epoch: "e", seq: 1 } }] })),
+      route.fulfill(sse({ type: "ops", ops: [{ type: "reset", epoch: "e", rows: timelineRows, hasOlder: true, startCursor: { epoch: "e", seq: 1 } }] })),
     );
     await page.route("**/suggestion", (route) =>
       route.fulfill({ json: { status: "ready", text: "Great — now wire the board into the sidebar and add a test for it." } }),
@@ -271,6 +271,24 @@ try {
   };
   const desktop = { viewport: { width: 1440, height: 900 } };
   const mobile = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 };
+  // Curated demo conversation for the README, rendered by the actual UI.
+  // Regenerate: SCREENS=readme node tests/screens.mjs docs/images
+  const readmeRows = [
+    row({ type: "user_message", text: "Fix the flaky websocket reconnect test. Keep the change small and check that subscriptions recover after a disconnect." }),
+    row({ type: "tool_call", callId: "readme-read", name: "read", status: "completed", error: null, detail: { type: "read", filePath: "src/web/event-stream.ts" } }),
+    row({ type: "assistant_message", text: "The reconnect handler was opening a second subscription before the first one closed. I updated the cleanup so each host keeps **one active stream**.\n\n```ts\nfunction reconnect() {\n  stream?.close();\n  stream = connect({ afterSeq: lastSequence });\n}\n```\n\nThe browser resumes from its last sequence number, so messages received during a disconnect are replayed in order." }),
+    row({ type: "tool_call", callId: "readme-test", name: "shell", status: "completed", error: null, detail: { type: "shell", command: "npm test", exitCode: 0 } }),
+    row({ type: "assistant_message", text: "**All 32 tests pass.** The reconnect test now waits for the stream to recover instead of relying on a fixed delay.\n\n- Subscriptions recover after a disconnect\n- Replayed events appear once, in order\n- Cleanup closes the previous connection" }),
+  ];
+  const openReadme = async (page) => {
+    await login(page);
+    await page.locator("button.session", { hasText: "Fix flaky websocket" }).first().click();
+    await page.getByText("All 32 tests pass.", { exact: true }).waitFor();
+    await page.locator(".agent-controls .provider-icon").waitFor();
+  };
+  for (const colorScheme of ["light", "dark"]) {
+    await shoot(`readme-${colorScheme}`, { viewport: { width: 1280, height: 860 }, deviceScaleFactor: 1, colorScheme, timelineRows: readmeRows }, openReadme);
+  }
   await shoot("login", desktop, async () => {});
   await shoot("desktop-empty", desktop, login);
   await shoot("desktop-chat", desktop, openChat);

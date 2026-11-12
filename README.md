@@ -1,3 +1,5 @@
+<img src="public/icons/mark.svg" width="56" height="56" alt="" />
+
 # LitePaseo
 
 **Your Paseo agents, in a lighter web UI.**
@@ -8,6 +10,15 @@ One console for your existing Paseo daemons, designed to stay open without keepi
 your browser busy.
 
 [Get started](#install-and-start) · [Performance comparison](docs/performance-plan.md) · [Operations guide](docs/operations.md)
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme-dark.png" />
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/readme-light.png" />
+  <img src="docs/images/readme-light.png" alt="LitePaseo showing agent conversations grouped by workspace, a code review conversation, usage indicators, and model, effort, and access controls in the composer." width="1280" />
+</picture>
+
+*Your workspaces, conversations, and agent controls in one view. Shown with demo data.*
+
 
 ## Why LitePaseo?
 

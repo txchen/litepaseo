@@ -223,3 +223,29 @@ export interface CreateSessionRequest {
   /** Start in a new git worktree on this new branch. */
   worktreeBranch?: string;
 }
+
+/** A task on the board. Description and comments are Markdown; optional on older cards. */
+export interface BoardCard {
+  id: string;
+  title: string;
+  column: string;
+  hostId: string | null;
+  agentId: string | null;
+  description?: string;
+  comments?: CardComment[];
+  createdAt?: number;
+  updatedAt?: number;
+}
+export interface CardComment {
+  id: string;
+  text: string;
+  /** Milliseconds. */
+  at: number;
+}
+/** PATCH /api/board/cards/:id: only the fields present change. */
+export interface CardPatch {
+  title?: string;
+  column?: string;
+  description?: string;
+  link?: { hostId: string; agentId: string } | null;
+}

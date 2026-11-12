@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Task board
+
+- A new task no longer links itself to whichever conversation was last open. Choose a
+  conversation when adding the task (none by default), or link one later from the card.
+- Cards name the conversation they link to, can be unlinked, and say when the conversation
+  is no longer available.
+- Tasks open in a detail view: rename them, write a Markdown description, add and delete
+  comments, change the column or the linked conversation, or delete the task. Cards show a
+  line of the description and the comment count.
+- Task edits are saved per task, so two open tabs no longer overwrite each other's changes.
+
 ## 0.4.0
 
 ### Conversation

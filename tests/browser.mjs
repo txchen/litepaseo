@@ -476,7 +476,39 @@ try {
   await page.getByPlaceholder("New task").fill("Validate two hosts");
   await page.getByRole("button", { name: "Add task", exact: true }).click();
   await page.getByText("Validate two hosts", { exact: true }).waitFor();
-  await page.locator(".card select").selectOption("Doing");
+  // A new task is not linked to whichever conversation happened to be open.
+  const task = page.locator(".kanban-card", { hasText: "Validate two hosts" });
+  assert.equal(await task.locator(".card-link").count(), 0, "no implicit conversation link");
+  await task.getByLabel("Link to conversation").selectOption({ label: "beta conversation (Beta)" });
+  await task.locator(".card-link", { hasText: "beta conversation" }).waitFor();
+  await task.getByRole("button", { name: "Unlink conversation" }).click();
+  await task.getByLabel("Link to conversation").waitFor();
+  // The task opens for editing: title, Markdown description, comments.
+  await task.getByRole("button", { name: "Open task Validate two hosts" }).click();
+  const firstDialog = page.getByRole("dialog", { name: "Task: Validate two hosts" });
+  await firstDialog.getByLabel("Title").fill("Validate both hosts");
+  await firstDialog.getByLabel("Title").press("Enter");
+  await page.getByRole("dialog", { name: "Task: Validate both hosts" }).waitFor();
+  const taskDialog = page.getByRole("dialog", { name: "Task: Validate both hosts" });
+  await taskDialog.getByRole("button", { name: "Add a description…" }).click();
+  await taskDialog.getByLabel("Description").fill("Check **alpha** and beta\n\n- [ ] reconnect");
+  await taskDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await taskDialog.locator(".task-description strong", { hasText: "alpha" }).waitFor();
+  await taskDialog.getByLabel("New comment").fill("First note");
+  await taskDialog.getByRole("button", { name: "Comment", exact: true }).click();
+  await taskDialog.locator(".task-comment", { hasText: "First note" }).waitFor();
+  await taskDialog.getByLabel("New comment").fill("Second `note`");
+  await taskDialog.getByLabel("New comment").press("Control+Enter");
+  await taskDialog.locator(".task-comment code", { hasText: "note" }).waitFor();
+  page.once("dialog", (d) => d.accept());
+  await taskDialog.locator(".task-comment", { hasText: "First note" }).getByRole("button", { name: "Delete comment" }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".task-comment").length === 1);
+  await taskDialog.getByRole("button", { name: "Close" }).click();
+  await taskDialog.waitFor({ state: "detached" });
+  const edited = page.locator(".kanban-card", { hasText: "Validate both hosts" });
+  assert.match(await edited.locator(".kanban-excerpt").textContent(), /Check alpha and beta/);
+  assert.equal((await edited.locator(".kanban-count").textContent()).trim(), "1");
+  await page.locator(".card .kanban-actions select").selectOption("Doing");
   await page.waitForFunction(() =>
     [...document.querySelectorAll(".column")]
       .find((e) => e.querySelector("h3").textContent === "Doing")
@@ -484,8 +516,12 @@ try {
   );
   await page.reload();
   await page.getByRole("button", { name: "Kanban", exact: true }).click();
-  await page.getByText("Validate two hosts", { exact: true }).waitFor();
-  assert.equal(await page.locator(".card select").inputValue(), "Doing");
+  await page.getByText("Validate both hosts", { exact: true }).waitFor();
+  assert.equal(await page.locator(".card .kanban-actions select").inputValue(), "Doing");
+  await page.getByRole("button", { name: "Open task Validate both hosts" }).click();
+  await page.locator(".task-comment", { hasText: "Second note" }).waitFor();
+  assert.equal(await page.locator(".task-comment").count(), 1, "comments persist across reloads");
+  await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
   // Keyboard: "/" focuses search from anywhere outside a text field.
   await page.keyboard.press("/");
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("type")), "search");

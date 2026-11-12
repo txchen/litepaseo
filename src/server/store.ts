@@ -8,12 +8,23 @@ export interface Host {
   label: string;
   connection: string;
 }
+export interface CardComment {
+  id: string;
+  text: string;
+  /** Milliseconds. */
+  at: number;
+}
 export interface Card {
   id: string;
   title: string;
   column: string;
   hostId: string | null;
   agentId: string | null;
+  /** Markdown; absent on cards from before 0.4.1. */
+  description?: string;
+  comments?: CardComment[];
+  createdAt?: number;
+  updatedAt?: number;
 }
 export interface LoginSession {
   id: string;
@@ -146,6 +157,19 @@ export class Store {
   board(): { revision: number; cards: Card[] } {
     const row = this.db.prepare("SELECT revision,cards FROM board WHERE id=1").get()!;
     return { revision: Number(row.revision), cards: JSON.parse(String(row.cards)) };
+  }
+  /**
+   * Read-modify-write of one card, at the current revision (synchronous, so nothing interleaves).
+   * `change` returns the new card, or null to leave the board untouched. False: no such card.
+   */
+  updateCard(id: string, change: (card: Card) => Card | null) {
+    const { revision, cards } = this.board();
+    const index = cards.findIndex((c) => c.id === id);
+    if (index < 0) return false;
+    const next = change(cards[index]);
+    if (!next) return true;
+    cards[index] = next;
+    return this.saveBoard(revision, cards);
   }
   saveBoard(revision: number, cards: Card[]) {
     return (

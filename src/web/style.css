@@ -2124,8 +2124,51 @@ h3 {
 }
 .add-card {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  max-width: 520px;
+  max-width: 760px;
+}
+.add-card input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.card-link-select {
+  height: 34px;
+  max-width: 100%;
+  min-width: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 12.5px;
+}
+.add-card .card-link-select {
+  flex: 0 1 240px;
+  border-radius: 999px;
+  padding: 0 12px;
+}
+.kanban-card .card-link-select {
+  height: 30px;
+  color: var(--fg-muted);
+}
+/* The linked conversation, by name, with a way to unlink it. */
+.card-link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.card-link .link-btn {
+  min-width: 0;
+}
+.card-link-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card-link .icon-btn {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  color: var(--fg-faint);
 }
 .add-card input {
   height: 34px;
@@ -2180,9 +2223,176 @@ h3 {
   border-radius: 7px;
 }
 .kanban-actions .icon-btn {
-  margin-left: auto;
   width: 28px;
   height: 28px;
+  color: var(--fg-faint);
+}
+.kanban-actions select + * {
+  margin-left: auto;
+}
+.kanban-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--fg-faint);
+}
+/* The card's title and description excerpt open the task. */
+.kanban-open {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+@media (hover: hover) {
+  .kanban-open:hover .row-title {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .kanban-count:hover,
+  .kanban-actions .icon-btn:hover {
+    color: var(--fg);
+  }
+}
+.kanban-excerpt {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+}
+/* Task detail. */
+.task-sheet {
+  width: min(720px, 100%);
+}
+.task-head {
+  gap: 8px;
+}
+.task-title {
+  flex: 1;
+  min-width: 0;
+  border-color: transparent;
+  background: transparent;
+  padding: 6px 8px;
+  margin-left: -9px;
+  font-size: 17px;
+  font-weight: 650;
+}
+.task-title:hover {
+  border-color: var(--border);
+}
+.task-body {
+  gap: 18px;
+}
+.task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.task-meta > select {
+  width: auto;
+  height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+.task-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.task-link .card-link-select {
+  width: auto;
+  max-width: 260px;
+  height: 32px;
+}
+.task-section {
+  display: grid;
+  gap: 8px;
+}
+.task-section h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--fg-muted);
+}
+.sheet-body .task-textarea {
+  min-height: 64px;
+  resize: vertical;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.task-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.task-actions .subtle {
+  margin-right: auto;
+}
+.task-empty {
+  padding: 10px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font-size: 13.5px;
+  color: var(--fg-faint);
+}
+.task-description {
+  padding: 8px 10px;
+  margin: 0 -10px;
+  border-radius: var(--radius-sm);
+  cursor: text;
+}
+@media (hover: hover) {
+  .task-description:hover {
+    background: var(--hover);
+  }
+}
+.task-comments {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.task-comment {
+  padding: 8px 12px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+.task-comment-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+.task-comment-head .icon-btn {
+  width: 24px;
+  height: 24px;
+  color: var(--fg-faint);
+}
+.task-new-comment {
+  display: grid;
+  gap: 8px;
+}
+.task-foot {
+  justify-content: space-between;
+}
+.task-delete {
+  color: var(--danger);
+  gap: 6px;
 }
 .empty {
   flex: 1;

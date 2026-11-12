@@ -23,7 +23,8 @@ import Settings from "./Settings.vue";
 import AgentBoard from "./AgentBoard.vue";
 import UsagePanel, { type UsageReport } from "./UsagePanel.vue";
 import { SUGGESTIONS } from "./suggestions.ts";
-import type { AgentSummary, PromptIndex, PromptMarker, RewindMode, TimelineRow } from "../shared/wire.ts";
+import type { AgentSummary, BoardCard, CardPatch, PromptIndex, PromptMarker, RewindMode, TimelineRow } from "../shared/wire.ts";
+import TaskDialog from "./TaskDialog.vue";
 import { registerServiceWorker, setBadge, setFavicon } from "./pwa.ts";
 import { preloadMarkstream } from "./markstream-loader.ts";
 import { formatElapsed } from "./elapsed.ts";
@@ -38,13 +39,7 @@ const TerminalPanel = defineAsyncComponent(() => import("./TerminalPanel.vue"));
 import DictationButton from "./DictationButton.vue";
 import { TIMELINE_CONTEXT, turnFooters, type TimelineContext } from "./timeline-display.ts";
 
-type Card = {
-  id: string;
-  title: string;
-  column: string;
-  hostId: string | null;
-  agentId: string | null;
-};
+type Card = BoardCard;
 type Tab = "chat" | "board" | "hosts" | "settings" | "schedules";
 const COLUMNS = ["Todo", "Doing", "Done"] as const;
 const coarsePointer = matchMedia("(pointer: coarse)").matches;
@@ -191,6 +186,8 @@ const label = ref(""),
   behavior = ref<"steer" | "interrupt">("steer"),
   tab = ref<Tab>("chat"),
   cardTitle = ref(""),
+  /** The conversation a new task links to: chosen explicitly, none by default. */
+  cardLink = ref(""),
   board = ref<{ revision: number; cards: Card[] }>({ revision: 0, cards: [] });
 const composer = new ComposerStore(() => localStorage);
 const attachments = new AttachmentStore();
@@ -1435,26 +1432,81 @@ async function saveCards(cards: Card[]) {
     throw e;
   }
 }
+/** "<host>:<agent>" → the card's link fields; "" → no link. */
+function linkFields(key: string): Pick<Card, "hostId" | "agentId"> {
+  const agent = agentDirectory.get(key);
+  return agent ? { hostId: agent.hostId, agentId: agent.id } : { hostId: null, agentId: null };
+}
 async function addCard() {
   await action(async () => {
     if (!cardTitle.value.trim()) return;
     await saveCards([
       ...board.value.cards,
-      {
-        id: crypto.randomUUID(),
-        title: cardTitle.value,
-        column: "Todo",
-        hostId: active.value?.hostId ?? null,
-        agentId: active.value?.id ?? null,
-      },
+      { id: crypto.randomUUID(), title: cardTitle.value.trim(), column: "Todo", ...linkFields(cardLink.value), createdAt: Date.now() },
     ]);
     cardTitle.value = "";
+    cardLink.value = "";
   });
 }
+/** One card's change, applied by the server to the board as it is now (no lost updates). */
+async function patchCard(card: Card, change: CardPatch) {
+  await action(async () => {
+    board.value = await api(`/board/cards/${encodeURIComponent(card.id)}`, "PATCH", change);
+  });
+}
+async function linkCard(card: Card, key: string) {
+  const fields = linkFields(key);
+  await patchCard(card, { link: fields.hostId && fields.agentId ? { hostId: fields.hostId, agentId: fields.agentId } : null });
+}
+async function commentCard(card: Card, text: string) {
+  await action(async () => {
+    board.value = await api(`/board/cards/${encodeURIComponent(card.id)}/comments`, "POST", { text });
+  });
+}
+async function uncommentCard(card: Card, id: string) {
+  await action(async () => {
+    board.value = await api(`/board/cards/${encodeURIComponent(card.id)}/comments/${encodeURIComponent(id)}`, "DELETE");
+  });
+}
+function confirmRemove(card: Card) {
+  if (!card.description && !card.comments?.length) return void removeCard(card);
+  if (confirm(`Delete “${card.title}”? Its description and comments are deleted too.`)) void removeCard(card);
+}
+async function removeCard(card: Card) {
+  await action(() => saveCards(board.value.cards.filter((c) => c.id !== card.id)));
+  if (openTaskId.value === card.id) openTaskId.value = null;
+}
+/** The task open in the detail dialog. */
+const openTaskId = ref<string | null>(null);
+const openTask = computed(() => board.value.cards.find((c) => c.id === openTaskId.value) ?? null);
+/** A line of the description for the board card, without Markdown punctuation. */
+function cardExcerpt(card: Card) {
+  return (card.description ?? "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/[#>*_`~\[\]()|-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 160);
+}
+/** Conversations a task can link to: the open one first, then the most recent. */
+const linkChoices = computed(() => {
+  agentDirectory.version.value;
+  const recent = agentDirectory.range(0, 30);
+  const open = active.value;
+  const list = open ? [open, ...recent.filter((a) => a.key !== open.key)] : recent;
+  const many = hosts.value.length > 1;
+  return list.map((a) => ({
+    key: a.key,
+    label: (a.title || `${a.provider} · ${a.project}`) + (many ? ` (${hostLabels.value.get(a.hostId) ?? a.hostId})` : ""),
+  }));
+});
+/** The linked conversation of a card, or null when it is not in the directory (archived, host gone). */
+function cardAgent(card: Card) {
+  agentDirectory.version.value;
+  return card.hostId && card.agentId ? agentDirectory.get(`${card.hostId}:${card.agentId}`) ?? null : null;
+}
 async function moveCard(card: Card, column: string) {
-  await action(() =>
-    saveCards(board.value.cards.map((c) => (c.id === card.id ? { ...c, column } : c))),
-  );
+  await patchCard(card, { column });
 }
 function openCard(card: Card) {
   if (card.hostId && card.agentId) select(`${card.hostId}:${card.agentId}`);
@@ -1787,9 +1839,12 @@ onUnmounted(() => {
           <template v-else>
           <form class="add-card" @submit.prevent="addCard">
             <input v-model="cardTitle" placeholder="New task" required />
+            <select v-model="cardLink" class="card-link-select" aria-label="Link to conversation">
+              <option value="">No conversation</option>
+              <option v-for="c in linkChoices" :key="c.key" :value="c.key">{{ c.label }}</option>
+            </select>
             <button class="btn btn-primary" :disabled="busy"><Icon name="plus" :size="15" />Add task</button>
           </form>
-          <p v-if="active" class="subtle small">New tasks link to “{{ active.title || active.id }}”.</p>
           <div class="board">
             <div v-for="column in COLUMNS" :key="column" class="column">
               <div class="column-head">
@@ -1797,18 +1852,38 @@ onUnmounted(() => {
                 <span class="count">{{ cardsByColumn.get(column)!.length }}</span>
               </div>
               <article v-for="card in cardsByColumn.get(column)" :key="card.id" class="card kanban-card">
-                <div class="row-title">{{ card.title }}</div>
-                <button v-if="card.agentId" class="link-btn" @click="openCard(card)">
-                  <Icon name="chat" :size="13" />Open conversation
+                <button type="button" class="kanban-open" :aria-label="'Open task ' + card.title" @click="openTaskId = card.id">
+                  <span class="row-title">{{ card.title }}</span>
+                  <span v-if="cardExcerpt(card)" class="kanban-excerpt">{{ cardExcerpt(card) }}</span>
                 </button>
+                <div v-if="card.agentId" class="card-link">
+                  <button v-if="cardAgent(card)" class="link-btn" :title="'Open ' + (cardAgent(card)!.title || cardAgent(card)!.id)" @click="openCard(card)">
+                    <Icon name="chat" :size="13" /><span class="card-link-name">{{ cardAgent(card)!.title || cardAgent(card)!.provider }}</span>
+                  </button>
+                  <span v-else class="subtle small">Conversation unavailable</span>
+                  <button class="icon-btn" aria-label="Unlink conversation" title="Unlink conversation" :disabled="busy" @click="linkCard(card, '')">
+                    <Icon name="close" :size="13" />
+                  </button>
+                </div>
+                <select v-else class="card-link-select" aria-label="Link to conversation" :disabled="busy" value=""
+                  @change="linkCard(card, ($event.target as HTMLSelectElement).value)">
+                  <option value="" disabled>Link a conversation…</option>
+                  <option v-for="c in linkChoices" :key="c.key" :value="c.key">{{ c.label }}</option>
+                </select>
                 <div class="kanban-actions">
-                  <select :value="card.column" @change="moveCard(card, ($event.target as HTMLSelectElement).value)">
+                  <select :value="card.column" aria-label="Column" @change="moveCard(card, ($event.target as HTMLSelectElement).value)">
                     <option v-for="c in COLUMNS" :key="c">{{ c }}</option>
                   </select>
+                  <button v-if="card.comments?.length" type="button" class="kanban-count" :title="card.comments.length + ' comments'" @click="openTaskId = card.id">
+                    <Icon name="chat" :size="13" />{{ card.comments.length }}
+                  </button>
+                  <button type="button" class="icon-btn" aria-label="Edit task" title="Edit" @click="openTaskId = card.id">
+                    <Icon name="edit" :size="15" />
+                  </button>
                   <button
                     class="icon-btn"
                     aria-label="Remove"
-                    @click="action(() => saveCards(board.cards.filter((c) => c.id !== card.id)))"
+                    @click="confirmRemove(card)"
                   >
                     <Icon name="trash" :size="15" />
                   </button>
@@ -1817,6 +1892,21 @@ onUnmounted(() => {
               <p v-if="!cardsByColumn.get(column)!.length" class="column-empty">Nothing here</p>
             </div>
           </div>
+          <TaskDialog
+            v-if="openTask"
+            :key="openTask.id"
+            :card="openTask"
+            :columns="COLUMNS"
+            :links="linkChoices"
+            :linked-name="cardAgent(openTask) ? cardAgent(openTask)!.title || cardAgent(openTask)!.provider : null"
+            :busy="busy"
+            @close="openTaskId = null"
+            @patch="patchCard(openTask, $event)"
+            @comment="commentCard(openTask, $event)"
+            @uncomment="uncommentCard(openTask, $event)"
+            @remove="removeCard(openTask)"
+            @open="openTaskId = null; openCard(openTask)"
+          />
           </template>
         </div>
       </section>

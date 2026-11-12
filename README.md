@@ -166,7 +166,7 @@ To test a local npm installation:
 ```sh
 npm run build
 npm pack
-npm install --global ./litepaseo-0.1.1.tgz
+npm install --global ./litepaseo-0.2.0.tgz
 litepaseo start
 ```
 

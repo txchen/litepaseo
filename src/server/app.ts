@@ -275,6 +275,8 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
   const directoryStreams = new Set<DirectoryStream>();
   let agentFlush: ReturnType<typeof setTimeout> | undefined;
   let hostFlush: ReturnType<typeof setTimeout> | undefined;
+  /** Set on shutdown: closing the hosts still reports changes, but the store is about to close. */
+  let disposed = false;
   const deliverAgents = (stream: DirectoryStream) => {
     deliverWorkspaces(stream);
     const { agents } = hosts;
@@ -305,14 +307,14 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
     stream.lastWorkspaces = workspaces.seq;
   };
   hosts.onAgentsChanged(() => {
-    if (agentFlush || !directoryStreams.size) return;
+    if (disposed || agentFlush || !directoryStreams.size) return;
     agentFlush = setTimeout(() => {
       agentFlush = undefined;
       for (const stream of directoryStreams) deliverAgents(stream);
     }, AGENT_FLUSH_MS);
   });
   hosts.onHostsChanged(() => {
-    if (hostFlush || !directoryStreams.size) return;
+    if (disposed || hostFlush || !directoryStreams.size) return;
     hostFlush = setTimeout(() => {
       hostFlush = undefined;
       const message: DirectoryMessage = { type: "hosts", hosts: hostStates() };
@@ -816,6 +818,12 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
   return Object.assign(app, {
     /** Open directory streams; lets tests prove that disconnects release them. */
     openStreams: () => directoryStreams.size,
-    dispose: () => attachments.close(),
+    dispose: () => {
+      disposed = true;
+      clearTimeout(agentFlush);
+      clearTimeout(hostFlush);
+      agentFlush = hostFlush = undefined;
+      attachments.close();
+    },
   });
 }

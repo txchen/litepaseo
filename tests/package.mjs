@@ -35,7 +35,7 @@ try {
   assert.match(run("--help"), /Usage: litepaseo <command>/);
   assert.match(run("help", "logs"), /--follow/);
   assert.equal(run("--version").trim(), version);
-  assert.ok(archive.files.every(file => /^(dist\/|docs\/|README\.md$|package\.json$|LICENSE)/.test(file.path)), "Only release files belong in the tarball");
+  assert.ok(archive.files.every(file => /^(dist\/|docs\/|README\.md$|CHANGELOG\.md$|package\.json$|LICENSE)/.test(file.path)), "Only release files belong in the tarball");
   run("start");
   started = true;
   const response = await fetch(`http://127.0.0.1:${port}/api/health`, { headers: { authorization: `Bearer ${run("token").trim()}` } });

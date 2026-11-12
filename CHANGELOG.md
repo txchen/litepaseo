@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 ### Conversation
 
@@ -31,6 +31,11 @@
 - In Brave, turning notifications on no longer fails with a bare "push service error": Settings
   says to enable **Use Google services for push messaging** in `brave://settings/privacy`. Other
   browsers that cannot reach their push service get a short explanation too.
+
+**Upgrading from 0.3.x:** no data migration; drafts, boards and settings are kept. The
+outline rail needs a Paseo daemon with the prompt index (older daemons simply show no rail),
+and Rewind appears only for providers that support it. The composer's **Steer** setting is
+now called **Queue**: messages wait in this tab until the running turn ends.
 
 ## 0.3.1
 

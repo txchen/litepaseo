@@ -45,6 +45,12 @@ package, with no separate database service to deploy.
 - Manage conversations across multiple Paseo hosts in one place.
 - Create sessions, choose a provider/model, send messages, stop turns, and answer
   permission requests or structured questions.
+- Queue messages while an agent works, then edit, drop or send one at once as an
+  interrupt; rewind a conversation (and, where the provider supports it, its files)
+  to an earlier message.
+- Read long conversations without clicking through pages: history loads as you
+  scroll, an outline rail previews and jumps to any prompt, and code is
+  syntax highlighted.
 - Attach files and images, with previews and upload status.
 - Dictate messages through one OpenAI-compatible speech-to-text service set up in
   LitePaseo, rather than configuring each Paseo host.

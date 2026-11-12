@@ -484,17 +484,19 @@ try {
   const step = Math.floor(Date.now() / 30000);
   await page.getByLabel("Code from your app").fill(totp(secret, step));
   await page.getByRole("button", { name: "Turn on" }).last().click();
-  await page.getByText("On. Sign in with a 6-digit code").waitFor();
+  await page.getByText("On. Sign in with your access token and a 6-digit").waitFor();
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   const codeInput = page.getByLabel("Authenticator code");
   await codeInput.waitFor();
   // The enrollment code is spent; the next step's code is accepted (±1 step window).
+  await page.getByLabel("Server access token").fill(readFileSync(join(directory, "token"), "utf8"));
   await codeInput.fill(totp(secret, step + 1));
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
   await page.getByRole("button", { name: "New session" }).first().waitFor();
   assert.deepEqual(errors, []);
 
   // Phone: opening a conversation is a history entry; system back returns to the list.
-  const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, storageState: await page.context().storageState() });
   phone.on("pageerror", (e) => errors.push(e.message));
   await phone.route("**/api/stream**", (route) =>
     route.fulfill(sse(hostsEvent, workspacesEvent, { type: "snapshot", generation: "gen-1", seq: 1, agents: [summary("alpha", [])] })),
@@ -503,10 +505,7 @@ try {
     route.fulfill(sse({ type: "ops", ops: [{ type: "reset", epoch: "e", hasOlder: false, startCursor: null, rows: [] }] })),
   );
   await phone.goto(`http://127.0.0.1:${port}`);
-  // Authenticator sign-in is on now; the token remains available as a fallback.
-  await phone.getByRole("button", { name: "Use the access token instead" }).click();
-  await phone.getByLabel("Server access token").fill(readFileSync(join(directory, "token"), "utf8"));
-  await phone.getByRole("button", { name: "Connect", exact: true }).click();
+  // Reuse the fully authenticated session for the independent mobile navigation checks.
   await phone.locator("button.session", { hasText: "alpha conversation" }).click();
   await phone.waitForFunction(() => document.querySelector(".shell.detail-open"));
   await phone.goBack();

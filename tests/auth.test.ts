@@ -76,19 +76,19 @@ test("authenticator enrollment, single-use codes and disabling", () => {
     assert.equal(auth.confirmTotp(owner.session.id, totp(key, step), t0), true);
     assert.ok(auth.totpEnabled());
 
-    assert.equal(auth.login({ code: totp(key, step) }, "b", "x", t0).ok, false, "the enrollment code cannot be replayed");
+    assert.equal(auth.login({ token: "t", code: totp(key, step) }, "b", "x", t0).ok, false, "the enrollment code cannot be replayed");
     const t1 = t0 + 30_000;
-    assert.ok(auth.login({ code: totp(key, step + 1) }, "b", "x", t1).ok);
-    assert.equal(auth.login({ code: totp(key, step + 1) }, "c", "x", t1).ok, false, "each code signs in once");
+    assert.ok(auth.login({ token: "t", code: totp(key, step + 1) }, "b", "x", t1).ok);
+    assert.equal(auth.login({ token: "t", code: totp(key, step + 1) }, "c", "x", t1).ok, false, "each code signs in once");
     assert.equal(auth.disableTotp(totp(key, step + 1), t1), false);
     assert.ok(auth.disableTotp(totp(key, step + 2), t1 + 30_000));
     assert.equal(auth.totpEnabled(), false);
   });
 });
 
-test("code guessing hits a doubling global lockout that never blocks the token", () => {
+test("code guessing with a valid token hits a doubling global lockout across restarts", () => {
   withStore((store) => {
-    const auth = new Auth(store, "t");
+    let auth = new Auth(store, "t");
     let now = 1_700_000_000_000;
     const owner = auth.login({ token: "t" }, "owner", "x", now);
     assert.ok(owner.ok);
@@ -96,14 +96,17 @@ test("code guessing hits a doubling global lockout that never blocks the token",
     assert.ok(auth.confirmTotp(owner.session.id, totp(key, Math.floor(now / 30_000)), now));
     const lockFor = () => {
       // 20 wrong codes from rotating addresses exhaust the global budget.
-      for (let i = 0; i < 20; i++) auth.login({ code: "000000" }, "attacker-" + i, "x", now);
-      const blocked = auth.login({ code: "000000" }, "fresh", "x", now);
+      for (let i = 0; i < 20; i++) auth.login({ token: "t", code: "not-a-code" }, "attacker-" + i, "x", now);
+      const blocked = auth.login({ token: "t", code: "not-a-code" }, "fresh", "x", now);
       assert.ok(!blocked.ok && blocked.status === 429);
       return blocked.retryAfter!;
     };
     const first = lockFor();
     assert.ok(Math.abs(first - 15 * 60) <= 1, "first lock: 15 minutes");
-    assert.ok(auth.login({ token: "t" }, "owner", "x", now).ok, "the owner still signs in with the token");
+    assert.equal(auth.login({ token: "t" }, "owner", "x", now).ok, false, "the token cannot bypass the second factor");
+    auth = new Auth(store, "t");
+    const restored = auth.login({ token: "t", code: "000000" }, "new-ip", "x", now);
+    assert.ok(!restored.ok && restored.status === 429 && restored.retryAfter === first, "restart retains the global lockout");
     now += first * 1000 + 1;
     const second = lockFor();
     assert.ok(Math.abs(second - 30 * 60) <= 1, "second lock doubles");
@@ -114,5 +117,48 @@ test("code guessing hits a doubling global lockout that never blocks the token",
       assert.ok(next <= 24 * 3600);
     }
     assert.equal(lockFor(), 24 * 3600, "capped at a day");
+  });
+});
+
+
+test("TOTP is a second factor: neither credential alone works or consumes a valid code", () => {
+  withStore(store => {
+    const auth = new Auth(store, "t");
+    const now = 1_700_000_000_000;
+    const owner = auth.login({ token: "t" }, "owner", "x", now);
+    const other = auth.login({ token: "t" }, "other", "x", now);
+    assert.ok(owner.ok && other.ok);
+    const key = base32Decode(auth.beginTotp(owner.session.id, now).secret);
+    const step = Math.floor(now / 30_000);
+    assert.ok(auth.confirmTotp(owner.session.id, totp(key, step), now));
+    assert.ok(auth.verify(owner.secret, now), "enrolling session proves both factors");
+    assert.equal(auth.verify(other.secret, now), null, "other token-only sessions are revoked");
+    assert.throws(() => auth.beginTotp(owner.session.id, now), /Disable/);
+    const code = totp(key, step + 1), next = now + 30_000;
+    for (let i = 0; i < 30; i++) {
+      assert.equal(auth.login({ code }, `no-token-${i}`, "x", next).ok, false);
+      assert.equal(auth.login({ token: "wrong", code }, `bad-token-${i}`, "x", next).ok, false);
+    }
+    assert.equal(auth.login({ token: "t" }, "missing-code", "x", next).ok, false);
+    assert.equal(store.sessions().length, 1);
+    assert.ok(auth.login({ token: "t", code }, "owner", "x", next).ok, "unauthenticated guessing does not consume a code or lock its budget");
+    assert.equal(auth.login({ token: "t", code }, "replay", "x", next).ok, false);
+  });
+});
+
+test("upgrading legacy TOTP revokes old sessions exactly once", () => {
+  withStore(store => {
+    const old = new Auth(store, "t");
+    const now = 1_700_000_000_000;
+    const session = old.login({ token: "t" }, "owner", "x", now);
+    assert.ok(session.ok);
+    const key = Buffer.from("12345678901234567890");
+    store.setSetting("totp_secret", base32Encode(key));
+    store.setSetting("auth_policy", null);
+    const upgraded = new Auth(store, "t");
+    assert.equal(upgraded.verify(session.secret, now), null);
+    const replacement = upgraded.login({ token: "t", code: totp(key, Math.floor(now / 30_000)) }, "owner", "x", now);
+    assert.ok(replacement.ok);
+    assert.ok(new Auth(store, "t").verify(replacement.secret, now), "subsequent restarts retain verified sessions");
   });
 });

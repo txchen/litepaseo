@@ -226,7 +226,7 @@ onMounted(() => {
           <div class="grow">
             <div class="row-title">Authenticator code</div>
             <div class="row-sub">
-              {{ totpEnabled ? "On. Sign in with a 6-digit code from your authenticator app." : "Sign in with a 6-digit code instead of the long access token." }}
+              {{ totpEnabled ? "On. Sign in with your access token and a 6-digit authenticator code." : "Require an authenticator code in addition to your access token. Other browsers will need to sign in again." }}
             </div>
           </div>
           <button v-if="!totpEnabled && !setup" class="btn btn-outline" :disabled="securityBusy" @click="beginTotp">Set up</button>

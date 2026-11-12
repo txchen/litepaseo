@@ -15,7 +15,7 @@ logs, the runtime lock and the local control socket. It is owner-only (0700,
 files 0600). Treat the directory and its backups as credentials.
 Conversation history stays on the daemons; drafts stay in browser storage.
 
-Browsers sign in with an access token or optional authenticator code and receive
+Browsers sign in with an access token plus an authenticator code when TOTP is enabled and receive
 an HttpOnly session cookie. Daemon credentials stay on the server. Bind and port
 are controlled by `LITEPASEO_BIND` (default `127.0.0.1`) and `LITEPASEO_PORT`
 (default `8787`). HTTPS ingress and tunnel configuration are managed separately.
@@ -29,7 +29,7 @@ instance is stopped.
 Open the console over HTTPS (for example your Cloudflare tunnel address); browsers only allow installation and push notifications on secure origins.
 
 1. **Sign in once.** The browser receives an HttpOnly session cookie (30 days, extended while in use). Review or revoke devices under **Settings → Signed-in devices**.
-2. **Optional: authenticator sign-in.** **Settings → Authenticator code → Set up** shows a QR code for any TOTP app; afterwards the sign-in page asks for a 6-digit code. Codes are single-use, and guessing is limited server-wide with a lockout that doubles up to 24 hours. The access token always remains a working fallback, and it is not affected by that lockout. Putting Cloudflare Access in front is still the strongest option.
+2. **Optional: two-factor sign-in.** **Settings → Authenticator code → Set up** shows a QR code for a TOTP app. Once enabled, new logins require **both the access token and a 6-digit code**. Codes alone, tokens alone and bare Bearer API tokens cannot bypass this requirement. Code guesses are checked only after the token is valid, are single-use, and have per-client limits plus a persistent server-wide lockout that doubles up to 24 hours. Enabling TOTP signs out other browsers; upgrading from the old code-only implementation signs out existing browsers once. Re-enable notifications on devices after signing in again. Lost authenticator access must be recovered from the server shell with `litepaseo totp-reset`.
 3. **Install.** Android/desktop Chrome: **Settings → Install**, or the browser's install menu. iPhone/iPad: Safari → Share → **Add to Home Screen**, then open LitePaseo from the Home Screen. On iOS, push only works in the Home Screen app (iOS 16.4+).
 4. **Turn on notifications** in **Settings → Notifications**: one push when an agent needs your input (permission or question), and one when a turn finishes or fails. A push is not sent to the signed-in device currently viewing that conversation; other subscribed devices still receive it. Tapping it opens that session. The app icon shows how many sessions are waiting.
 

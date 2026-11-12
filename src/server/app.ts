@@ -144,7 +144,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
   app.use("/api/*", async (c, next) => {
     c.header("Cache-Control", "no-store");
     const bearer = c.req.header("authorization")?.replace(/^Bearer /, "");
-    if (bearer && !PUBLIC_API.has(c.req.path) && auth.checkToken(bearer)) {
+    if (bearer && !PUBLIC_API.has(c.req.path) && !auth.totpEnabled() && auth.checkToken(bearer)) {
       c.set("session", null);
       return next();
     }
@@ -174,7 +174,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
   app.post("/api/login", async (c) => {
     const input = z
       .object({ token: z.string().min(1).max(200).optional(), code: z.string().regex(/^\d{6}$/).optional() })
-      .refine((x) => !!x.token !== !!x.code)
+      .refine((x) => !!x.token || !!x.code)
       .parse(await c.req.json());
     const userAgent = c.req.header("user-agent") ?? "";
     const label =
@@ -230,6 +230,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
   };
   app.post("/api/totp/setup", async (c) => {
     const session = requireSession(c.get("session"));
+    if (auth.totpEnabled()) return c.json({ error: "Disable the current authenticator before replacing it." }, 409);
     const { secret, uri } = auth.beginTotp(session.id);
     const qr = await QRCode.toString(uri, { type: "svg", margin: 1, errorCorrectionLevel: "M" });
     return c.json({ secret, uri, qr: "data:image/svg+xml;base64," + Buffer.from(qr).toString("base64") });
@@ -357,7 +358,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
     }, HOST_FLUSH_MS);
   });
   const streamValidity = (session: LoginSession | null) =>
-    session ? () => auth.stillValid(session.id) : () => true;
+    session ? () => auth.stillValid(session.id) : () => !auth.totpEnabled();
   app.get("/api/stream", (c) => {
     const since = Number(c.req.query("since"));
     const resumable =

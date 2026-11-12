@@ -57,7 +57,8 @@ litepaseo token
 ```
 
 1. Open **http://127.0.0.1:8787** on the machine running LitePaseo.
-2. Sign in with the access token printed by `litepaseo token`.
+2. Sign in with the access token printed by `litepaseo token`. If TOTP is enabled,
+   enter your authenticator code as well.
 3. Open **Hosts** and add your daemon using a connection URL, pairing offer, or
    SSH target supported by the Paseo SDK.
 4. Open an existing conversation or create a new session.
@@ -165,7 +166,7 @@ To test a local npm installation:
 ```sh
 npm run build
 npm pack
-npm install --global ./litepaseo-0.1.0.tgz
+npm install --global ./litepaseo-0.1.1.tgz
 litepaseo start
 ```
 

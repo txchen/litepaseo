@@ -60,7 +60,7 @@ async function main() {
     console.log(
       [
         "LitePaseo: start | serve | status | stop | restart | logs | token | totp-reset | signout-all | backup <directory> | restore <directory> | service print|install|uninstall|status|start|stop|restart",
-        "  token        print the access token (sign-in fallback)",
+        "  token        print the access token (required for sign-in)",
         "  totp-reset   turn off authenticator sign-in (lost phone)",
         "  signout-all  revoke every signed-in browser and its notifications",
         `Data: ${directory}`,

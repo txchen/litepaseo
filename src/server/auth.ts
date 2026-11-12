@@ -6,12 +6,9 @@ export const SESSION_TTL_MS = 30 * 24 * 3600_000;
 const TOUCH_INTERVAL_MS = 3600_000;
 const TOTP_PERIOD_S = 30;
 const TOTP_DIGITS = 6;
-/**
- * Code guessing is the only feasible attack (a 6-digit code, ±1 step, is ~1 in 333k), so code
- * attempts get a server-wide budget whose lockout doubles each time it is exhausted (15 min up
- * to 24 h, reset by a successful sign-in): roughly 20 guesses a day, decades to brute force.
- * The 256-bit access token cannot be guessed, so it is exempt from that global lock: someone
- * spamming bad codes can never lock the owner out of the token path.
+/** Only clients that know the access token can reach TOTP verification.
+ * Code attempts have a persistent server-wide budget across IPs and restarts.
+ * Exhausting it doubles the lockout from 15 minutes to at most 24 hours.
  */
 const WINDOW_MS = 15 * 60_000;
 const MAX_CODE_FAILURES_PER_CLIENT = 5;
@@ -86,7 +83,7 @@ export type LoginResult =
   | { ok: false; status: 401 | 429; retryAfter?: number };
 
 /**
- * Login and sessions. A browser signs in once, with the access token or an authenticator code,
+ * Login and sessions. A browser signs in once, with the access token and, when enabled, an authenticator code,
  * and receives an opaque session secret (stored only as a hash). Sessions are listed and
  * revocable; revoking one also drops the push subscriptions it registered.
  */
@@ -101,6 +98,17 @@ export class Auth {
   constructor(store: Store, token: string) {
     this.store = store;
     this.token = token;
+    const saved = store.setting("totp_login_limit");
+    if (saved) this.global = JSON.parse(saved);
+    // Old versions issued sessions for a code alone. Invalidate them once.
+    if (store.setting("auth_policy") !== "token-plus-totp-v1") {
+      store.db.exec("BEGIN IMMEDIATE");
+      try {
+        if (this.totpEnabled()) store.revokeSessions();
+        store.setSetting("auth_policy", "token-plus-totp-v1");
+        store.db.exec("COMMIT");
+      } catch (error) { store.db.exec("ROLLBACK"); throw error; }
+    }
   }
 
   totpEnabled() {
@@ -113,23 +121,26 @@ export class Auth {
   }
 
   login(input: { token?: string; code?: string }, client: string, label: string, now = Date.now()): LoginResult {
-    const usesCode = !input.token;
-    const limited = this.limited(client, usesCode, now);
-    if (limited) return { ok: false, status: 429, retryAfter: limited };
-    let ok = false;
-    if (input.token) ok = this.checkToken(input.token);
-    else if (input.code) {
-      const secret = this.store.setting("totp_secret");
-      const step = secret ? matchTotp(base32Decode(secret), input.code, now) : null;
-      // Each code works once: an observed code cannot be replayed within its window.
-      ok = step !== null && this.store.advanceSetting("totp_last_step", step);
-    }
-    if (!ok) {
-      this.fail(client, usesCode, now);
+    const tokenLimit = this.limited(client, false, now);
+    if (tokenLimit) return { ok: false, status: 429, retryAfter: tokenLimit };
+    // Never test or consume a code until the primary credential is valid.
+    if (!input.token || !this.checkToken(input.token)) {
+      this.fail(client, false, now);
       return { ok: false, status: 401 };
     }
-    (usesCode ? this.codeFailures : this.tokenFailures).delete(client);
-    if (usesCode) this.global = { count: 0, reset: 0, lockMs: WINDOW_MS };
+    const totpSecret = this.store.setting("totp_secret");
+    if (totpSecret) {
+      const codeLimit = this.limited(client, true, now);
+      if (codeLimit) return { ok: false, status: 429, retryAfter: codeLimit };
+      const step = matchTotp(base32Decode(totpSecret), input.code ?? "", now);
+      if (step === null || !this.store.advanceSetting("totp_last_step", step)) {
+        this.fail(client, true, now);
+        return { ok: false, status: 401 };
+      }
+      this.codeFailures.delete(client);
+      this.resetCodeLimit();
+    }
+    this.tokenFailures.delete(client);
     const secret = randomBytes(32).toString("base64url");
     const session: LoginSession = {
       id: randomUUID(),
@@ -174,6 +185,7 @@ export class Auth {
   // ---- TOTP enrollment ------------------------------------------------------------------------
 
   beginTotp(sessionId: string, now = Date.now()) {
+    if (this.totpEnabled()) throw new Error("Disable the current authenticator before replacing it");
     const secret = base32Encode(randomBytes(20));
     this.pendingTotp = { secret, sessionId, expires: now + 10 * 60_000 };
     return {
@@ -184,30 +196,51 @@ export class Auth {
 
   /** Enables the pending secret once the user proves their app produces matching codes. */
   confirmTotp(sessionId: string, code: string, now = Date.now()) {
+    if (this.totpEnabled()) return false;
     const pending = this.pendingTotp;
     if (!pending || pending.sessionId !== sessionId || pending.expires < now) return false;
     const step = matchTotp(base32Decode(pending.secret), code, now);
     if (step === null) return false;
-    this.store.setSetting("totp_secret", pending.secret);
-    this.store.setSetting("totp_last_step", String(step));
+    this.store.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.store.setSetting("totp_secret", pending.secret);
+      this.store.setSetting("totp_last_step", String(step));
+      // The enrolling session has now proved both factors; other token-only sessions have not.
+      this.store.db.prepare("DELETE FROM push_subscriptions WHERE session_id<>?").run(sessionId);
+      this.store.db.prepare("DELETE FROM sessions WHERE id<>?").run(sessionId);
+      this.resetCodeLimit();
+      this.store.db.exec("COMMIT");
+    } catch (error) { this.store.db.exec("ROLLBACK"); throw error; }
     this.pendingTotp = null;
     return true;
   }
 
   disableTotp(code: string, now = Date.now()) {
+    if (this.limited("settings", true, now)) return false;
     const secret = this.store.setting("totp_secret");
     const step = secret ? matchTotp(base32Decode(secret), code, now) : null;
-    if (step === null || !this.store.advanceSetting("totp_last_step", step)) return false;
+    if (step === null || !this.store.advanceSetting("totp_last_step", step)) {
+      this.fail("settings", true, now);
+      return false;
+    }
     this.store.setSetting("totp_secret", null);
+    this.resetCodeLimit();
     return true;
   }
 
   // ---- rate limiting --------------------------------------------------------------------------
 
+  private resetCodeLimit() {
+    this.global = { count: 0, reset: 0, lockMs: WINDOW_MS };
+    this.store.setSetting("totp_login_limit", JSON.stringify(this.global));
+  }
+
   private limited(client: string, usesCode: boolean, now: number) {
     if (usesCode && this.global.reset > now && this.global.count >= MAX_CODE_FAILURES_GLOBAL)
       return Math.ceil((this.global.reset - now) / 1000);
-    const entry = (usesCode ? this.codeFailures : this.tokenFailures).get(client);
+    const map = usesCode ? this.codeFailures : this.tokenFailures;
+    if (!map.has(client) && map.size >= 10_000) client = "overflow";
+    const entry = map.get(client);
     const max = usesCode ? MAX_CODE_FAILURES_PER_CLIENT : MAX_TOKEN_FAILURES_PER_CLIENT;
     if (entry && entry.reset > now && entry.count >= max) return Math.ceil((entry.reset - now) / 1000);
     return 0;
@@ -222,11 +255,12 @@ export class Auth {
         this.global.reset = now + this.global.lockMs;
         this.global.lockMs = Math.min(this.global.lockMs * 2, MAX_LOCK_MS);
       } else if (this.global.reset <= now) this.global.reset = now + WINDOW_MS;
+      this.store.setSetting("totp_login_limit", JSON.stringify(this.global));
     }
     const map = usesCode ? this.codeFailures : this.tokenFailures;
+    if (!map.has(client) && map.size >= 10_000) client = "overflow";
     let entry = map.get(client);
     if (!entry || entry.reset <= now) map.set(client, (entry = { count: 0, reset: now + WINDOW_MS }));
     entry.count++;
-    if (map.size > 10_000) map.clear();
   }
 }

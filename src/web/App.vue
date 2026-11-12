@@ -47,7 +47,6 @@ const token = ref(""),
   code = ref(""),
   /** null until the server says how this browser may sign in. */
   authInfo = ref<{ authenticated: boolean; totp: boolean } | null>(null),
-  useToken = ref(false),
   authenticated = ref(false),
   error = ref(""),
   busy = ref(false);
@@ -286,8 +285,8 @@ async function loadAuth() {
 }
 async function login() {
   await action(async () => {
-    const totp = authInfo.value?.totp && !useToken.value;
-    await api("/login", "POST", totp ? { code: code.value.trim() } : { token: token.value.trim() });
+    await api("/login", "POST", { token: token.value.trim(), ...(authInfo.value?.totp ? { code: code.value.trim() } : {}) });
+    token.value = code.value = "";
     await enter();
   });
 }
@@ -310,7 +309,6 @@ async function enter() {
 }
 function onCodeInput() {
   code.value = code.value.replace(/\D/g, "").slice(0, 6);
-  if (code.value.length === 6 && !busy.value) void login();
 }
 // The service worker asks an already-open app to show the tapped session.
 navigator.serviceWorker?.addEventListener("message", (event) => {
@@ -822,32 +820,19 @@ onUnmounted(() => {
     <form v-if="authInfo" class="login-card" @submit.prevent="login">
       <div class="brand brand-large"><span class="brand-mark"></span>LitePaseo</div>
       <p class="login-lede">All your Paseo hosts, one fast console.</p>
-      <template v-if="authInfo.totp && !useToken">
+      <label class="field">
+        <span>Server access token</span>
+        <input v-model="token" type="password" autocomplete="off" required autofocus />
+      </label>
+      <p class="hint">Run <code>litepaseo token</code> on the server to print it.</p>
+      <template v-if="authInfo.totp">
         <label class="field">
           <span>Authenticator code</span>
-          <input
-            v-model="code"
-            class="code-input"
-            inputmode="numeric"
-            autocomplete="one-time-code"
-            maxlength="6"
-            placeholder="••••••"
-            required
-            autofocus
-            @input="onCodeInput"
-          />
+          <input v-model="code" class="code-input" inputmode="numeric"
+            autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}"
+            placeholder="••••••" required @input="onCodeInput" />
         </label>
-        <p class="hint">Open your authenticator app. <button type="button" class="link-btn" @click="useToken = true">Use the access token instead</button></p>
-      </template>
-      <template v-else>
-        <label class="field">
-          <span>Server access token</span>
-          <input v-model="token" type="password" autocomplete="off" required autofocus />
-        </label>
-        <p class="hint">
-          Run <code>litepaseo token</code> on the server to print it.
-          <button v-if="authInfo.totp" type="button" class="link-btn" @click="useToken = false">Use a code</button>
-        </p>
+        <p class="hint">Both your access token and a code from your authenticator app are required.</p>
       </template>
       <button class="btn btn-primary btn-block" :disabled="busy">{{ busy ? "Signing in…" : "Connect" }}</button>
       <p v-if="error" class="form-error">{{ error }}</p>

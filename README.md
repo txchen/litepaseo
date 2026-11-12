@@ -76,13 +76,14 @@ installation and push notifications.
 | Command | Purpose |
 | --- | --- |
 | `litepaseo start` | Start in the background |
-| `litepaseo status` | Check readiness and process status |
+| `litepaseo status` | Show state, address, uptime and processes (`--json` for scripts; exits 3 when stopped) |
 | `litepaseo stop` | Stop the background service |
-| `litepaseo restart` | Restart a manually launched instance |
-| `litepaseo logs` | Show recent logs |
+| `litepaseo restart` | Restart a manually launched instance (also after an upgrade) |
+| `litepaseo logs` | Show recent logs (`-n 500` for more, `-f` to follow) |
 | `litepaseo token` | Print the sign-in token |
 | `litepaseo serve` | Run in the foreground |
-| `litepaseo --help` | List commands |
+| `litepaseo version` | Show the installed and running versions (`-v` prints just the number) |
+| `litepaseo --help` | List commands; `litepaseo help <command>` explains one |
 
 For automatic startup, install a systemd user service on Linux or a LaunchAgent
 on macOS:

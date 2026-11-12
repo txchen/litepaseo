@@ -14,7 +14,7 @@ const command = (file, args) => execFileSync(file, args, { env, encoding: 'utf8'
 async function ready(previous) {
   for (let i = 0; i < 100; i++) {
     try {
-      const state = JSON.parse(command(process.execPath, [cli, 'status']));
+      const state = JSON.parse(command(process.execPath, [cli, 'status', '--json']));
       if (state.ready && state.pid !== previous) return state;
     } catch {}
     await new Promise(r => setTimeout(r, 100));

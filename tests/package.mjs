@@ -32,7 +32,8 @@ try {
     ],
     { stdio: "pipe" },
   );
-  assert.match(run("--help"), /start \| serve/);
+  assert.match(run("--help"), /Usage: litepaseo <command>/);
+  assert.match(run("help", "logs"), /--follow/);
   assert.equal(run("--version").trim(), version);
   assert.ok(archive.files.every(file => /^(dist\/|docs\/|README\.md$|package\.json$|LICENSE)/.test(file.path)), "Only release files belong in the tarball");
   run("start");

@@ -18,10 +18,19 @@ test("packaged CLI background readiness, duplicate start, HTTP authentication an
       encoding: "utf8",
       timeout: 15000,
     });
+  /** `status` exits 3 when nothing runs; that is an answer, not a failure. */
+  const status = () => {
+    try {
+      return run("status", "--json");
+    } catch (error: any) {
+      if (error.status === 3) return String(error.stdout);
+      throw error;
+    }
+  };
   try {
-    const first = JSON.parse(run("start").split("\n")[0]);
+    const first = JSON.parse(run("start", "--json"));
     assert.equal(first.ready, true);
-    const second = JSON.parse(run("start").split("\n")[0]);
+    const second = JSON.parse(run("start", "--json"));
     assert.equal(second.pid, first.pid);
     assert.equal((await fetch(first.url)).status, 200);
     assert.equal((await fetch(first.url + "/api/hosts")).status, 401);
@@ -31,11 +40,12 @@ test("packaged CLI background readiness, duplicate start, HTTP authentication an
         .status,
       200,
     );
-    assert.match(run("status"), /"ready":true/);
+    assert.match(status(), /"ready":true/);
+    assert.equal(JSON.parse(status()).version, JSON.parse(readFileSync("package.json", "utf8")).version);
     process.kill(first.workerPid, "SIGKILL");
     let recovered: any;
     for (let i = 0; i < 60; i++) {
-      recovered = JSON.parse(run("status"));
+      recovered = JSON.parse(status());
       if (recovered.ready && recovered.workerPid !== first.workerPid) break;
       await new Promise(r => setTimeout(r, 100));
     }
@@ -46,7 +56,7 @@ test("packaged CLI background readiness, duplicate start, HTTP authentication an
     // Killing the supervisor releases the kernel lock. Its worker exits on IPC disconnect.
     process.kill(recovered.pid, "SIGKILL");
     await new Promise(r => setTimeout(r, 300));
-    const restarted = JSON.parse(run("start").split("\n")[0]);
+    const restarted = JSON.parse(run("start", "--json"));
     assert.equal(restarted.ready, true);
     assert.notEqual(restarted.pid, first.pid);
     assert.equal((await fetch(restarted.url)).status, 200);
@@ -61,12 +71,9 @@ test("packaged CLI background readiness, duplicate start, HTTP authentication an
     assert.equal(readFileSync(join(restoredHome, "token"), "utf8"), token);
 
   } finally {
-    run("stop");
-    for (let i = 0; i < 50; i++) {
-      if (run("status").includes("Not running")) break;
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    assert.match(run("status"), /Not running/);
+    assert.match(run("stop"), /stopped/);
+    assert.deepEqual(JSON.parse(status()), { running: false });
+    assert.match(run("stop"), /not running/);
     rmSync(directory, { recursive: true, force: true });
   }
 });

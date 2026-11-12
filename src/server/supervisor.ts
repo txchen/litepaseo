@@ -4,6 +4,7 @@ import { existsSync, lstatSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { acquireRuntimeLock } from "./runtime-lock.ts";
 import { RotatingLog } from "./rotating-log.ts";
+import { VERSION } from "./version.ts";
 
 /** Called only while holding the runtime lock; timeouts/permission errors are never proof of death. */
 export async function recoverSocket(path: string) {
@@ -50,6 +51,7 @@ export async function supervise(directory: string, cliPath: string, options: { r
     await recoverSocket(path);
     let child: ChildProcess | null = null, stopping = false, ready = false, url = "", restarts = 0;
     let failure: string | null = null, lastError = "";
+    const startedAt = new Date().toISOString();
     let retry: ReturnType<typeof setTimeout> | undefined;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     let finish!: () => void;
@@ -103,7 +105,7 @@ export async function supervise(directory: string, cliPath: string, options: { r
       socket.setTimeout(2000, () => socket.destroy()); socket.on("error", () => {});
       socket.on("data", chunk => { input += chunk; if (input.length > 64) socket.destroy(); });
       socket.on("end", () => {
-        if (input === "status") socket.end(JSON.stringify({ ready, url, pid: process.pid, workerPid: child?.pid ?? null, restarts, ...(lastError ? { lastError } : {}) }) + "\n");
+        if (input === "status") socket.end(JSON.stringify({ ready, url, version: VERSION, startedAt, pid: process.pid, workerPid: child?.pid ?? null, restarts, ...(lastError ? { lastError } : {}) }) + "\n");
         else if (input === "stop") { socket.end("Stopping\n"); stop(); }
         else socket.end("Unknown command\n");
       });

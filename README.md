@@ -54,7 +54,8 @@ package, with no separate database service to deploy.
 - Attach files and images, with previews and upload status.
 - Dictate messages through one OpenAI-compatible speech-to-text service set up in
   LitePaseo, rather than configuring each Paseo host.
-- Keep a Todo / Doing / Done board linked to conversations.
+- Keep a Todo / Doing / Done board of tasks with Markdown descriptions and comments,
+  each optionally linked to a conversation.
 - Receive notifications when an agent needs input or finishes, and install the
   console as a phone or desktop web app.
 - Keep drafts across reloads and check uncertain message delivery without

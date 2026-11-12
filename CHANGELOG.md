@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.1
 
 ### Task board
 
@@ -12,6 +12,9 @@
   comments, change the column or the linked conversation, or delete the task. Cards show a
   line of the description and the comment count.
 - Task edits are saved per task, so two open tabs no longer overwrite each other's changes.
+
+**Upgrading from 0.4.0:** existing tasks keep their columns and links. A task that was linked
+automatically to the wrong conversation can now be unlinked from its card.
 
 ## 0.4.0
 

@@ -3134,6 +3134,20 @@ h3 {
   width: 28px;
   height: 28px;
 }
+/* Some host is not connected: the only reason to look at Hosts day to day. */
+.foot-hosts {
+  position: relative;
+}
+.foot-alert {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 0 1.5px var(--sidebar);
+}
 .icon-btn.chosen {
   background: var(--selected);
   color: var(--fg);

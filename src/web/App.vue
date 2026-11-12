@@ -1109,14 +1109,8 @@ onUnmounted(() => {
           />
           <kbd class="hide-sm">{{ isMac ? "⌘K" : "Ctrl K" }}</kbd>
         </label>
-        <button class="side-row" :class="{ chosen: tab === 'schedules' }" @click="openTab('schedules')">
-          <Icon name="clock" :size="15" />Schedules
-        </button>
         <button class="side-row" :class="{ chosen: tab === 'board' }" @click="openTab('board')">
           <Icon name="board" :size="15" />Kanban
-        </button>
-        <button class="side-row" :class="{ chosen: tab === 'hosts' }" @click="openTab('hosts')">
-          <Icon name="server" :size="15" />Hosts<span class="count">{{ connectedHosts }}/{{ hosts.length }}</span>
         </button>
       </nav>
       <div class="side-section">
@@ -1174,6 +1168,25 @@ onUnmounted(() => {
         <span class="live" :class="'is-' + directoryState" :title="'Directory stream: ' + directoryState">
           <span class="live-dot"></span>{{ liveLabel }}
         </span>
+        <button
+          class="icon-btn"
+          :class="{ chosen: tab === 'schedules' }"
+          title="Schedules"
+          aria-label="Schedules"
+          @click="openTab('schedules')"
+        >
+          <Icon name="clock" :size="15" />
+        </button>
+        <button
+          class="icon-btn foot-hosts"
+          :class="{ chosen: tab === 'hosts' }"
+          :title="`Hosts: ${connectedHosts} of ${hosts.length} connected`"
+          :aria-label="`Hosts, ${connectedHosts} of ${hosts.length} connected`"
+          @click="openTab('hosts')"
+        >
+          <Icon name="server" :size="15" />
+          <span v-if="connectedHosts < hosts.length" class="foot-alert" aria-hidden="true"></span>
+        </button>
         <button
           class="icon-btn"
           :title="'Theme: ' + theme + ' (click to change)'"

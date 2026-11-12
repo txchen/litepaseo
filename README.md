@@ -11,11 +11,7 @@ your browser busy.
 
 [Get started](#install-and-start) · [Performance comparison](docs/performance-plan.md) · [HTTPS & remote access](#https--remote-access)
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme-dark.png" />
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/readme-light.png" />
-  <img src="docs/images/readme-light.png" alt="LitePaseo showing agent conversations grouped by workspace, a code review conversation, usage indicators, and model, effort, and access controls in the composer." width="1280" />
-</picture>
+<img src="docs/images/readme-dark.png" alt="LitePaseo in dark mode showing agent conversations grouped by workspace, a code review conversation, usage indicators, and model, effort, and access controls in the composer." width="1280" />
 
 *Your workspaces, conversations, and agent controls in one view. Shown with demo data.*
 

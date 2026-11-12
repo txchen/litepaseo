@@ -60,10 +60,10 @@ test("projects and their sessions are ordered by most recent use, with counters"
   const beta = store.groupedRows(0, 1)[0];
   assert.ok(beta.kind === "group" && beta.group.attention === 1 && beta.group.running === 0);
 
-  store.toggleGroup("beta");
+  store.toggleGroup("h\nbeta");
   assert.deepEqual(describe(store.groupedRows(0, 2 * G)), ["[beta+]@0", "[Alpha]@" + G]);
   assert.equal(store.groupedHeight, 2 * G + A);
-  store.toggleGroup("beta");
+  store.toggleGroup("h\nbeta");
 
   // Using an Alpha session moves Alpha to the top; moving its last session away removes it.
   store.apply({ type: "changes", generation: "g", seq: 2, changes: [{ key: "h:a2", value: agent("a2", "Alpha", { activityAt: 5 }) }] });
@@ -220,4 +220,22 @@ test("switching hosts does not rescan the directory", () => {
   assert.ok(
     store.groupedRows(0, 2000).every((r) => r.kind === "group" || r.item.hostId === "h2"),
   );
+});
+
+test("the same project name on two hosts stays two projects", () => {
+  const store = new DirectoryStore<AgentSummary>();
+  store.apply({
+    type: "snapshot",
+    generation: "g",
+    seq: 1,
+    agents: [
+      agent("a1", "app", { hostId: "mac", activityAt: 3 }),
+      agent("a2", "App", { hostId: "build", activityAt: 2 }),
+      agent("a3", "app", { hostId: "mac", activityAt: 1 }),
+    ],
+  });
+  const groups = store.groupedRows(0, 1000).filter((r) => r.kind === "group");
+  assert.equal(groups.length, 2);
+  assert.deepEqual(groups.map((r) => r.kind === "group" && [...r.group.hosts.keys()]), [["mac"], ["build"]]);
+  assert.deepEqual(groups.map((r) => r.kind === "group" && r.group.items.size), [2, 1]);
 });

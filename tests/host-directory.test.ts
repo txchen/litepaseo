@@ -260,3 +260,20 @@ test("turn activity remains explicit while waiting for permission or initializin
   assert.equal(s({ status: "idle", activeTurn: { turnId: "t", startedAt: new Date().toISOString() },
     pendingPermissions: [{ id: "p", name: "Bash", kind: "tool" }] }).turnActive, true);
 });
+
+test("a running turn carries its start time for the in-chat elapsed timer", async () => {
+  const { summarize } = await import("../src/server/host-directory.ts");
+  const s = (extra: Record<string, unknown>) => summarize("h", agent("a", extra));
+  const started = "2026-01-01T00:00:20Z";
+  assert.equal(s({ status: "running", activeTurn: { turnId: "t", startedAt: started } }).turnStartedAt, Date.parse(started));
+  assert.equal(s({ status: "running", activeTurn: { turnId: "t", startedAt: null }, lastUserMessageAt: started }).turnStartedAt, Date.parse(started));
+  assert.equal(s({ status: "running" }).turnStartedAt, null);
+  assert.equal(s({ status: "idle", lastUserMessageAt: started }).turnStartedAt, null);
+});
+
+test("elapsed time reads like Paseo's turn timer", async () => {
+  const { formatElapsed } = await import("../src/web/elapsed.ts");
+  assert.equal(formatElapsed(-5000), "0:00");
+  assert.equal(formatElapsed(472_900), "7:52");
+  assert.equal(formatElapsed(3_723_000), "1:02:03");
+});

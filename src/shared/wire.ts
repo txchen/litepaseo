@@ -38,6 +38,15 @@ export interface AgentSummary {
   projectKey: string | null;
   /** Milliseconds: when the session's latest turn ended (held while a turn runs). Sort key. */
   activityAt: number;
+  /** Milliseconds (daemon clock): when the running turn started; null when idle or unknown. */
+  turnStartedAt?: number | null;
+  /** Current model id, effective thinking option and mode, as the composer shows them. */
+  model?: string | null;
+  thinking?: string | null;
+  modeId?: string | null;
+  /** Context window use from the latest turn (tokens), when the provider reports it. */
+  contextUsed?: number | null;
+  contextMax?: number | null;
   /** Needs the user's input: a pending permission or question (drives push and the badge). */
   attention: boolean;
   state: AgentState;
@@ -160,6 +169,25 @@ export interface ProviderOption {
     thinking: { id: string; label: string }[];
     defaultThinkingId: string | null;
   }[];
+}
+
+/** A provider feature the composer can switch (Paseo's AgentFeature: toggle or select). */
+export type AgentFeatureOption =
+  | { type: "toggle"; id: string; label: string; tooltip?: string; value: boolean }
+  | { type: "select"; id: string; label: string; tooltip?: string; value: string | null; options: { id: string; label: string }[] };
+
+/** What the composer can change on a running agent: loaded on demand, not streamed. */
+export interface AgentConfigOptions {
+  models: { id: string; label: string; thinking: { id: string; label: string }[]; defaultThinkingId: string | null }[];
+  modes: { id: string; label: string; description?: string }[];
+  features: AgentFeatureOption[];
+}
+
+export interface AgentConfigChange {
+  model?: string;
+  thinkingOptionId?: string;
+  modeId?: string;
+  feature?: { id: string; value: string | boolean };
 }
 
 export interface ProjectOption {

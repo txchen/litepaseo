@@ -22,8 +22,12 @@ import AgentBoard from "./AgentBoard.vue";
 import UsagePanel, { type UsageReport } from "./UsagePanel.vue";
 import { SUGGESTIONS } from "./suggestions.ts";
 import type { AgentSummary } from "../shared/wire.ts";
-import { registerServiceWorker, setBadge } from "./pwa.ts";
+import { registerServiceWorker, setBadge, setFavicon } from "./pwa.ts";
 import { preloadMarkstream } from "./markstream-loader.ts";
+import { formatElapsed } from "./elapsed.ts";
+import AgentControls from "./AgentControls.vue";
+import DictationButton from "./DictationButton.vue";
+import { TIMELINE_CONTEXT, turnFooters, type TimelineContext } from "./timeline-display.ts";
 
 type Card = {
   id: string;
@@ -35,6 +39,41 @@ type Card = {
 type Tab = "chat" | "board" | "hosts" | "settings";
 const COLUMNS = ["Todo", "Doing", "Done"] as const;
 const coarsePointer = matchMedia("(pointer: coarse)").matches;
+// Resizable sidebar (desktop): width persists per browser.
+const SIDEBAR_MIN = 220,
+  SIDEBAR_MAX = 520,
+  SIDEBAR_DEFAULT = 300;
+const clampSidebar = (w: number) => Math.round(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, w)));
+const sidebarWidth = ref(clampSidebar(Number(localStorage.getItem("litepaseo-sidebar-width")) || SIDEBAR_DEFAULT));
+const resizing = ref(false);
+function setSidebarWidth(w: number) {
+  sidebarWidth.value = clampSidebar(w);
+  localStorage.setItem("litepaseo-sidebar-width", String(sidebarWidth.value));
+}
+function startResize(event: PointerEvent) {
+  if (event.button !== 0) return;
+  const handle = event.currentTarget as HTMLElement;
+  const startX = event.clientX,
+    startW = sidebarWidth.value;
+  handle.setPointerCapture(event.pointerId);
+  resizing.value = true;
+  let frame = 0;
+  const move = (e: PointerEvent) => {
+    if (frame) cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => (sidebarWidth.value = clampSidebar(startW + e.clientX - startX)));
+  };
+  const end = () => {
+    cancelAnimationFrame(frame);
+    resizing.value = false;
+    setSidebarWidth(sidebarWidth.value);
+    handle.removeEventListener("pointermove", move);
+    handle.removeEventListener("pointerup", end);
+    handle.removeEventListener("pointercancel", end);
+  };
+  handle.addEventListener("pointermove", move);
+  handle.addEventListener("pointerup", end);
+  handle.addEventListener("pointercancel", end);
+}
 function readJson<T>(key: string, fallback: T): T {
   try {
     return (JSON.parse(localStorage.getItem(key) ?? "null") as T) ?? fallback;
@@ -88,9 +127,51 @@ const composer = new ComposerStore(() => localStorage);
 const attachments = new AttachmentStore();
 const attachmentPanel = ref<InstanceType<typeof AttachmentPanel> | null>(null);
 const selectedAttachments = computed(() => selectedKey.value ? attachments.get(selectedKey.value) : []);
+/** Short-lived composer messages (dictation, model switches): cleared after a while or on dismiss. */
+const composerNotice = ref("");
+let composerNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+function showComposerNotice(text: string) {
+  composerNotice.value = text;
+  clearTimeout(composerNoticeTimer);
+  composerNoticeTimer = setTimeout(() => (composerNotice.value = ""), 8000);
+}
+/** Dictated text goes where the cursor is, with spacing that reads naturally. */
+function insertDictation(text: string) {
+  const el = composerElement.value;
+  const current = prompt.value;
+  const start = el && document.activeElement === el ? el.selectionStart : current.length;
+  const end = el && document.activeElement === el ? el.selectionEnd : current.length;
+  const before = current.slice(0, start), after = current.slice(end);
+  const lead = before && !/\s$/.test(before) ? " " : "";
+  prompt.value = before + lead + text + after;
+  void nextTick(() => {
+    if (!el) return;
+    el.focus();
+    const at = (before + lead + text).length;
+    el.setSelectionRange(at, at);
+    autosize();
+  });
+}
+const composerHasContent = computed(() => !!prompt.value.trim() || selectedAttachments.value.length > 0);
+const dragging = ref(false);
+function onComposerDragLeave(event: DragEvent) {
+  const form = event.currentTarget as HTMLElement;
+  if (!form.contains(event.relatedTarget as Node | null)) dragging.value = false;
+}
 const attachmentsReady = computed(() => selectedAttachments.value.every(e => !!e.id && !e.uploading && !e.error));
+/** Pasted screenshots and files become attachments; plain text pastes stay text. */
 function pasteFiles(event: ClipboardEvent) {
-  if (event.clipboardData?.files.length) { event.preventDefault(); void attachmentPanel.value?.addFiles(event.clipboardData.files); }
+  const data = event.clipboardData;
+  if (!data) return;
+  let files = Array.from(data.files);
+  if (!files.length)
+    files = Array.from(data.items)
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => !!file);
+  if (!files.length) return;
+  event.preventDefault();
+  void attachmentPanel.value?.addFiles(files);
 }
 const prompt = computed({
   get: () => selectedKey.value ? composer.state(selectedKey.value).text : "",
@@ -187,6 +268,22 @@ const activeProject = computed(() => {
   return cwd.replace(/\/+$/, "").split("/").pop() || cwd;
 });
 const running = computed(() => active.value?.status === "running");
+/** Live-tail working indicator above the composer, like Paseo's in-chat spinner. */
+const working = computed(() => !historyRows.value && active.value?.state === "running");
+// A 1 s clock runs only while the open agent works and the page is visible.
+const clockNow = ref(Date.now());
+const turnStartedAt = computed(() => (working.value ? active.value?.turnStartedAt ?? null : null));
+const elapsed = computed(() => (turnStartedAt.value ? formatElapsed(clockNow.value - turnStartedAt.value) : ""));
+let elapsedTimer: ReturnType<typeof setInterval> | undefined;
+function syncElapsedClock() {
+  clearInterval(elapsedTimer);
+  elapsedTimer = undefined;
+  if (!turnStartedAt.value || document.hidden) return;
+  clockNow.value = Date.now();
+  elapsedTimer = setInterval(() => { clockNow.value = Date.now(); }, 1000);
+}
+watch(turnStartedAt, syncElapsedClock, { immediate: true });
+document.addEventListener("visibilitychange", syncElapsedClock);
 const visibleRows = computed(() => {
   if (historyRows.value) return historyRows.value;
   const store = timeline.value;
@@ -196,6 +293,46 @@ const visibleRows = computed(() => {
 const markdownSettled = computed(() => directoryState.value === "live"
   && hostStates.value.get(active.value?.hostId ?? "") === "connected"
   && active.value?.turnActive === false);
+// Finished turns get a footer (copy, completion time, duration), as in Paseo. Recomputed per
+// timeline flush over the rendered window only (≤ RENDER_WINDOW rows).
+const turnMeta = computed(() => {
+  const rows = visibleRows.value.map((r) => r.row.value);
+  const a = active.value;
+  const lastFinished = (!!historyRows.value && historyNewer.value.length > 0) || (!!a && !(a.turnActive ?? a.state === "running"));
+  return turnFooters(rows, lastFinished);
+});
+const copiedTurn = ref<number | null>(null);
+let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+async function copyTurn(seqStart: number, messages: number[]) {
+  const wanted = new Set(messages);
+  const text = visibleRows.value
+    .filter((r) => wanted.has(r.seqStart))
+    .map((r) => String(r.row.value.item.text ?? "").trim())
+    .filter(Boolean)
+    .join("\n\n");
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    copiedTurn.value = seqStart;
+    clearTimeout(copiedTimer);
+    copiedTimer = setTimeout(() => (copiedTurn.value = null), 1500);
+  } catch {
+    /* clipboard denied (insecure origin): nothing to do */
+  }
+}
+const timelineContext = shallowRef<TimelineContext>({ base: "", cwd: "" });
+watch(active, (a) => {
+  const base = a ? "/api" + path(a) : "";
+  if (base !== timelineContext.value.base || (a?.cwd ?? "") !== timelineContext.value.cwd)
+    timelineContext.value = { base, cwd: a?.cwd ?? "" };
+}, { immediate: true });
+provide(TIMELINE_CONTEXT, timelineContext);
+/** Clicking an image in a message opens it full size. */
+const lightbox = ref<string | null>(null);
+function onTimelineClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  if (target instanceof HTMLImageElement && target.closest(".prose")) lightbox.value = target.currentSrc || target.src;
+}
 const lastTimelineSeq = computed(() => {
   const store = timeline.value;
   store.membership.value;
@@ -366,12 +503,22 @@ let followLatest = true;
 watch(timelineElement, (element, _previous, cleanup) => {
   const inner = element?.querySelector(".timeline-inner");
   if (!element || !inner) return;
-  const onScroll = () => { followLatest = nearBottom(); };
+  // Only the reader scrolling up leaves the tail. A programmatic scroll can land short of the
+  // bottom when content grows before its scroll event is dispatched; that must not unfollow.
+  let lastTop = element.scrollTop;
+  const onScroll = () => {
+    const top = element.scrollTop;
+    if (nearBottom()) followLatest = true;
+    else if (top < lastTop - 1) followLatest = false;
+    lastTop = top;
+  };
   const observer = new ResizeObserver(() => {
     if (!historyRows.value && followLatest) scrollToBottom();
   });
   element.addEventListener("scroll", onScroll, { passive: true });
   observer.observe(inner);
+  // The viewport shrinks when the composer grows (attachments, multi-line drafts): keep the tail in view.
+  observer.observe(element);
   cleanup(() => { observer.disconnect(); element.removeEventListener("scroll", onScroll); });
 }, { flush: "post" });
 
@@ -431,6 +578,10 @@ const searchInput = ref<HTMLInputElement | null>(null);
 function onGlobalKey(event: KeyboardEvent) {
   const target = event.target as HTMLElement | null;
   const typing = !!target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+  if (event.key === "Escape" && lightbox.value) {
+    lightbox.value = null;
+    return;
+  }
   if ((event.key === "k" && (event.metaKey || event.ctrlKey)) || (event.key === "/" && !typing)) {
     event.preventDefault();
     if (detailOpen.value && compact.matches) closeDetail();
@@ -579,6 +730,11 @@ provide(SUGGESTIONS, {
 const composerSuggestion = computed(() =>
   suggestion.value && suggestion.value.key === active.value?.key && !prompt.value ? suggestion.value.text : "",
 );
+const composerPlaceholder = computed(() => {
+  if (composerSuggestion.value && !coarsePointer) return composerSuggestion.value;
+  if (!running.value) return "Message this agent…";
+  return behavior.value === "steer" ? "Interject to steer the current turn" : "Interrupt and send a new message";
+});
 
 // Usage across hosts, read while the app is visible (the server caches each host for 5 min).
 const usage = shallowRef<UsageReport | null>(null);
@@ -799,12 +955,23 @@ watch(waiting, (count) => {
   setBadge(count);
   document.title = count ? `(${count}) LitePaseo` : "LitePaseo";
 });
+// The tab icon carries a status dot (Paseo's favicon states): needs you > working > unread.
+const tabState = computed(() => {
+  agentDirectory.version.value;
+  if (agentDirectory.waiting) return "attention";
+  if (agentDirectory.allLaneSize("running")) return "running";
+  if (agentDirectory.allLaneSize("review")) return "unread";
+  return "";
+});
+watch(tabState, (state) => setFavicon(state), { immediate: true });
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) void loadUsage();
 });
 onUnmounted(() => {
   clearInterval(usageTimer);
   clearInterval(deliveryTimer);
+  clearInterval(elapsedTimer);
+  document.removeEventListener("visibilitychange", syncElapsedClock);
   attachments.clear();
   window.removeEventListener("storage", onComposerStorage);
   window.removeEventListener("popstate", onPopState);
@@ -818,7 +985,7 @@ onUnmounted(() => {
 <template>
   <div v-if="!authenticated" class="login">
     <form v-if="authInfo" class="login-card" @submit.prevent="login">
-      <div class="brand brand-large"><span class="brand-mark"></span>LitePaseo</div>
+      <div class="brand brand-large"><img class="brand-mark" src="/icons/mark.svg" alt="" width="22" height="22" />LitePaseo</div>
       <p class="login-lede">All your Paseo hosts, one fast console.</p>
       <label class="field">
         <span>Server access token</span>
@@ -839,10 +1006,31 @@ onUnmounted(() => {
     </form>
   </div>
 
-  <div v-else class="shell" :class="{ 'detail-open': detailOpen }">
+  <div
+    v-else
+    class="shell"
+    :class="{ 'detail-open': detailOpen, 'is-resizing': resizing }"
+    :style="{ '--sidebar-w': sidebarWidth + 'px' }"
+  >
     <aside class="sidebar">
+      <div
+        class="sidebar-resize"
+        :class="{ 'is-dragging': resizing }"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar"
+        :aria-valuenow="sidebarWidth"
+        :aria-valuemin="SIDEBAR_MIN"
+        :aria-valuemax="SIDEBAR_MAX"
+        tabindex="0"
+        title="Drag to resize · double-click to reset"
+        @pointerdown="startResize"
+        @dblclick="setSidebarWidth(SIDEBAR_DEFAULT)"
+        @keydown.left.prevent="setSidebarWidth(sidebarWidth - 16)"
+        @keydown.right.prevent="setSidebarWidth(sidebarWidth + 16)"
+      ></div>
       <div class="sidebar-head">
-        <div class="brand"><span class="brand-mark"></span>LitePaseo</div>
+        <div class="brand"><img class="brand-mark" src="/icons/mark.svg" alt="" width="22" height="22" />LitePaseo</div>
         <div class="head-actions">
         <span class="live" :class="'is-' + directoryState" :title="'Directory stream: ' + directoryState">
           <span class="live-dot"></span>{{ liveLabel }}
@@ -996,8 +1184,35 @@ onUnmounted(() => {
                 placeholder="ws://host:port/ws, pairing offer or SSH target"
                 required
                 autocomplete="off"
+                aria-describedby="host-connection-help"
               />
             </label>
+            <div id="host-connection-help" class="field-help">
+              <p>
+                The LitePaseo server connects to the daemon, so the address must be reachable from the
+                server, not from this browser. The default daemon port is <code>6767</code>.
+              </p>
+              <details>
+                <summary>Connection formats</summary>
+                <dl>
+                  <dt>Same machine</dt>
+                  <dd><code>6767</code> or <code>127.0.0.1:6767</code></dd>
+                  <dt>Network address</dt>
+                  <dd><code>192.168.1.10:6767</code>, <code>tcp://host:6767</code>, <code>ws://host:6767/ws</code> or <code>wss://host/ws</code></dd>
+                  <dt>Daemon password</dt>
+                  <dd><code>ws://host:6767/ws?password=…</code></dd>
+                  <dt>SSH tunnel</dt>
+                  <dd>
+                    <code>ssh://user@host</code> or <code>ssh://user@host:2222?daemonPort=6767</code>. Key-based login
+                    only: the server's user must be able to run <code>ssh user@host</code> without a prompt.
+                  </dd>
+                  <dt>Pairing / relay</dt>
+                  <dd>Paste a pairing link from Paseo (containing <code>#connect=</code>) or a <code>relay://</code> URL.</dd>
+                  <dt>Local socket</dt>
+                  <dd><code>unix:///path/to/socket</code></dd>
+                </dl>
+              </details>
+            </div>
             <div class="form-actions">
               <button class="btn btn-primary" :disabled="busy">Add host</button>
             </div>
@@ -1119,16 +1334,37 @@ onUnmounted(() => {
           </button>
         </nav>
 
-        <div ref="timelineElement" class="timeline">
+        <div ref="timelineElement" class="timeline" @click="onTimelineClick">
           <div class="timeline-inner">
             <div v-if="canShowOlder" class="older">
               <button class="btn btn-ghost" :disabled="busy" @click="moveHistory('before')">Show earlier messages</button>
             </div>
             <p v-if="timelineNotice" class="notice"><Icon name="alert" :size="14" />{{ timelineNotice }}</p>
-            <TimelineRowView v-for="r in visibleRows" :key="`${active?.key}:${timeline.epoch}:${r.seqStart}`" :entry="r.row" :final="r.seqStart !== lastTimelineSeq || markdownSettled" :data-seq-start="r.seqStart" />
+            <template v-for="r in visibleRows" :key="`${active?.key}:${timeline.epoch}:${r.seqStart}`">
+              <TimelineRowView :entry="r.row" :final="r.seqStart !== lastTimelineSeq || markdownSettled" :data-seq-start="r.seqStart" />
+              <div v-if="turnMeta.get(r.seqStart)" class="turn-footer">
+                <button
+                  v-if="turnMeta.get(r.seqStart)!.messages.length"
+                  type="button"
+                  class="icon-btn"
+                  :aria-label="copiedTurn === r.seqStart ? 'Copied' : 'Copy turn'"
+                  :title="copiedTurn === r.seqStart ? 'Copied' : 'Copy turn'"
+                  @click="copyTurn(r.seqStart, turnMeta.get(r.seqStart)!.messages)"
+                >
+                  <Icon :name="copiedTurn === r.seqStart ? 'check' : 'copy'" :size="14" />
+                </button>
+                <span>{{ turnMeta.get(r.seqStart)!.at }}</span>
+                <span v-if="turnMeta.get(r.seqStart)!.took">Worked for {{ turnMeta.get(r.seqStart)!.took }}</span>
+              </div>
+            </template>
             <div v-if="historyRows" class="older">
               <button v-if="historyNewer.length" class="btn btn-ghost" :disabled="busy" @click="moveHistory('after')">Show newer messages</button>
               <button class="btn btn-ghost" :disabled="busy" @click="showLatest">Back to latest</button>
+            </div>
+            <div v-if="working" class="timeline-working" role="status" aria-label="Agent is working">
+              <span class="spinner"></span>
+              <span v-if="elapsed" class="timeline-elapsed" aria-hidden="true">{{ elapsed }}</span>
+              <span v-else>Working…</span>
             </div>
             <div v-if="!visibleRows.length" class="timeline-empty">
               <span v-if="!timeline.ready" class="spinner"></span>
@@ -1143,6 +1379,10 @@ onUnmounted(() => {
 
             <p v-if="deliveryNotice" role="status">{{ deliveryNotice }}</p>
             <p v-if="composer.warning.value" role="status">{{ composer.warning.value }}</p>
+            <p v-if="composerNotice" class="composer-notice" role="status">
+              <Icon name="alert" :size="13" />{{ composerNotice }}
+              <button type="button" class="icon-btn" aria-label="Dismiss" @click="composerNotice = ''"><Icon name="close" :size="12" /></button>
+            </p>
             <details v-if="savedDrafts.length">
               <summary>Other saved drafts ({{ savedDrafts.length }})</summary>
               <div v-for="draft in savedDrafts" :key="draft.slot">
@@ -1157,36 +1397,66 @@ onUnmounted(() => {
               <button class="btn btn-ghost" @click="acknowledgeMessage">I checked</button>
             </div>
 
-            <AttachmentPanel ref="attachmentPanel" :store="attachments" :agent-key="active.key" :base="'/api' + path(active)" :busy="busy || !!uncertain" />
-            <form class="composer" @submit.prevent="send" @dragover.prevent @drop.prevent="attachmentPanel?.addFiles($event.dataTransfer?.files)" @paste="pasteFiles">
+            <form
+              class="composer"
+              :class="{ 'is-dragging': dragging }"
+              @submit.prevent="send"
+              @dragover.prevent="dragging = true"
+              @dragleave="onComposerDragLeave"
+              @drop.prevent="dragging = false; attachmentPanel?.addFiles($event.dataTransfer?.files)"
+              @paste="pasteFiles"
+            >
+              <AttachmentPanel ref="attachmentPanel" :store="attachments" :agent-key="active.key" :base="'/api' + path(active)" :busy="busy || !!uncertain" />
               <textarea
                 ref="composerElement"
                 v-model="prompt"
                 rows="1"
-:placeholder="composerSuggestion && !coarsePointer ? composerSuggestion : 'Message this agent…'"
+                :placeholder="composerPlaceholder"
                 :required="!selectedAttachments.length"
                 @input="autosize"
                 @keydown="onComposerKey"
               ></textarea>
               <div class="composer-bar">
-                <div v-if="running" class="segmented" role="radiogroup" aria-label="While a turn is running">
-                  <button type="button" :class="{ chosen: behavior === 'steer' }" @click="behavior = 'steer'">Steer</button>
-                  <button type="button" :class="{ chosen: behavior === 'interrupt' }" @click="behavior = 'interrupt'">
-                    Interrupt
-                  </button>
-                </div>
-                <span v-else class="composer-hint hide-sm">{{
-                    composerSuggestion && !coarsePointer
-                      ? "Tab to use the suggestion"
-                      : coarsePointer
-                        ? ""
-                        : "Enter to send · Shift+Enter for a new line"
-                  }}</span>
+                <button
+                  type="button"
+                  class="composer-tool"
+                  aria-label="Attach files"
+                  :title="attachmentPanel?.hint"
+                  :disabled="busy || !!uncertain || !attachmentPanel?.available"
+                  @click="attachmentPanel?.pick()"
+                >
+                  <Icon name="plus" :size="18" />
+                </button>
+                <AgentControls
+                  :agent="active"
+                  :path="path(active)"
+                  :api="api"
+                  :disabled="busy || hostStates.get(active.hostId) !== 'connected'"
+                  @notice="showComposerNotice"
+                />
                 <div class="composer-actions">
                   <button
                     v-if="running"
                     type="button"
+                    class="chip-behavior"
+                    :class="'is-' + behavior"
+                    :aria-label="behavior === 'steer' ? 'Steer: your message joins the running turn (click for interrupt)' : 'Interrupt: your message stops the running turn (click for steer)'"
+                    :title="behavior === 'steer' ? 'Steer: your message joins the running turn' : 'Interrupt: your message stops the running turn and starts a new one'"
+                    @click="behavior = behavior === 'steer' ? 'interrupt' : 'steer'"
+                  >
+                    {{ behavior === "steer" ? "Steer" : "Interrupt" }}
+                  </button>
+                  <DictationButton
+                    :host-id="active.hostId"
+                    :disabled="busy || hostStates.get(active.hostId) !== 'connected'"
+                    @text="insertDictation"
+                    @notice="showComposerNotice"
+                  />
+                  <button
+                    v-if="running"
+                    type="button"
                     class="disc disc-stop"
+                    :class="{ 'is-primary': !composerHasContent }"
                     aria-label="Stop turn"
                     title="Stop turn"
                     :disabled="busy"
@@ -1194,7 +1464,13 @@ onUnmounted(() => {
                   >
                     <Icon name="stop" :size="14" />
                   </button>
-                  <button class="disc disc-send" aria-label="Send" title="Send" :disabled="busy || !!uncertain || !attachmentsReady || (!prompt.trim() && !selectedAttachments.length)">
+                  <button
+                    v-if="!running || composerHasContent"
+                    class="disc disc-send"
+                    aria-label="Send"
+                    title="Send (Enter) · Shift+Enter for a new line"
+                    :disabled="busy || !!uncertain || !attachmentsReady || !composerHasContent"
+                  >
                     <Icon name="send" :size="17" />
                   </button>
                 </div>
@@ -1237,6 +1513,9 @@ onUnmounted(() => {
       @read="markThreadRead"
       @archive="archiveThread"
     />
+    <div v-if="lightbox" class="lightbox" role="dialog" aria-label="Image" @click="lightbox = null">
+      <img :src="lightbox" alt="" />
+    </div>
     <RenameThread v-if="renaming" :thread="renaming" :busy="busy" @close="renaming = null" @save="renameThread" />
     <NewSession
       v-if="newSession"

@@ -29,6 +29,9 @@ function inline(text: string): string {
     }
     if (i % 3 === 1) continue;
     let s = escape(parts[i]);
+    // Only images served by this app (rewritten local references); remote images stay links.
+    s = s.replace(/!\[([^\]]*)\]\((\/api\/hosts\/[^)\s]+)\)/g, (_m, alt: string, src: string) =>
+      `<img src="${src}" alt="${alt}" loading="lazy" decoding="async">`);
     s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (match, label: string, href: string) => {
       const url = safeUrl(href.replace(/&amp;/g, "&"));
       return url

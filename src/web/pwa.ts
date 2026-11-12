@@ -98,3 +98,18 @@ export function setBadge(count: number) {
   if (!nav.setAppBadge) return;
   void (count > 0 ? nav.setAppBadge(count) : nav.clearAppBadge?.())?.catch(() => {});
 }
+
+/** Swaps the tab icon for one with a status dot; one attribute write per state change. */
+export function setFavicon(state: "" | "running" | "attention" | "unread") {
+  let link = document.querySelector<HTMLLinkElement>('link[rel="icon"][data-status]');
+  if (!link) {
+    document.querySelectorAll('link[rel="icon"]').forEach((old) => old.remove());
+    link = document.createElement("link");
+    link.rel = "icon";
+    link.type = "image/png";
+    link.dataset.status = "";
+    document.head.appendChild(link);
+  }
+  const href = `/icons/favicon${state ? "-" + state : ""}-64.png`;
+  if (link.getAttribute("href") !== href) link.setAttribute("href", href);
+}

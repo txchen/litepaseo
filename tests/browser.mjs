@@ -45,6 +45,7 @@ try {
   let messageFailure = false;
   let confirmDelivery = false;
   const uploads = [];
+  const configChanges = [];
   const messages = [],
     permissions = [];
   // Each mocked stream response ends after its events; the client reconnects with its cursor,
@@ -71,6 +72,10 @@ try {
     unread: !pending.length && host === "alpha",
     lastError: null,
     pendingPermissions: pending,
+    model: "gpt-5",
+    thinking: "high",
+    contextUsed: 250_000,
+    contextMax: 1_000_000,
   });
   // Threads (Paseo workspaces) are what the sidebar lists.
   const thread = (host, extra = {}) => ({
@@ -172,6 +177,12 @@ try {
       const id = crypto.randomUUID();
       uploads.push({ id, name: route.request().headers()["x-file-name"], text: route.request().postDataBuffer().toString() });
       return route.fulfill({ status: 201, json: { id } });
+    }
+    if (p.endsWith("/config") && route.request().method() === "GET")
+      return route.fulfill({ json: { models: [{ id: "gpt-5", label: "GPT-5", thinking: [{ id: "low", label: "Low" }, { id: "high", label: "High" }], defaultThinkingId: "high" }], modes: [], features: [] } });
+    if (p.endsWith("/config") && route.request().method() === "POST") {
+      configChanges.push(route.request().postDataJSON());
+      return route.fulfill({ json: { ok: true, notice: null } });
     }
     if (p.endsWith("/messages/status")) return route.fulfill({ json: { confirmed: confirmDelivery ? route.request().postDataJSON().messageIds : [] } });
 
@@ -305,7 +316,7 @@ try {
 
 
   await page.getByLabel("Choose attachments").setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("ATTACHMENT_CONTENT") });
-  await page.locator(".attachment-item").filter({ hasText: "Ready" }).waitFor();
+  await page.locator(".attachment-item[data-state=ready]").waitFor();
   await page.locator(".composer textarea").fill("Hello beta");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await page.waitForFunction(() => document.querySelector(".composer textarea").value === "");
@@ -347,6 +358,22 @@ try {
   assert.equal(uploads[0].text, "ATTACHMENT_CONTENT");
   assert.equal(await page.locator(".attachment-item").count(), 0);
   assert.equal(messages[0].behavior, "steer");
+  // Composer: a pasted screenshot becomes an attachment; model controls switch the agent.
+  await page.locator(".composer textarea").evaluate((el) => {
+    const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
+    const data = new DataTransfer();
+    data.items.add(new File([png], "image.png", { type: "image/png" }));
+    el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+  });
+  await page.locator(".attachment-item[data-state=ready]").waitFor();
+  assert.match(uploads.at(-1).name, /^pasted-\d{8}-\d{6}-\w+\.png$/);
+  await page.getByRole("button", { name: "Remove attachment" }).click();
+  assert.equal(await page.locator(".attachment-item").count(), 0);
+  assert.equal(await page.getByLabel("Model").inputValue(), "gpt-5");
+  await page.getByRole("img", { name: /Context window: 250k of 1M/ }).waitFor();
+  await page.getByLabel("Thinking").selectOption("low");
+  await page.waitForFunction(() => document.querySelector(".chip[title^='Thinking']")?.textContent?.includes("Low"));
+  assert.deepEqual(configChanges, [{ thinkingOptionId: "low" }]);
   await page.getByRole("button", { name: "Allow / submit" }).click();
   await page.getByRole("alert").filter({ hasText: "Answer Strategy" }).waitFor();
   assert.equal(permissions.length, 0, "incomplete question forms are not submitted");

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import Icon from "./Icon.vue";
+import { PALETTES, applyPalette, applyTheme, palette, theme } from "./theme.ts";
 import {
   currentSubscription,
   disablePush,
@@ -154,10 +155,44 @@ onMounted(() => {
       <button class="icon-btn back" aria-label="Back" @click="emit('back')"><Icon name="back" :size="18" /></button>
       <div>
         <h1>Settings</h1>
-        <p class="subtle">Notifications, the app on your phone, and who can sign in.</p>
+        <p class="subtle">Appearance, notifications, the app on your phone, and who can sign in.</p>
       </div>
     </header>
     <div class="page-body">
+      <h2 class="section-label">Appearance</h2>
+      <div class="card">
+        <div class="card-row">
+          <span class="setting-icon"><Icon name="sun" :size="16" /></span>
+          <div class="grow"><div class="row-title">Theme</div></div>
+          <div class="segmented segmented-sm" role="radiogroup" aria-label="Theme">
+            <button v-for="t in (['system', 'light', 'dark'] as const)" :key="t" role="radio" :aria-checked="theme === t" :class="{ chosen: theme === t }" @click="applyTheme(t)">
+              {{ t === "system" ? "System" : t === "light" ? "Light" : "Dark" }}
+            </button>
+          </div>
+        </div>
+        <div class="card-row palette-row">
+          <span class="setting-icon"><Icon name="sparkle" :size="16" /></span>
+          <div class="grow">
+            <div class="row-title">Colour</div>
+            <div class="palette-grid" role="radiogroup" aria-label="Colour palette">
+              <button
+                v-for="p in PALETTES"
+                :key="p.id"
+                type="button"
+                role="radio"
+                class="palette-option"
+                :class="{ chosen: palette === p.id }"
+                :aria-checked="palette === p.id"
+                @click="applyPalette(p.id)"
+              >
+                <span class="palette-swatch"><span :style="{ background: p.swatch[0] }"></span><span :style="{ background: p.swatch[1] }"></span></span>
+                <span class="palette-text"><span class="palette-name">{{ p.label }}</span><span class="row-sub">{{ p.note }}</span></span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <h2 class="section-label">Notifications</h2>
       <div class="card">
         <div class="card-row">

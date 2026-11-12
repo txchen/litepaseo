@@ -1,6 +1,7 @@
 import { VERSION } from "./version.ts";
 import { Attachments, MAX_FILE_BYTES } from "./attachments.ts";
 import { confirmedMessages } from "./message-status.ts";
+import { IconCache, MAX_IMAGE_BYTES, imageMime, isLocalConnection, isMaterializedImagePath, readMaterializedImage } from "./media.ts";
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -26,9 +27,14 @@ import type {
   TimelineItem,
   TimelineMessage,
   TimelinePage,
+  AgentConfigChange,
+  AgentConfigOptions,
+  AgentFeatureOption,
 } from "../shared/wire.ts";
 
 const AGENT_FLUSH_MS = 100;
+/** Five minutes of 16 kHz, 16-bit mono speech. */
+const MAX_DICTATION_BYTES = 5 * 60 * 16_000 * 2;
 const HOST_FLUSH_MS = 100;
 const HEARTBEAT_MS = 20_000;
 
@@ -117,6 +123,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
   const app = new Hono<Env>();
   const auth = new Auth(store, token);
   const attachments = new Attachments();
+  const projectIcons = new IconCache();
   const viewers = new Map<string, Map<string, number>>();
   const notifier = new Notifier({
     store,
@@ -140,7 +147,12 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'",
     );
   });
-  app.use("/api/*", (c, next) => bodyLimit({ maxSize: c.req.method === "POST" && c.req.path.endsWith("/attachments") ? MAX_FILE_BYTES : 1024 * 1024 })(c, next));
+  app.use("/api/*", (c, next) => bodyLimit({
+    maxSize: c.req.method !== "POST" ? 1024 * 1024
+      : c.req.path.endsWith("/attachments") ? MAX_FILE_BYTES
+      : c.req.path.endsWith("/dictation") ? MAX_DICTATION_BYTES
+      : 1024 * 1024,
+  })(c, next));
   app.use("/api/*", async (c, next) => {
     c.header("Cache-Control", "no-store");
     const bearer = c.req.header("authorization")?.replace(/^Bearer /, "");
@@ -541,6 +553,141 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
         item: e.item as TimelineItem,
       })),
     } satisfies TimelinePage);
+  });
+  /**
+   * An image an agent referenced in a message (`![](file:///…)`, an absolute or workspace path).
+   * Workspace files go through the daemon's file API; images the daemon materialized from
+   * provider output live outside the workspace and are read from disk when the daemon is local.
+   */
+  app.get("/api/hosts/:host/agents/:agent/image", async (c) => {
+    const hostId = c.req.param("host");
+    const path = z.string().min(1).max(4096).refine((p) => !p.includes("\0")).parse(c.req.query("path"));
+    const mime = imageMime(path);
+    if (!mime) return c.json({ error: "Not an image" }, 415);
+    const { driver } = hosts.get(hostId);
+    const cwd = hosts.agents.get(`${hostId}:${c.req.param("agent")}`)?.cwd;
+    let bytes: Uint8Array | null = null;
+    if (isMaterializedImagePath(path)) {
+      const host = store.hosts().find((h) => h.id === hostId);
+      if (host && isLocalConnection(host.connection)) bytes = await readMaterializedImage(path);
+    } else if (cwd) {
+      try {
+        const file = await driver.readFile(cwd, path, undefined, MAX_IMAGE_BYTES);
+        if (file.size <= MAX_IMAGE_BYTES) bytes = file.bytes;
+      } catch {
+        bytes = null;
+      }
+    }
+    if (!bytes) return c.json({ error: "Image unavailable from this host" }, 404);
+    return c.body(bytes as Uint8Array<ArrayBuffer>, 200, {
+      "Content-Type": mime,
+      "Cache-Control": "private, max-age=86400",
+      "Content-Disposition": "inline",
+    });
+  });
+  /** A project's icon (favicon/logo the daemon found in its root), cached briefly per host. */
+  app.get("/api/hosts/:host/project-icon", async (c) => {
+    const hostId = c.req.param("host");
+    const cwd = z.string().min(1).max(4096).parse(c.req.query("cwd"));
+    const key = `${hostId}\n${cwd}`;
+    let icon = projectIcons.get(key);
+    if (icon === undefined) {
+      try {
+        const result = await hosts.get(hostId).driver.requestProjectIcon(cwd);
+        icon = result.icon && /^image\/(png|jpeg|webp|gif|x-icon|vnd\.microsoft\.icon)$/.test(result.icon.mimeType)
+          ? { data: Buffer.from(result.icon.data, "base64"), mimeType: result.icon.mimeType }
+          : null;
+      } catch (error) {
+        if (error instanceof UnknownHostError) throw error;
+        return c.json({ error: "Icon unavailable" }, 502);
+      }
+      projectIcons.set(key, icon);
+    }
+    if (!icon) return c.body(null, 204, { "Cache-Control": "private, max-age=600" });
+    return c.body(icon.data as Uint8Array<ArrayBuffer>, 200, { "Content-Type": icon.mimeType, "Cache-Control": "private, max-age=600" });
+  });
+  // ---- Composer: model, thinking, mode and provider features ---------------------------------
+  /** What the open agent can switch to. Modes/features come from the live directory (no round trip). */
+  app.get("/api/hosts/:host/agents/:agent/config", async (c) => {
+    const hostId = c.req.param("host");
+    const client = hosts.get(hostId);
+    const facts = client.directory.facts(c.req.param("agent"));
+    if (!facts) return c.json({ error: "Unknown agent" }, 404);
+    const snapshot = await client.api.providers.snapshot();
+    const entry = snapshot.entries.find((p) => p.provider === facts.provider);
+    const options: AgentConfigOptions = {
+      models: (entry?.models ?? [])
+        .filter((m) => m.isSelectable !== false)
+        .map((m) => ({
+          id: m.id,
+          label: m.label,
+          thinking: (m.thinkingOptions ?? []).map((t) => ({ id: t.id, label: t.label })),
+          defaultThinkingId: m.defaultThinkingOptionId ?? null,
+        })),
+      modes: facts.availableModes.map((m) => ({ id: m.id, label: m.label, ...(m.description ? { description: m.description } : {}) })),
+      features: facts.features.map((f): AgentFeatureOption =>
+        f.type === "toggle"
+          ? { type: "toggle", id: f.id, label: f.label, ...(f.tooltip ? { tooltip: f.tooltip } : {}), value: f.value }
+          : {
+              type: "select",
+              id: f.id,
+              label: f.label,
+              ...(f.tooltip ? { tooltip: f.tooltip } : {}),
+              value: f.value,
+              options: f.options.map((o) => ({ id: o.id, label: o.label })),
+            },
+      ),
+    };
+    return c.json(options);
+  });
+  app.post("/api/hosts/:host/agents/:agent/config", async (c) => {
+    const change = z
+      .object({
+        model: z.string().min(1).max(300).optional(),
+        thinkingOptionId: z.string().min(1).max(200).optional(),
+        modeId: z.string().min(1).max(200).optional(),
+        feature: z.object({ id: z.string().min(1).max(200), value: z.union([z.string().max(200), z.boolean()]) }).optional(),
+      })
+      .refine((v) => Object.values(v).filter((x) => x !== undefined).length === 1)
+      .parse(await c.req.json()) satisfies AgentConfigChange;
+    const { driver } = hosts.get(c.req.param("host"));
+    const agent = c.req.param("agent");
+    let notice: unknown = null;
+    if (change.model) await driver.setAgentModel(agent, change.model);
+    else if (change.thinkingOptionId) notice = await driver.setAgentThinkingOption(agent, change.thinkingOptionId);
+    else if (change.modeId) notice = await driver.setAgentMode(agent, change.modeId);
+    else if (change.feature) await driver.setAgentFeature(agent, change.feature.id, change.feature.value);
+    return c.json({ ok: true, notice });
+  });
+
+  // ---- Dictation ------------------------------------------------------------------------------
+  /**
+   * Speech to text through the host's own dictation service (its configured STT provider). The
+   * browser records 16 kHz mono PCM and posts it once when the user stops: one request, no
+   * socket kept open while idle.
+   */
+  app.post("/api/hosts/:host/dictation", async (c) => {
+    const format = c.req.header("x-audio-format") ?? "";
+    if (!/^audio\/pcm;rate=\d{4,6};bits=16$/.test(format)) return c.json({ error: "Unsupported audio format" }, 415);
+    const audio = Buffer.from(await c.req.arrayBuffer());
+    if (audio.length < 3200 || audio.length % 2) return c.json({ error: "Recording too short" }, 400);
+    const { driver } = hosts.get(c.req.param("host"));
+    const id = randomUUID();
+    try {
+      await driver.startDictationStream(id, format);
+      const CHUNK = 32_000; // one second at 16 kHz
+      let seq = 0;
+      for (let offset = 0; offset < audio.length; offset += CHUNK, seq++)
+        driver.sendDictationStreamChunk(id, seq, audio.subarray(offset, offset + CHUNK).toString("base64"), format);
+      const result = await driver.finishDictationStream(id, seq - 1);
+      return c.json({ text: result.text });
+    } catch (error) {
+      try { driver.cancelDictationStream(id); } catch { /* already gone */ }
+      const message = error instanceof Error ? error.message : "";
+      return c.json({ error: /disabled|not enabled|unavailable|not configured/i.test(message)
+        ? "Dictation is not enabled on this host. Turn it on in the host's Paseo settings."
+        : "Transcription failed" + (message ? `: ${message.slice(0, 200)}` : "") }, 502);
+    }
   });
   const attachmentOwner = (c: { get: (key: "session") => LoginSession | null }) => c.get("session")?.id ?? "bearer";
   app.get("/api/hosts/:host/agents/:agent/attachments/capabilities", async c =>

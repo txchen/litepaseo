@@ -5,7 +5,8 @@ import { LANES, laneOf, type AgentState, type Change, type Lane } from "../share
 
 /** Sidebar geometry: fixed pitches keep scroll offsets computable without measuring. */
 export const GROUP_PITCH = 36;
-export const AGENT_PITCH = 52;
+// Touch screens get taller rows (finger targets); pointer devices get Paseo's compact rows.
+export const AGENT_PITCH = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches ? 44 : 36;
 
 /** What the directory views need from an item: agents and workspaces both fit. */
 export interface DirectoryItem {
@@ -50,6 +51,8 @@ export interface ProjectGroup<T extends DirectoryItem = DirectoryItem> {
   failed: number;
   running: number;
   unread: number;
+  /** Members per host: the project row names the machine(s) it lives on. O(1) per change. */
+  hosts: Map<string, number>;
 }
 
 /** The most urgent state a project holds (Paseo's order for collapsed projects). */
@@ -66,7 +69,11 @@ export type SidebarRow<T extends DirectoryItem = DirectoryItem> =
   | { kind: "group"; key: string; top: number; group: ProjectGroup<T>; collapsed: boolean }
   | { kind: "item"; key: string; top: number; item: T };
 
-export const groupKey = (item: DirectoryItem) => item.project.toLowerCase();
+/**
+ * One project row per host: the same project name on two machines is two projects (separate
+ * checkouts, separate daemons), so they are never merged.
+ */
+export const groupKey = (item: DirectoryItem) => `${item.hostId}\n${item.project.toLowerCase()}`;
 // One shared collator: localeCompare with options builds a collator per call.
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 /** Most recently used project first; name and key keep the order total and stable. */
@@ -124,6 +131,7 @@ class View<T extends DirectoryItem> {
         failed: 0,
         running: 0,
         unread: 0,
+        hosts: new Map(),
       };
       this.groups.set(key, group);
     }
@@ -192,6 +200,9 @@ class View<T extends DirectoryItem> {
   }
 
   private count(group: ProjectGroup<T>, item: T, delta: number) {
+    const onHost = (group.hosts.get(item.hostId) ?? 0) + delta;
+    if (onHost > 0) group.hosts.set(item.hostId, onHost);
+    else group.hosts.delete(item.hostId);
     if (item.attention) {
       group.attention += delta;
       this.waiting += delta;
@@ -305,6 +316,11 @@ export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
   /** Flat order. */
   range(start: number, count: number) {
     return this.view.flat.range(start, count);
+  }
+
+  /** Lane size across all hosts and regardless of search (tab icon state). */
+  allLaneSize(lane: Lane) {
+    return this.all.lanes.get(lane)!.size;
   }
 
   laneSize(lane: Lane) {

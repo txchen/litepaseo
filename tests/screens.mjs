@@ -52,6 +52,12 @@ const agents = Array.from({ length: 64 }, (_, i) => {
     project: projects[i % projects.length],
     projectKey: projects[i % projects.length],
     activityAt: 1_000_000 - i,
+    turnStartedAt: i === 0 || i === 4 ? Date.now() - 472_000 : null,
+    model: i % 2 ? "gpt-6-astra" : "anthropic/claude-opus-5-5",
+    thinking: "medium",
+    modeId: i % 2 ? "full" : null,
+    contextUsed: 670_000 - i * 9_000,
+    contextMax: 1_000_000,
     attention: pending.length > 0,
     state: pending.length ? "needs_input" : i === 0 || i === 4 ? "running" : i === 7 ? "failed" : i % 5 === 2 ? "unread" : "done",
     unread: !pending.length && (i === 7 || i % 5 === 2),
@@ -81,7 +87,11 @@ const workspaces = agents
     unread: a.unread,
   }));
 let seq = 0;
-const row = (item, turnId = "t1") => ({ seqStart: ++seq, seqEnd: seq, timestamp: "t", provider: "codex", turnId, item });
+const started = Date.now() - 3 * 3600_000;
+const row = (item, turnId = item.type === "plugin" ? undefined : "t1") => ({
+  seqStart: ++seq, seqEnd: seq, timestamp: new Date(started + seq * 41_000).toISOString(), provider: "codex",
+  ...(turnId ? { turnId } : {}), item,
+});
 const rows = [
   row({ type: "user_message", text: "The sidebar re-renders on every agent update. Make the directory sync incremental and keep rendering proportional to what changed." }),
   row({ type: "reasoning", text: "Need to look at how the daemon exposes directory sync…" }),
@@ -97,11 +107,11 @@ const rows = [
     { text: "Timeline reducer + coalesced ops", completed: false, status: "in_progress" },
     { text: "Virtualized sidebar", completed: false },
   ] }),
-  row({ type: "tool_call", callId: "c3", name: "edit", status: "completed", error: null, detail: { type: "edit", filePath: "src/server/host-directory.ts" } }),
-  row({ type: "tool_call", callId: "c4", name: "shell", status: "failed", error: "exit code 1", detail: { type: "shell", command: "npm test" } }),
+  row({ type: "tool_call", callId: "c3", name: "edit", status: "completed", error: null, detail: { type: "edit", filePath: "src/server/host-directory.ts", unifiedDiff: "@@ -12,3 +12,4 @@\n const memo = new Map();\n-let seq = 0;\n+let seq = -1;\n+const tombstones = [];" } }),
+  row({ type: "tool_call", callId: "c4", name: "shell", status: "failed", error: "exit code 1", detail: { type: "shell", command: "npm test", exitCode: 1, output: "not ok 3 - paging returns older rows\n  expected 100, got 60" } }),
   row({ type: "assistant_message", text: "One test failed because the fixture used the old paging API. Fixing it now and re-running the suite." }),
   row({ type: "tool_call", callId: "c5", name: "shell", status: "completed", error: null, detail: { type: "shell", command: "npm test" } }),
-  row({ type: "assistant_message", text: "All 32 tests pass now." }),
+  row({ type: "assistant_message", text: "All 32 tests pass now. Here is the sidebar after the change:\n\n![Image](file:///tmp/paseo-attachments-AbC123/" + "a".repeat(64) + ".png)" }),
   row({ type: "plugin", pluginId: "turn-speed", id: "t1", kind: "turn-speed", version: 1, data: { provider: "codex", outputTokens: 18432, generationMs: 211000, requests: 14, tokensPerSecond: 87.4 } }),
   row({ type: "plugin", pluginId: "next-input", id: "s1", kind: "next-input", version: 1, data: { agentId: "a1", workspaceId: "w", token: "tok", status: "idle", text: "" } }),
 ];
@@ -115,9 +125,10 @@ let browser;
 try {
   run("start");
   browser = await chromium.launch({ headless: true });
-  const shoot = async (name, options, steps) => {
+  const shoot = async (name, { palette, ...options }, steps) => {
     const context = await browser.newContext(options);
     const page = await context.newPage();
+    if (palette) await page.addInitScript((id) => localStorage.setItem("litepaseo-palette", id), palette);
     await page.route("**/api/stream**", (route) =>
       route.fulfill(
         sse(
@@ -163,6 +174,35 @@ try {
         ],
       }),
     );
+    await page.route("**/agents/*/config", (route) =>
+      route.fulfill({
+        json: {
+          models: [
+            { id: "gpt-6-astra", label: "GPT-6-Astra", thinking: [{ id: "low", label: "low" }, { id: "medium", label: "medium" }, { id: "high", label: "high" }], defaultThinkingId: "medium" },
+            { id: "anthropic/claude-opus-5-5", label: "Claude Opus 5.5", thinking: [{ id: "medium", label: "medium" }], defaultThinkingId: "medium" },
+          ],
+          modes: [{ id: "full", label: "Full Access" }, { id: "ask", label: "Ask" }],
+          features: [
+            { type: "select", id: "speed", label: "Speed", value: "normal", options: [{ id: "normal", label: "Normal" }, { id: "fast", label: "Fast" }] },
+            { type: "toggle", id: "plan", label: "Plan", value: false },
+          ],
+        },
+      }),
+    );
+    await page.route("**/image?path=*", (route) =>
+      route.fulfill({ status: 200, contentType: "image/png", body: readFileSync(resolve("public/icons/icon-512.png")) }),
+    );
+    await page.route("**/project-icon?*", (route) =>
+      route.request().url().includes("litepaseo")
+        ? route.fulfill({ status: 200, contentType: "image/png", body: readFileSync(resolve("public/icons/icon-192.png")) })
+        : route.fulfill({ status: 204, body: "" }),
+    );
+    await page.route("**/attachments/capabilities", (route) =>
+      route.fulfill({ json: { images: true, files: true, maxBytes: 8 * 1024 * 1024 } }),
+    );
+    await page.route("**/attachments", (route) =>
+      route.fulfill({ json: { id: "att-1", name: "trace.log", size: 18_432 } }),
+    );
     await page.route("**/projects", (route) =>
       route.fulfill({ json: projects.map((name) => ({ key: name, name, rootPath: `/home/me/code/${name}`, kind: "git" })) }),
     );
@@ -190,6 +230,30 @@ try {
   await shoot("desktop-empty", desktop, login);
   await shoot("desktop-chat", desktop, openChat);
   await shoot("desktop-chat-dark", { ...desktop, colorScheme: "dark" }, openChat);
+  const openRunning = async (page) => {
+    await login(page);
+    await page.locator("button.session", { hasText: titles[0] }).first().click();
+    await page.locator(".timeline-working").waitFor();
+    await page.getByLabel("Choose attachments").setInputFiles({ name: "trace.log", mimeType: "text/plain", buffer: Buffer.alloc(18_432, 97) });
+    await page.locator(".attachment-item").waitFor();
+  };
+  await shoot("desktop-chat-running", desktop, openRunning);
+  await shoot("desktop-chat-running-dark", { ...desktop, colorScheme: "dark" }, openRunning);
+  await shoot("mobile-chat-running", mobile, openRunning);
+  await shoot("desktop-hover-card", { ...desktop, colorScheme: "dark" }, async (page) => {
+    await openChat(page);
+    await page.locator("button.session").nth(2).hover();
+    await page.locator(".thread-card").waitFor();
+  });
+  await shoot("desktop-tool-open", desktop, async (page) => {
+    await openChat(page);
+    await page.locator(".row-tool.is-failed summary").click();
+    await page.locator(".row-tool.is-completed summary", { hasText: "host-directory" }).click();
+  });
+  for (const palette of ["graphite", "indigo", "ocean", "ember"]) {
+    await shoot(`palette-${palette}-light`, { ...desktop, palette }, openChat);
+    await shoot(`palette-${palette}-dark`, { ...desktop, colorScheme: "dark", palette }, openChat);
+  }
   await shoot("desktop-hosts", desktop, async (page) => {
     await login(page);
     await page.getByRole("button", { name: /Hosts/ }).click();

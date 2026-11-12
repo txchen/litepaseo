@@ -330,6 +330,7 @@ export function summarize(
       : bucket === "attention"
         ? "unread"
         : bucket;
+  const turnActive = isRunning(agent) || agent.status === "initializing";
   return {
     key: `${hostId}:${agent.id}`,
     hostId,
@@ -337,17 +338,25 @@ export function summarize(
     workspaceId: agent.workspaceId ?? null,
     title: agent.title ?? null,
     status: agent.status,
-    turnActive: isRunning(agent) || agent.status === "initializing",
+    turnActive,
     provider: agent.provider,
     cwd: agent.cwd,
     project: project?.projectName || basename(agent.cwd) || "Other",
     projectKey: project?.projectKey ?? null,
     activityAt: activity,
+    turnStartedAt: turnActive
+      ? time(agent.activeTurn?.startedAt) || time(agent.lastUserMessageAt) || null
+      : null,
     attention: state === "needs_input",
     state,
     unread: agent.requiresAttention === true && state !== "needs_input",
     lastError: agent.lastError ? agent.lastError.slice(0, 300) : null,
     pendingPermissions: permissions,
+    model: agent.model ?? agent.runtimeInfo?.model ?? null,
+    thinking: agent.effectiveThinkingOptionId ?? agent.thinkingOptionId ?? agent.runtimeInfo?.thinkingOptionId ?? null,
+    modeId: agent.currentModeId ?? null,
+    contextUsed: agent.lastUsage?.contextWindowUsedTokens ?? null,
+    contextMax: agent.lastUsage?.contextWindowMaxTokens ?? null,
   };
 }
 
@@ -385,11 +394,21 @@ const agentAdapter: Adapter<AgentSnapshotPayload, Placement, ActivityMemo, Agent
     );
     return { summary: summarize(hostId, agent, project, memo.activityAt), memo };
   },
-  retain: (agent): AgentFacts => ({ provider: agent.provider, capabilities: agent.capabilities }),
+  retain: (agent): AgentFacts => ({
+    provider: agent.provider,
+    capabilities: agent.capabilities,
+    availableModes: agent.availableModes ?? [],
+    features: agent.features ?? [],
+  }),
 };
 
 /** Kept from the latest directory update so requests need no daemon round trip. */
-export interface AgentFacts { provider: string; capabilities: AgentSnapshotPayload["capabilities"] }
+export interface AgentFacts {
+  provider: string;
+  capabilities: AgentSnapshotPayload["capabilities"];
+  availableModes: NonNullable<AgentSnapshotPayload["availableModes"]>;
+  features: NonNullable<AgentSnapshotPayload["features"]>;
+}
 
 /** One daemon's active agents. */
 export class HostDirectory extends HostMirror<AgentSnapshotPayload, Placement, ActivityMemo, AgentSummary> {

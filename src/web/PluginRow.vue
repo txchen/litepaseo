@@ -86,12 +86,12 @@ const details = computed(() => (open.value ? JSON.stringify(props.item.data ?? p
     <span v-else-if="status === 'error'" class="suggestion-wait">Suggestion unavailable</span>
   </div>
 
-  <details v-else class="row row-tool row-plugin" @toggle="open = ($event.target as HTMLDetailsElement).open">
+  <details v-else class="row row-line row-tool row-plugin" @toggle="open = ($event.target as HTMLDetailsElement).open">
     <summary>
-      <span class="tool-icon"><Icon name="sparkle" :size="13" /></span>
-      <span class="tool-name">{{ item.pluginId }}</span>
-      <span class="tool-subject">{{ item.kind }}</span>
+      <span class="line-icon"><Icon name="sparkle" :size="15" /></span>
+      <span class="line-name">{{ item.pluginId }}</span>
+      <span class="line-text">{{ item.kind }}</span>
     </summary>
-    <pre v-if="open" class="tool-detail">{{ details }}</pre>
+    <div v-if="open" class="tool-body"><pre class="tool-pre">{{ details }}</pre></div>
   </details>
 </template>

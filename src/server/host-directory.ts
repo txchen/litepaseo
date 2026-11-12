@@ -1,6 +1,6 @@
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
 import { deriveAgentStateBucket } from "@getpaseo/protocol/agent-state-bucket";
-import type { AgentState, AgentSummary, Permission, WorkspaceSummary } from "../shared/wire.ts";
+import type { AgentState, AgentSummary, Permission, RewindMode, WorkspaceSummary } from "../shared/wire.ts";
 import type { VersionedCollection } from "./versioned-collection.ts";
 
 type SyncCursor = { generation: string; afterSeq: number };
@@ -357,7 +357,18 @@ export function summarize(
     modeId: agent.currentModeId ?? null,
     contextUsed: agent.lastUsage?.contextWindowUsedTokens ?? null,
     contextMax: agent.lastUsage?.contextWindowMaxTokens ?? null,
+    rewind: rewindModes(agent.capabilities),
   };
+}
+
+/** The rewind modes a provider supports, in Paseo's menu order. */
+export function rewindModes(capabilities: AgentSnapshotPayload["capabilities"] | undefined): RewindMode[] {
+  const c = (capabilities ?? {}) as Record<string, unknown>;
+  const modes: RewindMode[] = [];
+  if (c.supportsRewindConversation === true) modes.push("conversation");
+  if (c.supportsRewindFiles === true) modes.push("files");
+  if (c.supportsRewindBoth === true) modes.push("both");
+  return modes;
 }
 
 type AgentEntry = { agent: AgentSnapshotPayload; project?: Placement; syncSeq?: number };

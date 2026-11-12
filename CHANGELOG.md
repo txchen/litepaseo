@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Conversation
+
+- Messages sent while a turn runs (the **Queue** setting, formerly Steer) wait in a list above
+  the composer instead of appearing in the conversation. Each can be edited, removed, or sent at
+  once with **Interrupt**; the rest go one per turn when the agent finishes. Queued messages
+  stay in the open tab, which warns before closing while any are waiting.
+- Code blocks and opened files are syntax highlighted (highlight.js, common languages, loaded
+  on demand; very large text stays plain).
+- Long conversations load earlier and newer messages as you scroll, and return to the live
+  tail at the bottom, instead of asking for a click per page. Only about 150 rows stay mounted.
+- Outline rail, as in Paseo: one tick per prompt along the left edge of a wide conversation.
+  Resting on it previews the prompt; clicking jumps there, even far back in history.
+- Rewind from a user message (hover it): rewind the conversation, the files, or both, as the
+  agent's provider supports. The rewound prompt returns to an empty composer.
+- Finished turns show Copy, the model, the finish time and how long the turn took, with icons,
+  as in Paseo. User messages show their time and a copy button on hover.
+
 ### Settings without environment variables
 
 - `litepaseo config` shows the port, listening address and push contact, and where each value

@@ -22,6 +22,7 @@ import { UsageService } from "./usage.ts";
 import { MAX_DICTATION_BYTES, DictationError, clearDictation, dictationConfig, dictationSettings, saveDictation, transcribe } from "./dictation.ts";
 import { DictationStreams } from "./dictation-stream.ts";
 import { Hosts, UnknownHostError } from "./hosts.ts";
+import { rewindModes } from "./host-directory.ts";
 import type {
   CreateSessionRequest,
   DirectoryMessage,
@@ -31,6 +32,7 @@ import type {
   TimelineItem,
   TimelineMessage,
   TimelinePage,
+  PromptIndex,
   AgentConfigChange,
   AgentConfigOptions,
   AgentFeatureOption,
@@ -529,6 +531,40 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
         item: e.item as TimelineItem,
       })),
     } satisfies TimelinePage);
+  });
+  /** The conversation's user prompts (seq + short preview), for the outline rail. */
+  app.get("/api/hosts/:host/agents/:agent/timeline/prompts", async (c) => {
+    const client = hosts.get(c.req.param("host"));
+    try {
+      const page = await client.driver.listAgentTimelinePrompts(c.req.param("agent"), { timeout: 15_000 });
+      return c.json({
+        epoch: page.epoch,
+        prompts: page.prompts.map((p) => ({ seq: p.seq, preview: p.preview.replace(/\s+/g, " ").trim().slice(0, 240) })),
+      } satisfies PromptIndex);
+    } catch (error) {
+      // Older daemons have no prompt index; the rail simply does not appear.
+      return c.json({ error: (error as Error).message || "Prompt index unavailable" }, 501);
+    }
+  });
+  /**
+   * Rewinds to just before a user message: the conversation, the tracked files, or both, as
+   * the provider supports. Cannot be undone; the timeline is replaced (new epoch) on success.
+   */
+  app.post("/api/hosts/:host/agents/:agent/rewind", async (c) => {
+    const { messageId, mode } = z
+      .object({ messageId: z.string().min(1).max(500), mode: z.enum(["conversation", "files", "both"]) })
+      .parse(await c.req.json());
+    const client = hosts.get(c.req.param("host"));
+    const facts = client.directory.facts(c.req.param("agent"));
+    if (!facts) return c.json({ error: "Unknown agent" }, 404);
+    if (!rewindModes(facts.capabilities).includes(mode))
+      return c.json({ error: "This agent cannot rewind that way." }, 400);
+    try {
+      await client.driver.rewindAgent(c.req.param("agent"), messageId, mode);
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: (error as Error).message || "Rewind failed" }, 502);
+    }
   });
   /**
    * An image an agent referenced in a message (`![](file:///…)`, an absolute or workspace path).

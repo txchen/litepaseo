@@ -180,19 +180,27 @@ for (const spec of cases) {
     if (spec.olderPages) {
       const started = performance.now();
       for (let i = 0; i < spec.olderPages; i++) {
-        await pages[0].getByRole('button', { name: 'Show earlier messages' }).scrollIntoViewIfNeeded();
-        const previous = await pages[0].locator('.timeline-inner > .row').first().getAttribute('data-seq-start');
-        const anchorTop = await pages[0].locator('.timeline-inner > .row').first().evaluate(el => el.getBoundingClientRect().top);
-        await pages[0].getByRole('button', { name: 'Show earlier messages' }).click();
+        // History pages itself as the reader scrolls: reaching the top loads the previous page.
+        const { previous, anchorTop } = await pages[0].locator('.timeline').evaluate(el => {
+          el.scrollTop = 0;
+          el.dispatchEvent(new Event('scroll'));
+          const row = el.querySelector('.timeline-inner > .row');
+          return { previous: row.getAttribute('data-seq-start'), anchorTop: row.getBoundingClientRect().top };
+        });
         await pages[0].waitForFunction(seq => Number(document.querySelector('.timeline-inner > .row')?.getAttribute('data-seq-start')) < seq, Number(previous));
         assert.ok(await pages[0].locator('.timeline-inner > .row').count() <= 150);
         const retainedTop = await pages[0].locator(`[data-seq-start="${previous}"]`).evaluate(el => el.getBoundingClientRect().top);
         assert.ok(Math.abs(retainedTop - anchorTop) < 3, 'Older pagination must preserve the scroll anchor');
       }
+      const scrollTo = (edge) => pages[0].locator('.timeline').evaluate((el, edge) => {
+        el.scrollTop = edge === 'top' ? 0 : el.scrollHeight;
+        el.dispatchEvent(new Event('scroll'));
+      }, edge);
       const first = Number(await pages[0].locator('.timeline-inner > .row').first().getAttribute('data-seq-start'));
-      await pages[0].getByRole('button', { name: 'Show newer messages' }).click();
+      await scrollTo('bottom');
       await pages[0].waitForFunction(seq => Number(document.querySelector('.timeline-inner > .row')?.getAttribute('data-seq-start')) > seq, first);
-      await pages[0].getByRole('button', { name: 'Show earlier messages' }).click();
+      await pages[0].waitForFunction(() => !document.querySelector('.older-loading'));
+      await scrollTo('top');
       await pages[0].waitForFunction(seq => Number(document.querySelector('.timeline-inner > .row')?.getAttribute('data-seq-start')) === seq, first);
       historyBoundary = Number(await pages[0].locator('.timeline-inner > .row').last().getAttribute('data-seq-start')) + 1;
       historyLoadMs = performance.now() - started;

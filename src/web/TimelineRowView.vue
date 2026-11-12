@@ -3,9 +3,11 @@ import { computed, inject, ref, type ShallowRef } from "vue";
 import type { TimelineRow } from "../shared/wire.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { loadMarkstream, markstream } from "./markstream-loader.ts";
-import { TIMELINE_CONTEXT, editDiff, reasoningHeadline, rewriteImageSources, toolDisplay, toolOutput } from "./timeline-display.ts";
+import { TIMELINE_CONTEXT, editDiff, formatMessageTimestamp, reasoningHeadline, rewriteImageSources, toolDisplay, toolOutput } from "./timeline-display.ts";
 import Icon from "./Icon.vue";
 import PluginRow from "./PluginRow.vue";
+import RewindMenu from "./RewindMenu.vue";
+import type { RewindMode } from "../shared/wire.ts";
 
 // Receives the row's own ref: only this component re-renders when the row changes.
 const props = defineProps<{ entry: ShallowRef<TimelineRow>; final: boolean }>();
@@ -67,11 +69,38 @@ const todo = computed(() => (item.value.type === "todo" ? (item.value.items as a
 const raw = computed(() => (open.value ? clip(JSON.stringify(item.value, null, 2)) : ""));
 const label = computed(() => String(item.value.type).replaceAll("_", " "));
 const onToggle = (event: Event) => (open.value = (event.target as HTMLDetailsElement).open);
+// User messages: time, rewind (when the provider supports it) and copy, shown on hover.
+const userTime = computed(() => {
+  if (item.value.type !== "user_message") return "";
+  const at = Date.parse(row.value.timestamp);
+  return Number.isFinite(at) ? formatMessageTimestamp(new Date(at)) : "";
+});
+const rewindModes = computed(() =>
+  item.value.type === "user_message" && typeof item.value.messageId === "string" ? context?.value.rewindModes ?? [] : []);
+const rewindBusy = computed(() => !!context?.value.rewinding?.value);
+const rewind = (mode: RewindMode) => context?.value.rewind?.(String(item.value.messageId), String(item.value.text ?? ""), mode);
+const copied = ref(false);
+async function copyMessage() {
+  try {
+    await navigator.clipboard.writeText(String(item.value.text ?? ""));
+    copied.value = true;
+    setTimeout(() => (copied.value = false), 1500);
+  } catch {
+    /* clipboard denied */
+  }
+}
 </script>
 
 <template>
   <div v-if="item.type === 'user_message'" class="row row-user">
-    <div class="bubble">{{ item.text }}</div>
+    <div class="bubble" tabindex="-1">{{ item.text }}</div>
+    <div class="user-actions">
+      <span v-if="userTime" class="user-time">{{ userTime }}</span>
+      <RewindMenu v-if="rewindModes.length" :modes="rewindModes" :busy="rewindBusy" @rewind="rewind" />
+      <button type="button" class="icon-btn" :aria-label="copied ? 'Copied' : 'Copy message'" :title="copied ? 'Copied' : 'Copy message'" @click="copyMessage">
+        <Icon :name="copied ? 'check' : 'copy'" :size="14" />
+      </button>
+    </div>
   </div>
 
   <div v-else-if="item.type === 'assistant_message'" class="row row-assistant">

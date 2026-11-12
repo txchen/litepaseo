@@ -45,6 +45,18 @@ export class AttachmentStore {
     this.entries.set(key, this.get(key).filter(e => e.localId !== entry.localId));
     if (!consumed) void this.discardRemote(entry);
   }
+  /** Hands the staged files to a queued message; uploads stay on the server. */
+  detach(key: string): LocalAttachment[] {
+    const entries = this.get(key);
+    this.entries.delete(key);
+    return entries;
+  }
+  /** Files back from a queued message; beyond four per message they are discarded. */
+  reattach(key: string, entries: LocalAttachment[]) {
+    const combined = [...this.get(key), ...entries];
+    for (const extra of combined.slice(4)) this.remove(key, extra);
+    this.entries.set(key, combined.slice(0, 4));
+  }
   consume(key: string, ids: string[]) {
     for (const entry of this.get(key)) if (entry.id && ids.includes(entry.id)) this.remove(key, entry, true);
   }

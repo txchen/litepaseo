@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import Icon from "./Icon.vue";
 import { loadMarkstream, markstream } from "./markstream-loader.ts";
+import { highlight, languageFor } from "./highlight.ts";
 
 /** A workspace file opened as a main-area tab: code with line numbers, Markdown, or an image. */
 const props = defineProps<{ hostId: string; cwd: string; path: string; api: (path: string) => Promise<any> }>();
@@ -37,6 +38,8 @@ const gutter = computed(() => {
   for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) count++;
   return Array.from({ length: count }, (_, i) => i + 1).join("\n");
 });
+/** Highlighted file text, or null for plain (unknown language, or too large to tokenize). */
+const highlighted = computed(() => file.value?.text === undefined ? null : highlight(file.value.text, languageFor(props.path)));
 const size = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
 const copied = ref(false);
 async function copyPath() {
@@ -71,7 +74,8 @@ async function copyPath() {
       <template v-else-if="file?.text !== undefined">
         <div class="code-wrap">
           <pre class="code-gutter" aria-hidden="true">{{ gutter }}</pre>
-          <pre class="file-text">{{ file.text }}</pre>
+          <pre v-if="highlighted !== null" class="file-text hljs" v-html="highlighted"></pre>
+          <pre v-else class="file-text">{{ file.text }}</pre>
         </div>
         <p v-if="file.truncated" class="file-note">Showing the first 1 MB.</p>
       </template>

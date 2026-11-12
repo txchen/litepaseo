@@ -10,8 +10,9 @@ The small built-in `markdown.ts` renderer shows messages until Markstream has lo
 - Smooth streaming, typewriter, fade, code streaming, internal batch mounting,
   viewport deferral and node virtualization disabled. The BFF still flushes every
   500 ms; application status animation still advances twice per second.
-- Built-in plain code rendering, without line numbers or header controls. Optional
-  editor, diagram and KaTeX runtimes are not enabled. This does not add rich
+- Fenced code renders through a scoped custom `code_block` (`CodeBlock.vue`): a plain
+  `<pre>` with highlight.js tokens for common languages, without line numbers or header
+  controls. Optional editor, diagram and KaTeX runtimes are not enabled. This does not add rich
   diagrams or mathematical typesetting.
 - The application still owns the 150-message history window. Row identity includes
   host/agent, timeline epoch and sequence. Markstream owns nodes within a message.

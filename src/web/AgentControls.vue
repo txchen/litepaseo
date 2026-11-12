@@ -48,6 +48,8 @@ const model = computed(() => (pending.value.model as string | undefined) ?? prop
 const modelOption = computed(() => options.value?.models.find((m) => m.id === model.value) ?? null);
 /** "anthropic/claude-opus-5-5" → "claude-opus-5-5" until the provider's label is known. */
 const modelLabel = computed(() => modelOption.value?.label ?? (model.value ? model.value.split("/").pop()! : "Model"));
+/** The turn footer shows the same model name as the composer chip. */
+defineExpose({ modelLabel });
 const thinking = computed(() => (pending.value.thinking as string | undefined) ?? props.agent.thinking ?? modelOption.value?.defaultThinkingId ?? null);
 const thinkingOptions = computed(() => modelOption.value?.thinking ?? []);
 const thinkingLabel = computed(() => thinkingOptions.value.find((t) => t.id === thinking.value)?.label ?? thinking.value ?? "");

@@ -1,11 +1,15 @@
 /** Pure display helpers for the conversation, modelled on Paseo's own web client. */
-import type { InjectionKey, ShallowRef } from "vue";
-import type { TimelineRow } from "../shared/wire.ts";
+import type { InjectionKey, Ref, ShallowRef } from "vue";
+import type { RewindMode, TimelineRow } from "../shared/wire.ts";
 
 export interface TimelineContext {
   /** "/api/hosts/<host>/agents/<agent>" for the open conversation. */
   base: string;
   cwd: string;
+  /** What the provider can rewind to before a user message (none: no rewind button). */
+  rewindModes?: RewindMode[];
+  rewinding?: Ref<boolean>;
+  rewind?: (messageId: string, text: string, mode: RewindMode) => void;
 }
 export const TIMELINE_CONTEXT: InjectionKey<ShallowRef<TimelineContext>> = Symbol("litepaseo-timeline");
 

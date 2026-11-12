@@ -3,7 +3,7 @@ import type { TimelinePage } from "../shared/wire.ts";
 import type { RowRef } from "./timeline-store.ts";
 
 export const RENDER_WINDOW = 150;
-const PAGE_STEP = 100;
+export const PAGE_STEP = 100;
 
 /** Overlap adjacent pages, without accumulating all visited history in memory. */
 export function pageHistory(current: RowRef[], page: TimelinePage, direction: "before" | "after") {

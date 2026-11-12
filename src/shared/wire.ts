@@ -54,6 +54,21 @@ export interface AgentSummary {
   unread: boolean;
   lastError: string | null;
   pendingPermissions: Permission[];
+  /** How this agent's provider can rewind to an earlier message; empty when it cannot. */
+  rewind?: RewindMode[];
+}
+
+/** Rewind the conversation, the tracked files, or both, to just before a user message. */
+export type RewindMode = "conversation" | "files" | "both";
+
+/** One user prompt of a conversation, for the outline rail. */
+export interface PromptMarker {
+  seq: number;
+  preview: string;
+}
+export interface PromptIndex {
+  epoch: string;
+  prompts: PromptMarker[];
 }
 
 /** "Run npm test" → "run npm test", for use mid-sentence ("wants to run npm test"). */

@@ -531,6 +531,23 @@ try {
   await page.getByRole("button", { name: "Schedules" }).waitFor();
   assert.deepEqual(errors, []);
 
+  // Brave refuses push until a setting is on; the error names that setting, not the raw one.
+  // Headless Chromium denies notifications outright, so permission and push are stubbed here.
+  const brave = await browser.newPage({ storageState: await page.context().storageState() });
+  brave.on("pageerror", (e) => errors.push(e.message));
+  await brave.route("**/api/stream**", (route) => route.fulfill(sse(hostsEvent, workspacesEvent)));
+  await brave.addInitScript(() => {
+    Object.defineProperty(Notification, "permission", { configurable: true, get: () => "default" });
+    Notification.requestPermission = async () => "granted";
+    PushManager.prototype.subscribe = () => Promise.reject(new DOMException("Registration failed - push service error", "AbortError"));
+    Object.defineProperty(navigator, "brave", { configurable: true, value: { isBrave: async () => true } });
+  });
+  await brave.goto(`http://127.0.0.1:${port}`);
+  await brave.getByRole("button", { name: "Settings" }).click();
+  await brave.getByRole("button", { name: "Turn on" }).first().click();
+  await brave.getByText("Brave turns push off by default. Open brave://settings/privacy").waitFor();
+  await brave.close();
+
   // Phone: opening a conversation is a history entry; system back returns to the list.
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, storageState: await page.context().storageState() });
   phone.on("pageerror", (e) => errors.push(e.message));

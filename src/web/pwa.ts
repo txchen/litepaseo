@@ -1,4 +1,5 @@
 import { ref, shallowRef } from "vue";
+import { explainPushError, isBrave } from "./push-errors.ts";
 
 type Request = (path: string, method?: string, body?: unknown) => Promise<any>;
 interface InstallPromptEvent extends Event {
@@ -75,8 +76,13 @@ export async function enablePush(request: Request, prefs: PushPrefs) {
   if (!reg) throw new Error("Service worker unavailable.");
   const { publicKey } = await request("/push/key");
   let subscription = await reg.pushManager.getSubscription();
-  if (!subscription)
-    subscription = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) });
+  if (!subscription) {
+    try {
+      subscription = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) });
+    } catch (error) {
+      throw explainPushError(error, await isBrave());
+    }
+  }
   await request("/push/subscribe", "POST", { subscription: subscription.toJSON(), prefs });
   return subscription;
 }

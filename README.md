@@ -9,7 +9,7 @@ and respond when they need your input—from a desktop browser or your phone.
 One console for your existing Paseo daemons, designed to stay open without keeping
 your browser busy.
 
-[Get started](#install-and-start) · [Performance comparison](docs/performance-plan.md) · [Operations guide](docs/operations.md)
+[Get started](#install-and-start) · [Performance comparison](docs/performance-plan.md) · [HTTPS & remote access](#https--remote-access)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme-dark.png" />
@@ -18,7 +18,6 @@ your browser busy.
 </picture>
 
 *Your workspaces, conversations, and agent controls in one view. Shown with demo data.*
-
 
 ## Why LitePaseo?
 
@@ -79,9 +78,34 @@ The npm package includes the built web interface; installation requires no
 frontend build. `start` runs LitePaseo in the background with crash recovery and
 rotating logs. It does not install or start Paseo daemons for you.
 
-For access from another device, put LitePaseo behind your HTTPS reverse proxy or
-tunnel. The default listener is local to the server. HTTPS also enables web-app
-installation and push notifications.
+### HTTPS & remote access
+
+LitePaseo serves HTTP on `127.0.0.1:8787`. For access from your phone or another
+machine, **put an HTTPS tunnel or reverse proxy in front of it**. We recommend
+**Cloudflare Tunnel**: it gives you an HTTPS address without opening an inbound
+port on your machine.
+
+1. Follow [Cloudflare's tunnel setup](https://developers.cloudflare.com/tunnel/get-started/)
+   to create a tunnel and run `cloudflared` on the same machine as LitePaseo.
+2. Add a published application route for a hostname such as `agents.example.com`,
+   pointing to **`http://127.0.0.1:8787`** (service type **HTTP**).
+3. Open `https://agents.example.com` and sign in with your LitePaseo access token.
+
+Keep LitePaseo's default localhost binding; Cloudflare handles HTTPS in front of
+it. An existing HTTPS reverse proxy works too, provided it supports streaming
+responses (SSE) without buffering.
+
+### Phone app & notifications
+
+Open your HTTPS address and install from the browser's menu. On iPhone/iPad,
+use Safari → Share → **Add to Home Screen**, then open the installed app to enable
+push notifications. Turn them on in **Settings → Notifications** to hear when an
+agent needs input or finishes. Set `LITEPASEO_PUSH_SUBJECT=mailto:you@example.com`
+before starting the server for Apple push delivery.
+
+Optional two-factor sign-in is under **Settings → Authenticator code**; signed-in
+devices can be revoked in Settings. If you lose your authenticator, run
+`litepaseo totp-reset` on the server.
 
 ## Everyday commands
 
@@ -108,8 +132,7 @@ litepaseo service install
 
 Use `litepaseo service restart` for an OS-managed installation. Linux startup
 before login requires user lingering; macOS starts the service at login.
-See the [operations guide](docs/operations.md#supervision-autostart-and-logs)
-for configuration and lifecycle details.
+Reinstall the service after changing its environment settings or Node/CLI paths.
 
 ### Configuration
 
@@ -130,6 +153,15 @@ LITEPASEO_PORT=9000 litepaseo start
 
 LitePaseo's data directory contains credentials and settings. Conversation
 history stays on your daemons, and drafts stay in browser storage.
+
+### Backups & upgrades
+
+Run `litepaseo backup /path/to/new-backup-directory` before upgrading; the destination
+must not exist. Keep backups private because they include credentials. Use
+`litepaseo help restore` for recovery instructions.
+
+Upgrade with `npm install --global litepaseo`, then run `litepaseo restart`
+(or `litepaseo service restart` for an OS-managed installation).
 
 ## How it fits together
 
@@ -195,8 +227,6 @@ node tests/package.mjs
 
 ## Further reading
 
-- [Operations guide](docs/operations.md): phone setup, notifications, backups,
-  service management, diagnostics and attachment limits.
 - [Markstream integration and measurements](docs/markstream-integration-validation.md).
 - [LitePaseo vs. official Paseo web UI](docs/performance-plan.md) and the
   [benchmark harness](benchmarks/README.md).

@@ -8,7 +8,6 @@
   "files": [
     "dist",
     "README.md",
-    "docs/operations.md",
     "docs/markstream-integration-validation.md",
     "docs/performance-plan.md"
   ],

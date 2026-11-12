@@ -19,6 +19,7 @@ import { Store, type LoginSession } from "./store.ts";
 import { Auth, SESSION_TTL_MS } from "./auth.ts";
 import { Notifier, vapidKeys, webPushSender, type PushSender } from "./notifier.ts";
 import { UsageService } from "./usage.ts";
+import { MAX_DICTATION_BYTES, DictationError, clearDictation, dictationConfig, dictationSettings, saveDictation, transcribe } from "./dictation.ts";
 import { Hosts, UnknownHostError } from "./hosts.ts";
 import type {
   CreateSessionRequest,
@@ -35,8 +36,6 @@ import type {
 } from "../shared/wire.ts";
 
 const AGENT_FLUSH_MS = 100;
-/** Five minutes of 16 kHz, 16-bit mono speech. */
-const MAX_DICTATION_BYTES = 5 * 60 * 16_000 * 2;
 const HOST_FLUSH_MS = 100;
 
 function parseJson(text: string | undefined): unknown {
@@ -65,6 +64,8 @@ export interface AppOptions {
   pushSender?: PushSender;
   /** VAPID subject; Apple's push service requires a mailto: or https: URL. */
   pushSubject?: string;
+  /** Outbound requests to the transcription service; replaced in tests. */
+  fetch?: typeof fetch;
 }
 
 type Env = { Variables: { session: LoginSession | null } };
@@ -100,7 +101,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
   app.use("/api/*", (c, next) => bodyLimit({
     maxSize: c.req.method !== "POST" ? 1024 * 1024
       : c.req.path.endsWith("/attachments") ? MAX_FILE_BYTES
-      : c.req.path.endsWith("/dictation") ? MAX_DICTATION_BYTES
+      : c.req.path === "/api/dictation/transcribe" ? MAX_DICTATION_BYTES
       : 1024 * 1024,
   })(c, next));
   app.use("/api/*", async (c, next) => {
@@ -614,31 +615,35 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
 
   // ---- Dictation ------------------------------------------------------------------------------
   /**
-   * Speech to text through the host's own dictation service (its configured STT provider). The
+   * Speech to text through the transcription service configured here, once for every host. The
    * browser records 16 kHz mono PCM and posts it once when the user stops: one request, no
-   * socket kept open while idle.
+   * socket kept open while idle. The API key never leaves the server.
    */
-  app.post("/api/hosts/:host/dictation", async (c) => {
-    const format = c.req.header("x-audio-format") ?? "";
-    if (!/^audio\/pcm;rate=\d{4,6};bits=16$/.test(format)) return c.json({ error: "Unsupported audio format" }, 415);
-    const audio = Buffer.from(await c.req.arrayBuffer());
-    if (audio.length < 3200 || audio.length % 2) return c.json({ error: "Recording too short" }, 400);
-    const { driver } = hosts.get(c.req.param("host"));
-    const id = randomUUID();
+  app.get("/api/dictation", (c) => c.json(dictationSettings(store)));
+  app.put("/api/dictation", async (c) => {
     try {
-      await driver.startDictationStream(id, format);
-      const CHUNK = 32_000; // one second at 16 kHz
-      let seq = 0;
-      for (let offset = 0; offset < audio.length; offset += CHUNK, seq++)
-        driver.sendDictationStreamChunk(id, seq, audio.subarray(offset, offset + CHUNK).toString("base64"), format);
-      const result = await driver.finishDictationStream(id, seq - 1);
-      return c.json({ text: result.text });
+      return c.json(saveDictation(store, await c.req.json()));
     } catch (error) {
-      try { driver.cancelDictationStream(id); } catch { /* already gone */ }
-      const message = error instanceof Error ? error.message : "";
-      return c.json({ error: /disabled|not enabled|unavailable|not configured/i.test(message)
-        ? "Dictation is not enabled on this host. Turn it on in the host's Paseo settings."
-        : "Transcription failed" + (message ? `: ${message.slice(0, 200)}` : "") }, 502);
+      const message = error instanceof z.ZodError ? error.issues[0]?.message ?? "Invalid settings" : (error as Error).message;
+      return c.json({ error: message }, 400);
+    }
+  });
+  app.delete("/api/dictation", (c) => {
+    clearDictation(store);
+    return c.json(dictationSettings(store));
+  });
+  app.post("/api/dictation/transcribe", async (c) => {
+    const config = dictationConfig(store);
+    if (!config) return c.json({ error: "Voice input is not set up. Add a transcription service in Settings." }, 409);
+    const format = /^audio\/pcm;rate=(\d{4,6});bits=16$/.exec(c.req.header("x-audio-format") ?? "");
+    if (!format) return c.json({ error: "Unsupported audio format" }, 415);
+    const audio = new Uint8Array(await c.req.arrayBuffer());
+    if (audio.length < 3200 || audio.length % 2) return c.json({ error: "Recording too short" }, 400);
+    try {
+      return c.json({ text: await transcribe(config, audio, Number(format[1]), options.fetch) });
+    } catch (error) {
+      if (error instanceof DictationError) return c.json({ error: error.message }, error.status);
+      throw error;
     }
   });
   const attachmentOwner = (c: { get: (key: "session") => LoginSession | null }) => c.get("session")?.id ?? "bearer";

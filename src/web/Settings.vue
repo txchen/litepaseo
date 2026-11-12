@@ -19,7 +19,55 @@ const props = defineProps<{
   request: (path: string, method?: string, body?: unknown) => Promise<any>;
   totpEnabled: boolean;
 }>();
-const emit = defineEmits<{ back: []; signedOut: []; totpChanged: [enabled: boolean] }>();
+const emit = defineEmits<{ back: []; signedOut: []; totpChanged: [enabled: boolean]; dictationChanged: [configured: boolean] }>();
+
+// ---- voice input -----------------------------------------------------------------------------
+type VoiceSettings = { configured: boolean; baseUrl: string; model: string; languages: string[]; keywords: string[]; keyHint: string };
+const voice = ref<VoiceSettings | null>(null);
+const voiceForm = ref({ baseUrl: "", apiKey: "", model: "", languages: "", keywords: "" });
+/** Languages: commas or spaces. Vocabulary: one term per line or comma (terms may contain spaces). */
+const list = (text: string, separator: RegExp) => text.split(separator).map((s) => s.trim()).filter(Boolean);
+const voiceEditing = ref(false);
+const voiceBusy = ref(false);
+const voiceError = ref("");
+const voiceMessage = ref("");
+function showVoice(settings: VoiceSettings) {
+  voice.value = settings;
+  voiceForm.value = { baseUrl: settings.baseUrl, apiKey: "", model: settings.model, languages: settings.languages.join(", "), keywords: settings.keywords.join("\n") };
+  emit("dictationChanged", settings.configured);
+}
+async function voiceAction(fn: () => Promise<void>) {
+  voiceBusy.value = true;
+  voiceError.value = voiceMessage.value = "";
+  try {
+    await fn();
+  } catch (e) {
+    voiceError.value = (e as Error).message;
+  } finally {
+    voiceBusy.value = false;
+  }
+}
+const saveVoice = () =>
+  voiceAction(async () => {
+    const f = voiceForm.value;
+    showVoice(await props.request("/dictation", "PUT", {
+      baseUrl: f.baseUrl, apiKey: f.apiKey, model: f.model,
+      languages: list(f.languages, /[,\s]+/), keywords: list(f.keywords, /[,\n]+/),
+    }));
+    voiceEditing.value = false;
+    voiceMessage.value = "Saved. The microphone button is in the composer.";
+  });
+const removeVoice = () =>
+  voiceAction(async () => {
+    if (!confirm("Remove the transcription service? Voice input turns off on every device.")) return;
+    showVoice(await props.request("/dictation", "DELETE"));
+    voiceEditing.value = false;
+  });
+function cancelVoice() {
+  if (voice.value) showVoice(voice.value);
+  voiceEditing.value = false;
+  voiceError.value = "";
+}
 
 // ---- notifications ---------------------------------------------------------------------------
 const support = pushSupport();
@@ -146,6 +194,7 @@ const permissionBlocked = computed(() => permission.value === "denied");
 onMounted(() => {
   void refreshPush().catch(() => {});
   void loadDevices().catch(() => {});
+  void props.request("/dictation").then(showVoice).catch(() => {});
 });
 </script>
 
@@ -236,6 +285,59 @@ onMounted(() => {
       </div>
       <p v-if="pushMessage" class="setting-note">{{ pushMessage }}</p>
       <p v-if="pushError" class="setting-note is-error">{{ pushError }}</p>
+
+      <h2 class="section-label">Voice input</h2>
+      <div class="card">
+        <div class="card-row">
+          <span class="setting-icon"><Icon name="mic" :size="16" /></span>
+          <div class="grow">
+            <div class="row-title">Transcription service</div>
+            <div class="row-sub">
+              <template v-if="voice?.configured">{{ voice.model }} · {{ voice.baseUrl.replace(/^https?:\/\//, "") }} · key {{ voice.keyHint }}{{ voice.languages.length ? " · " + voice.languages.join(", ") : "" }}{{ voice.keywords.length ? ` · ${voice.keywords.length} terms` : "" }}</template>
+              <template v-else>Any OpenAI-compatible speech-to-text API. Set it once here and the microphone works for every host.</template>
+            </div>
+          </div>
+          <button v-if="!voiceEditing" class="btn btn-outline" :disabled="voiceBusy || !voice" @click="voiceEditing = true">
+            {{ voice?.configured ? "Edit" : "Set up" }}
+          </button>
+        </div>
+        <form v-if="voiceEditing" class="card-row voice-form" @submit.prevent="saveVoice">
+          <label class="field"><span>Base URL</span>
+            <input v-model="voiceForm.baseUrl" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="field"><span>API key</span>
+            <input
+              v-model="voiceForm.apiKey"
+              type="password"
+              autocomplete="off"
+              :placeholder="voice?.configured ? 'Unchanged (' + voice.keyHint + ')' : 'sk-…'"
+              :required="!voice?.configured"
+            />
+          </label>
+          <div class="field-grid">
+            <label class="field"><span>Model</span>
+              <input v-model="voiceForm.model" placeholder="gpt-transcribe" autocomplete="off" spellcheck="false" />
+            </label>
+            <label class="field"><span>Languages</span>
+              <input v-model="voiceForm.languages" placeholder="Detect (or zh, en)" maxlength="80" autocomplete="off" spellcheck="false" />
+            </label>
+          </div>
+          <label class="field"><span>Vocabulary</span>
+            <textarea v-model="voiceForm.keywords" rows="3" placeholder="LitePaseo&#10;Claude Code&#10;pnpm" spellcheck="false"></textarea>
+          </label>
+          <p class="row-sub">
+            The key stays on this server; browsers never see it. List every language you mix while speaking. Vocabulary is names and
+            terms to spell right, one per line. gpt-transcribe gets both as hints; Whisper-style models get one language and the terms as a prompt.
+          </p>
+          <div class="form-actions">
+            <button v-if="voice?.configured" type="button" class="btn btn-ghost voice-remove" :disabled="voiceBusy" @click="removeVoice">Remove</button>
+            <button type="button" class="btn btn-ghost" :disabled="voiceBusy" @click="cancelVoice">Cancel</button>
+            <button class="btn btn-primary" :disabled="voiceBusy">Save</button>
+          </div>
+        </form>
+      </div>
+      <p v-if="voiceMessage" class="setting-note">{{ voiceMessage }}</p>
+      <p v-if="voiceError" class="setting-note is-error">{{ voiceError }}</p>
 
       <h2 class="section-label">App</h2>
       <div class="card">

@@ -3,10 +3,11 @@ import { onUnmounted, ref } from "vue";
 import Icon from "./Icon.vue";
 
 /**
- * Voice input through the host's dictation service. Records 16 kHz mono PCM while the button
- * is on (nothing runs otherwise), then posts the clip once for transcription.
+ * Voice input through the transcription service configured in LitePaseo Settings (the same for
+ * every host). Records 16 kHz mono PCM while the button is on (nothing runs otherwise), then
+ * posts the clip once for transcription.
  */
-const props = defineProps<{ hostId: string; disabled: boolean }>();
+defineProps<{ disabled: boolean }>();
 const emit = defineEmits<{ text: [text: string]; notice: [text: string] }>();
 
 const RATE = 16_000;
@@ -96,7 +97,7 @@ async function stop() {
   }
   state.value = "transcribing";
   try {
-    const response = await fetch(`/api/hosts/${encodeURIComponent(props.hostId)}/dictation`, {
+    const response = await fetch("/api/dictation/transcribe", {
       method: "POST",
       headers: { "Content-Type": "application/octet-stream", "x-litepaseo": "1", "x-audio-format": `audio/pcm;rate=${RATE};bits=16` },
       body: audio.buffer,

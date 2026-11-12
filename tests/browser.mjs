@@ -317,6 +317,7 @@ try {
 
   await page.getByLabel("Choose attachments").setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("ATTACHMENT_CONTENT") });
   await page.locator(".attachment-item[data-state=ready]").waitFor();
+  assert.equal(await page.getByRole("button", { name: "Voice input" }).count(), 0, "no microphone until voice input is set up");
   await page.locator(".composer textarea").fill("Hello beta");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await page.waitForFunction(() => document.querySelector(".composer textarea").value === "");
@@ -504,6 +505,15 @@ try {
   // Settings → authenticator: enroll with a real TOTP code, sign out, sign back in with a code.
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByText("Push notifications").waitFor();
+  // Voice input is configured once here; the key is kept server-side and only hinted at.
+  await page.getByRole("button", { name: "Set up" }).first().click();
+  await page.getByLabel("Base URL").fill("https://stt.example/v1");
+  await page.getByLabel("API key").fill("sk-browser-test-4321");
+  await page.getByLabel("Languages").fill("zh, en");
+  await page.getByLabel("Vocabulary").fill("LitePaseo\nClaude Code");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page.getByText("key …4321 · zh, en · 2 terms").waitFor();
+  assert.equal(await page.getByRole("button", { name: "Edit", exact: true }).count(), 1);
   await page.getByRole("button", { name: "Set up" }).click();
   await page.getByAltText("Authenticator QR code").waitFor();
   const secret = (await page.locator(".secret").textContent()).replace(/\s/g, "");
@@ -534,13 +544,14 @@ try {
   // Reuse the fully authenticated session for the independent mobile navigation checks.
   await phone.locator("button.session", { hasText: "alpha conversation" }).click();
   await phone.waitForFunction(() => document.querySelector(".shell.detail-open"));
+  await phone.getByRole("button", { name: "Voice input" }).waitFor(); // set up on the other device
   await phone.goBack();
   await phone.waitForFunction(() => !document.querySelector(".shell.detail-open"));
   assert.ok(phone.url().startsWith(`http://127.0.0.1:${port}`), "back must stay in the app");
   assert.deepEqual(errors, []);
   await page.screenshot({ path: join(tmpdir(), "litepaseo-preview.png"), fullPage: true });
   console.log(
-    "PASS browser: login, streamed directory + resume, timeline stream, send routing, approval, new session, board, PWA + service worker, TOTP enroll/sign-in, phone back; no page errors",
+    "PASS browser: login, streamed directory + resume, timeline stream, send routing, approval, new session, board, PWA + service worker, voice input setup, TOTP enroll/sign-in, phone back; no page errors",
   );
 } finally {
   await browser?.close();

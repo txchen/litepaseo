@@ -2072,6 +2072,20 @@ h3 {
 .switch:focus {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
+.voice-form {
+  display: grid;
+  gap: 12px;
+}
+.voice-form .row-sub {
+  margin: 0;
+}
+.voice-form .form-actions {
+  gap: 8px;
+}
+.voice-remove {
+  margin-right: auto;
+  color: var(--danger);
+}
 .totp-setup {
   align-items: flex-start;
   gap: 18px;

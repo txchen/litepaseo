@@ -46,6 +46,8 @@ package, with no separate database service to deploy.
 - Create sessions, choose a provider/model, send messages, stop turns, and answer
   permission requests or structured questions.
 - Attach files and images, with previews and upload status.
+- Dictate messages through one OpenAI-compatible speech-to-text service set up in
+  LitePaseo, rather than configuring each Paseo host.
 - Keep a Todo / Doing / Done board linked to conversations.
 - Receive notifications when an agent needs input or finishes, and install the
   console as a phone or desktop web app.
@@ -102,6 +104,22 @@ before starting the server for Apple push delivery.
 Optional two-factor sign-in is under **Settings → Authenticator code**; signed-in
 devices can be revoked in Settings. If you lose your authenticator, run
 `litepaseo totp-reset` on the server.
+
+### Voice input
+
+Voice input is off until you add a transcription service in **Settings → Voice input**: a
+base URL (`https://api.openai.com/v1` by default), an API key, and a model
+(`gpt-transcribe` by default). The microphone button then appears in the composer on every
+device. Recording needs HTTPS or localhost. The browser sends the clip to LitePaseo, and
+LitePaseo calls `/audio/transcriptions`. The key stays on the server and is included in
+backups. Paseo daemons are not involved.
+
+List every language you speak, such as `zh, en` when you mix Chinese and English. Under
+**Vocabulary**, add names and terms the model should spell correctly. `gpt-transcribe`
+receives these as `languages[]` and `keywords[]`. Whisper-style models (`whisper-1`,
+`gpt-4o(-mini)-transcribe`, Groq, local Whisper servers) receive a single `language` (only
+when you list exactly one) and the vocabulary as a `prompt`. If a model rejects the language
+field, LitePaseo retries once with the other format.
 
 ## Everyday commands
 

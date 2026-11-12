@@ -191,6 +191,11 @@ const composer = new ComposerStore(() => localStorage);
 const attachments = new AttachmentStore();
 const attachmentPanel = ref<InstanceType<typeof AttachmentPanel> | null>(null);
 const selectedAttachments = computed(() => selectedKey.value ? attachments.get(selectedKey.value) : []);
+/** Voice input shows only once a transcription service is set up in Settings. */
+const dictationReady = ref(false);
+async function loadDictation() {
+  try { dictationReady.value = !!(await api("/dictation")).configured; } catch { /* keep the last answer */ }
+}
 /** Short-lived composer messages (dictation, model switches): cleared after a while or on dismiss. */
 const composerNotice = ref("");
 let composerNoticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -509,6 +514,7 @@ async function enter() {
   void registerServiceWorker();
   preloadMarkstream();
   void loadUsage();
+  void loadDictation();
   clearInterval(usageTimer);
   usageTimer = setInterval(() => void loadUsage(), 5 * 60_000);
   // A notification tap opens /?session=<key>; select it once and clean the address.
@@ -1225,6 +1231,7 @@ onUnmounted(() => {
         @back="closeDetail"
         @signed-out="signOut('user')"
         @totp-changed="(on) => authInfo && (authInfo.totp = on)"
+        @dictation-changed="(on) => (dictationReady = on)"
       />
 
       <section v-else-if="tab === 'hosts'" class="page">
@@ -1568,8 +1575,8 @@ onUnmounted(() => {
                     {{ behavior === "steer" ? "Steer" : "Interrupt" }}
                   </button>
                   <DictationButton
-                    :host-id="active.hostId"
-                    :disabled="busy || hostStates.get(active.hostId) !== 'connected'"
+                    v-if="dictationReady"
+                    :disabled="busy"
                     @text="insertDictation"
                     @notice="showComposerNotice"
                   />

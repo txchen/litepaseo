@@ -7,7 +7,7 @@ import { Store } from "../src/server/store.ts";
 import { Hosts } from "../src/server/hosts.ts";
 import { createApp } from "../src/server/app.ts";
 
-function setup(dictation: "ok" | "disabled" = "ok") {
+function setup() {
   const directory = mkdtempSync(join(tmpdir(), "litepaseo-composer-"));
   const store = new Store(directory);
   const hosts = new Hosts();
@@ -23,13 +23,6 @@ function setup(dictation: "ok" | "disabled" = "ok") {
     setAgentThinkingOption: async (...args: unknown[]) => (calls.push(["thinking", ...args]), { message: "Applies next turn" }),
     setAgentMode: async (...args: unknown[]) => (calls.push(["mode", ...args]), null),
     setAgentFeature: async (...args: unknown[]) => void calls.push(["feature", ...args]),
-    startDictationStream: async (id: string, format: string) => {
-      calls.push(["start", format]);
-      if (dictation === "disabled") throw new Error("Dictation is disabled");
-    },
-    sendDictationStreamChunk: (_id: string, seq: number, audio: string) => calls.push(["chunk", seq, Buffer.from(audio, "base64").length]),
-    finishDictationStream: async (id: string, finalSeq: number) => (calls.push(["finish", finalSeq]), { dictationId: id, text: "hello world" }),
-    cancelDictationStream: () => calls.push(["cancel"]),
     scheduleUpdate: async (options: unknown) => (calls.push(["scheduleUpdate", options]), { schedule: { id: "s1" }, error: null }),
     close: async () => {},
   };
@@ -93,45 +86,6 @@ test("the composer reads model, thinking, mode, features and context from the di
       ["mode", "a1", "ask"],
       ["feature", "a1", "speed", "fast"],
     ]);
-  } finally {
-    await done();
-  }
-});
-
-test("dictation streams the recorded clip to the host in one-second chunks", async () => {
-  const { host, calls, request, done } = setup();
-  try {
-    const audio = new Uint8Array(16_000 * 2 * 2.5); // 2.5 s of 16 kHz PCM16
-    const response = await request(`/hosts/${host.id}/dictation`, {
-      method: "POST",
-      body: audio,
-      headers: { "Content-Type": "application/octet-stream", "x-audio-format": "audio/pcm;rate=16000;bits=16" },
-    });
-    assert.deepEqual(await response.json(), { text: "hello world" });
-    assert.deepEqual(calls, [
-      ["start", "audio/pcm;rate=16000;bits=16"],
-      ["chunk", 0, 32_000],
-      ["chunk", 1, 32_000],
-      ["chunk", 2, 16_000],
-      ["finish", 2],
-    ]);
-    const bad = await request(`/hosts/${host.id}/dictation`, { method: "POST", body: audio, headers: { "x-audio-format": "audio/webm" } });
-    assert.equal(bad.status, 415);
-  } finally {
-    await done();
-  }
-});
-
-test("a host without dictation says so", async () => {
-  const { host, request, done } = setup("disabled");
-  try {
-    const response = await request(`/hosts/${host.id}/dictation`, {
-      method: "POST",
-      body: new Uint8Array(32_000),
-      headers: { "x-audio-format": "audio/pcm;rate=16000;bits=16" },
-    });
-    assert.equal(response.status, 502);
-    assert.match((await response.json()).error, /not enabled/);
   } finally {
     await done();
   }

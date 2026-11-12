@@ -1,0 +1,177 @@
+{
+  "groups": [
+    {
+      "scenario": "code",
+      "variant": "litepaseo",
+      "n": 5,
+      "browserCpuPercent": {
+        "median": 6.368841136793238,
+        "min": 5.6936038641403455,
+        "max": 6.559292989988197
+      },
+      "browserPeakPssMiB": {
+        "median": 283.3857421875,
+        "min": 282.888671875,
+        "max": 285.4228515625
+      },
+      "heapPeakMiB": {
+        "median": 10.986328125,
+        "min": 10.774063110351562,
+        "max": 11.038978576660156
+      },
+      "readyMs": {
+        "median": 962.5601320000133,
+        "min": 916.9412989999983,
+        "max": 969.2962500000003
+      },
+      "latencyP50": {
+        "median": 323,
+        "min": 322,
+        "max": 324
+      },
+      "latencyP95": {
+        "median": 575,
+        "min": 574,
+        "max": 576
+      },
+      "longTasks": {
+        "median": 0,
+        "min": 0,
+        "max": 1
+      },
+      "longTaskMs": {
+        "median": 0,
+        "min": 0,
+        "max": 67
+      },
+      "bffCpuPercent": {
+        "median": 0.6751648494697658,
+        "min": 0.6430679401949212,
+        "max": 0.7078332640423655
+      },
+      "daemonCpuPercent": {
+        "median": 1.5443634851833439,
+        "min": 1.4475264061373767,
+        "max": 2.8949277894514718
+      },
+      "jsCssEncodedBytes": {
+        "median": 301292,
+        "min": 301292,
+        "max": 301292
+      },
+      "jsCssDecodedBytes": {
+        "median": 1145265,
+        "min": 1145265,
+        "max": 1145265
+      }
+    },
+    {
+      "scenario": "code",
+      "variant": "paseo",
+      "n": 5,
+      "browserCpuPercent": {
+        "median": 140.66479844432558,
+        "min": 136.1675621456963,
+        "max": 141.30540648865545
+      },
+      "browserPeakPssMiB": {
+        "median": 1052.384765625,
+        "min": 1005.0673828125,
+        "max": 1066.50390625
+      },
+      "heapPeakMiB": {
+        "median": 415.4982681274414,
+        "min": 280.2884216308594,
+        "max": 423.60315704345703
+      },
+      "readyMs": {
+        "median": 2570.490107999998,
+        "min": 2480.6194159999723,
+        "max": 2661.8499759999686
+      },
+      "latencyP50": {
+        "median": 212,
+        "min": 211,
+        "max": 217
+      },
+      "latencyP95": {
+        "median": 281,
+        "min": 276,
+        "max": 285
+      },
+      "longTasks": {
+        "median": 138,
+        "min": 115,
+        "max": 155
+      },
+      "longTaskMs": {
+        "median": 7996,
+        "min": 6612,
+        "max": 8821
+      },
+      "bffCpuPercent": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "daemonCpuPercent": {
+        "median": 1.8020859602591133,
+        "min": 1.2229655782407132,
+        "max": 2.0274267449079186
+      },
+      "jsCssEncodedBytes": {
+        "median": 3854418,
+        "min": 3854418,
+        "max": 3854418
+      },
+      "jsCssDecodedBytes": {
+        "median": 23961692,
+        "min": 23961692,
+        "max": 23961692
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "scenario": "code",
+      "pairs": [
+        {
+          "rep": 1,
+          "cpuReductionPercent": 95.83626731012971,
+          "pssReductionPercent": 73.32881604248695
+        },
+        {
+          "rep": 2,
+          "cpuReductionPercent": 95.18292544374857,
+          "pssReductionPercent": 71.80430416570718
+        },
+        {
+          "rep": 3,
+          "cpuReductionPercent": 95.47232768451732,
+          "pssReductionPercent": 73.11927337650165
+        },
+        {
+          "rep": 4,
+          "cpuReductionPercent": 95.28255039505423,
+          "pssReductionPercent": 72.29949372816745
+        },
+        {
+          "rep": 5,
+          "cpuReductionPercent": 95.9550484117181,
+          "pssReductionPercent": 73.04242037417589
+        }
+      ],
+      "pairedCpuReductionPercent": {
+        "median": 95.47232768451732,
+        "min": 95.18292544374857,
+        "max": 95.9550484117181
+      },
+      "pairedPssReductionPercent": {
+        "median": 73.04242037417589,
+        "min": 71.80430416570718,
+        "max": 73.32881604248695
+      }
+    }
+  ],
+  "excluded": []
+}

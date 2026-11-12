@@ -1,0 +1,23 @@
+import { serve } from '@hono/node-server';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { Store } from '../src/server/store.ts';
+import { Hosts } from '../src/server/hosts.ts';
+import { createApp } from '../src/server/app.ts';
+const home = mkdtempSync(join(tmpdir(), 'lp-compare-bff-'));
+const store = new Store(home), hosts = new Hosts();
+const host = { id: 'benchmark', label: 'Benchmark', connection: `ws://${process.env.BENCH_ENDPOINT}` };
+store.db.prepare('INSERT INTO hosts VALUES(?,?,?)').run(host.id, host.label, host.connection);
+hosts.add(host);
+const app = createApp(store, hosts, 'benchmark-token', resolve('dist/web'), { pushSender: { async send() {} } });
+const server = serve({ hostname: '127.0.0.1', port: 0, fetch: app.fetch });
+await new Promise(r => server.once('listening', r));
+process.send({ type: 'ready', url: `http://127.0.0.1:${server.address().port}` });
+process.on('message', async ({ cmd, requestId }) => {
+  if (cmd !== 'shutdown') return;
+  app.dispose(); await hosts.close(); server.closeAllConnections(); server.close(); store.close();
+  rmSync(home, { recursive: true, force: true });
+  process.send({ requestId, result: true }); process.exit();
+});
+process.on('disconnect', () => process.exit());

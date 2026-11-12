@@ -1,37 +1,38 @@
 # LitePaseo
 
-**A resource-conscious web console for your Paseo agents.**
+**Your Paseo agents, in a lighter web UI.**
 
 Keep track of coding agents across machines, read their output, send messages,
 and respond when they need your input—from a desktop browser or your phone.
-LitePaseo connects to existing Paseo daemons through the official SDK.
+One console for your existing Paseo daemons, designed to stay open without keeping
+your browser busy.
+
+[Get started](#install-and-start) · [Performance comparison](docs/performance-plan.md) · [Operations guide](docs/operations.md)
 
 ## Why LitePaseo?
 
-An agent dashboard often stays open for hours. Its job is to keep you informed
-while leaving CPU and memory available for your agents and the rest of your work.
-That is the reason for LitePaseo: a console designed around doing less work when
-there is less to show.
+An agent dashboard often stays open for hours. LitePaseo leaves more CPU and memory
+available for your agents and the rest of your work, with battery life in mind.
 
-Resource use shapes how it works:
+In our local comparison with the **official Paseo 0.15.4 web UI**:
 
-- **Send changes, not entire conversations.** The server shares daemon subscriptions
-  and sends incremental updates to browsers.
-- **Batch streaming output every 500 ms.** Messages remain live without rendering
-  every arriving token. Persistent status animations advance twice per second.
-- **Keep rendering bounded.** The sidebar is windowed, and conversation history
-  mounts at most 150 message rows, even after paging through older messages.
-- **Pause hidden tabs.** Browser streams close while a tab is hidden and resume
-  from their cursors when it becomes visible.
-- **Reuse rendered content.** Markstream retains settled Markdown blocks while the
-  message tail grows, with smooth streaming and typewriter effects disabled.
-- **Load the heavy parts later.** Markstream (about 700 KB) loads after sign-in, while
-  the browser is idle; until then messages use a small built-in renderer. Built assets
-  are served precompressed (Brotli/gzip) and cached permanently by content hash.
+| Resource | LitePaseo used |
+| --- | --- |
+| Browser CPU | **91–95% less** across the tested waiting and streaming scenarios |
+| Browser memory | **55–73% less** sampled peak PSS |
+| Compressed JavaScript + CSS | **92% less** — 290 KiB vs. 3,764 KiB, including the deferred renderer |
 
-These are concrete design choices, not a claim of lower resource use in every
-workload. Very large single code blocks can still be expensive. See the
-[rendering measurements and limitations](docs/markstream-integration-validation.md).
+Measured in headless Chromium on the same Linux laptop, with five runs per UI per
+scenario. LitePaseo uses 1 fps status animation and batches messages every 500 ms,
+trading some update latency for lower CPU use. These are resource measurements;
+battery runtime has not been measured.
+
+**[Read the full comparison →](docs/performance-plan.md)** for workload details,
+latency, rendering differences, raw data and reproduction steps.
+
+The approach is simple: update less often, send only changes, keep rendered history
+bounded, and pause streams while a tab is hidden. Everything ships in one npm
+package, with no separate database service to deploy.
 
 ## What you can do
 
@@ -186,7 +187,7 @@ node tests/package.mjs
 - [Operations guide](docs/operations.md): phone setup, notifications, backups,
   service management, diagnostics and attachment limits.
 - [Markstream integration and measurements](docs/markstream-integration-validation.md).
-- [Performance measurements](docs/performance-plan.md) and the
+- [LitePaseo vs. official Paseo web UI](docs/performance-plan.md) and the
   [benchmark harness](benchmarks/README.md).
 
 ## License

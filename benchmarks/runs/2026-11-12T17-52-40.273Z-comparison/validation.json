@@ -1,0 +1,14 @@
+{
+  "reportedRuns": 30,
+  "allReportedRunsPassed": true,
+  "verifiedChunksAcrossBothClients": 12000,
+  "applicationSourceUnchangedDuringRuns": true,
+  "identicalFrontendBuildsAcrossRuns": true,
+  "officialTarballIntegrityVerified": true,
+  "localDocumentLinksResolve": true,
+  "excludedCases": {
+    "code1000Lines": 2,
+    "reason": "Official 32000-character rendering cap prevents full output equality; both sides excluded."
+  },
+  "summariesReproducedFromTopLevelArtifacts": true
+}

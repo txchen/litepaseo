@@ -1,0 +1,8 @@
+{
+  "officialPackage": "@getpaseo/server@0.15.4",
+  "officialSourceTag": "https://github.com/getpaseo/paseo/tree/v0.15.4",
+  "officialSourceCommit": "1c00b365c9e0b74c1580eba33d905d693125ae21",
+  "tarball": "https://registry.npmjs.org/@getpaseo/server/-/server-0.15.4.tgz",
+  "npmIntegrity": "sha512-LB0WwgQKXlq+OsUwReBgFUQfy25QC3FRNuKSyIqR7P/wpE2yIv4S0QXQbZ1vckLSv5wOrNhSct0eOi/T+fnRYQ==",
+  "downloadedIntegrity": "sha512-LB0WwgQKXlq+OsUwReBgFUQfy25QC3FRNuKSyIqR7P/wpE2yIv4S0QXQbZ1vckLSv5wOrNhSct0eOi/T+fnRYQ=="
+}

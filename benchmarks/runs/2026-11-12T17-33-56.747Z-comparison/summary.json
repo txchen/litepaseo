@@ -1,0 +1,338 @@
+{
+  "groups": [
+    {
+      "scenario": "idle",
+      "variant": "litepaseo",
+      "n": 5,
+      "browserCpuPercent": {
+        "median": 1.546555102676883,
+        "min": 1.2233695669576314,
+        "max": 1.7399440725852207
+      },
+      "browserPeakPssMiB": {
+        "median": 226.205078125,
+        "min": 221.6484375,
+        "max": 226.74609375
+      },
+      "heapPeakMiB": {
+        "median": 6.200267791748047,
+        "min": 6.18145751953125,
+        "max": 6.2006378173828125
+      },
+      "readyMs": {
+        "median": 949.9130959999998,
+        "min": 946.4448640000192,
+        "max": 957.3358719999669
+      },
+      "longTasks": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "longTaskMs": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "bffCpuPercent": {
+        "median": 0.03219393597256927,
+        "min": 0,
+        "max": 0.03222118652935598
+      },
+      "daemonCpuPercent": {
+        "median": 0.35426870195260973,
+        "min": 0.32218589625608,
+        "max": 0.35443305182291507
+      },
+      "jsCssEncodedBytes": {
+        "median": 296649,
+        "min": 296649,
+        "max": 296649
+      },
+      "jsCssDecodedBytes": {
+        "median": 1127384,
+        "min": 1127384,
+        "max": 1127384
+      }
+    },
+    {
+      "scenario": "idle",
+      "variant": "paseo",
+      "n": 5,
+      "browserCpuPercent": {
+        "median": 17.75483728606067,
+        "min": 17.326627099715846,
+        "max": 18.367691687130062
+      },
+      "browserPeakPssMiB": {
+        "median": 499.095703125,
+        "min": 497.50390625,
+        "max": 500.25390625
+      },
+      "heapPeakMiB": {
+        "median": 90.53435516357422,
+        "min": 90.46583557128906,
+        "max": 91.70066833496094
+      },
+      "readyMs": {
+        "median": 2510.450902999997,
+        "min": 2438.0635949999996,
+        "max": 2633.995181000035
+      },
+      "longTasks": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "longTaskMs": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "bffCpuPercent": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "daemonCpuPercent": {
+        "median": 0.3542478088253866,
+        "min": 0.32205626579397456,
+        "max": 0.38632434642836994
+      },
+      "jsCssEncodedBytes": {
+        "median": 3854418,
+        "min": 3854418,
+        "max": 3854418
+      },
+      "jsCssDecodedBytes": {
+        "median": 23961692,
+        "min": 23961692,
+        "max": 23961692
+      }
+    },
+    {
+      "scenario": "plain",
+      "variant": "litepaseo",
+      "n": 5,
+      "browserCpuPercent": {
+        "median": 10.099884072777943,
+        "min": 9.36571853069379,
+        "max": 10.523370570916649
+      },
+      "browserPeakPssMiB": {
+        "median": 296.98828125,
+        "min": 295.8369140625,
+        "max": 299.025390625
+      },
+      "heapPeakMiB": {
+        "median": 8.036346435546875,
+        "min": 7.913509368896484,
+        "max": 9.366851806640625
+      },
+      "readyMs": {
+        "median": 942.9856939999154,
+        "min": 896.489430000016,
+        "max": 962.3370760000544
+      },
+      "latencyP50": {
+        "median": 316,
+        "min": 315,
+        "max": 317
+      },
+      "latencyP95": {
+        "median": 567,
+        "min": 566,
+        "max": 568
+      },
+      "longTasks": {
+        "median": 0,
+        "min": 0,
+        "max": 1
+      },
+      "longTaskMs": {
+        "median": 0,
+        "min": 0,
+        "max": 51
+      },
+      "bffCpuPercent": {
+        "median": 0.6435682235064717,
+        "min": 0.57941111484453,
+        "max": 0.6436919952366866
+      },
+      "daemonCpuPercent": {
+        "median": 1.480206914064885,
+        "min": 1.3519592679705694,
+        "max": 2.7035063799940846
+      },
+      "jsCssEncodedBytes": {
+        "median": 296649,
+        "min": 296649,
+        "max": 296649
+      },
+      "jsCssDecodedBytes": {
+        "median": 1127384,
+        "min": 1127384,
+        "max": 1127384
+      }
+    },
+    {
+      "scenario": "plain",
+      "variant": "paseo",
+      "n": 5,
+      "browserCpuPercent": {
+        "median": 114.74187378209095,
+        "min": 111.93797034168682,
+        "max": 116.47028527761111
+      },
+      "browserPeakPssMiB": {
+        "median": 762.69140625,
+        "min": 757.966796875,
+        "max": 766.7841796875
+      },
+      "heapPeakMiB": {
+        "median": 107.57547760009766,
+        "min": 105.08853912353516,
+        "max": 119.92855834960938
+      },
+      "readyMs": {
+        "median": 2607.4607519999845,
+        "min": 2502.898184000049,
+        "max": 2668.719218000071
+      },
+      "latencyP50": {
+        "median": 119,
+        "min": 110,
+        "max": 119
+      },
+      "latencyP95": {
+        "median": 142,
+        "min": 138,
+        "max": 161
+      },
+      "longTasks": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "longTaskMs": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "bffCpuPercent": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "daemonCpuPercent": {
+        "median": 1.4165288165183259,
+        "min": 1.3838690983523847,
+        "max": 2.3502123417768357
+      },
+      "jsCssEncodedBytes": {
+        "median": 3854418,
+        "min": 3854418,
+        "max": 3854418
+      },
+      "jsCssDecodedBytes": {
+        "median": 23961692,
+        "min": 23961692,
+        "max": 23961692
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "scenario": "idle",
+      "pairs": [
+        {
+          "rep": 1,
+          "cpuReductionPercent": 93.33955737173645,
+          "pssReductionPercent": 54.70197251383105
+        },
+        {
+          "rep": 2,
+          "cpuReductionPercent": 89.95797587971548,
+          "pssReductionPercent": 55.692812243782456
+        },
+        {
+          "rep": 3,
+          "cpuReductionPercent": 91.13706338202677,
+          "pssReductionPercent": 54.70120366517223
+        },
+        {
+          "rep": 4,
+          "cpuReductionPercent": 90.93028983787404,
+          "pssReductionPercent": 54.56265765439612
+        },
+        {
+          "rep": 5,
+          "cpuReductionPercent": 91.5748807801916,
+          "pssReductionPercent": 54.67701350489362
+        }
+      ],
+      "pairedCpuReductionPercent": {
+        "median": 91.13706338202677,
+        "min": 89.95797587971548,
+        "max": 93.33955737173645
+      },
+      "pairedPssReductionPercent": {
+        "median": 54.70120366517223,
+        "min": 54.56265765439612,
+        "max": 55.692812243782456
+      }
+    },
+    {
+      "scenario": "plain",
+      "pairs": [
+        {
+          "rep": 1,
+          "cpuReductionPercent": 91.19773475901319,
+          "pssReductionPercent": 60.99403838175868
+        },
+        {
+          "rep": 2,
+          "cpuReductionPercent": 91.79270880840049,
+          "pssReductionPercent": 61.02736756519624
+        },
+        {
+          "rep": 3,
+          "cpuReductionPercent": 91.62871580258997,
+          "pssReductionPercent": 60.54901192798374
+        },
+        {
+          "rep": 4,
+          "cpuReductionPercent": 90.8330935284486,
+          "pssReductionPercent": 61.30323729717454
+        },
+        {
+          "rep": 5,
+          "cpuReductionPercent": 90.76914516448693,
+          "pssReductionPercent": 61.2683348043205
+        }
+      ],
+      "pairedCpuReductionPercent": {
+        "median": 91.19773475901319,
+        "min": 90.76914516448693,
+        "max": 91.79270880840049
+      },
+      "pairedPssReductionPercent": {
+        "median": 61.02736756519624,
+        "min": 60.54901192798374,
+        "max": 61.30323729717454
+      }
+    }
+  ],
+  "excluded": [
+    {
+      "name": "code-1-litepaseo",
+      "passed": true,
+      "reason": "Explicit scenario selection; see report for fixture exclusion rationale."
+    },
+    {
+      "name": "code-1-paseo",
+      "passed": false,
+      "reason": "Explicit scenario selection; see report for fixture exclusion rationale."
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "excludedScenario": "code (1000 initial lines)",
+  "expectedCharacters": 47807,
+  "officialRenderCharacterLimit": 32000,
+  "renderedCharacters": 31984,
+  "matchesCappedPrefix": true,
+  "lastCompleteMarker": "BENCH_00148",
+  "source": "https://github.com/getpaseo/paseo/blob/v0.15.4/packages/app/src/components/assistant-message-render-limit.web.ts",
+  "decision": "Exclude both sides of this incomplete pair from performance summary; rerun code with 200 initial lines, retaining 600 appended chunks."
+}

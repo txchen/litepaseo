@@ -104,6 +104,18 @@ push notifications. Turn them on in **Settings → Notifications** to hear when 
 agent needs input or finishes. Set `LITEPASEO_PUSH_SUBJECT=mailto:you@example.com`
 before starting the server for Apple push delivery.
 
+If turning notifications on fails with **"Registration failed - push service error"**,
+the browser could not reach its own push service; LitePaseo is not involved yet.
+
+- **Brave** disables push by default. Open `brave://settings/privacy`, turn on
+  **Use Google services for push messaging**, restart Brave, and try again.
+- **Chromium builds without Google services** (many Linux distribution packages,
+  ungoogled-chromium) cannot receive Web Push. Use Google Chrome, Edge or Firefox.
+- **Chrome or Edge**: open `chrome://gcm-internals` (`edge://gcm-internals`). If
+  **Connection State** is not `CONNECTED`, a proxy, VPN or firewall is blocking the push
+  service (Chrome needs `mtalk.google.com:5228` and `fcm.googleapis.com`).
+- Private and incognito windows do not support push.
+
 Optional two-factor sign-in is under **Settings → Authenticator code**; signed-in
 devices can be revoked in Settings. If you lose your authenticator, run
 `litepaseo totp-reset` on the server.

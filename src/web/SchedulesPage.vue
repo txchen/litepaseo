@@ -346,4 +346,12 @@ async function create() {
 .check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; justify-self: start; }
 .check-row input { flex: none; width: auto; height: auto; margin: 0; }
 .btn-sm { height: 26px; padding: 0 8px; font-size: 12px; }
+/* On a phone the actions take their own line under the text, which then gets the full width. */
+@media (max-width: 560px) {
+  .schedule .card-row { flex-wrap: wrap; align-items: flex-start; row-gap: 6px; }
+  .schedule .grow { flex: 1 1 0; min-width: 0; }
+  .schedule-actions { flex-basis: 100%; padding-left: 38px; margin-left: -6px; gap: 6px; }
+  .schedule-actions .icon-btn { width: 36px; height: 36px; }
+  .schedule-runs { padding: 0 16px 14px; }
+}
 </style>

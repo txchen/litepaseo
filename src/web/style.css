@@ -3015,6 +3015,14 @@ h3 {
 .sidebar {
   padding: 8px 8px 0;
 }
+@media (max-width: 760px) {
+  /* The resizable sidebar is position: relative; on a phone it must stay a full-screen pane,
+     or it grows with the list and pushes the footer (Schedules, Hosts, Settings) out of reach. */
+  .sidebar {
+    position: absolute;
+    padding: max(8px, env(safe-area-inset-top)) 12px 0;
+  }
+}
 .side-nav {
   display: grid;
   gap: 1px;

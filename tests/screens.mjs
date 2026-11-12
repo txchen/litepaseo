@@ -7,6 +7,8 @@ import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
 
+/** SCREENS=mobile renders only the shots whose names contain "mobile". */
+const only = process.env.SCREENS;
 const out = resolve(process.argv[2] ?? join(tmpdir(), "litepaseo-screens"));
 mkdirSync(out, { recursive: true });
 const directory = mkdtempSync(join(tmpdir(), "lp-screens-"));
@@ -126,6 +128,7 @@ try {
   run("start");
   browser = await chromium.launch({ headless: true });
   const shoot = async (name, { palette, ...options }, steps) => {
+    if (only && !name.includes(only)) return;
     const context = await browser.newContext(options);
     const page = await context.newPage();
     if (palette) await page.addInitScript((id) => localStorage.setItem("litepaseo-palette", id), palette);
@@ -417,6 +420,16 @@ try {
     await openChat(page);
     await page.getByRole("button", { name: "Theme: system" }).click();
     await page.getByRole("button", { name: "Theme: light" }).click();
+  });
+  // Schedules and Hosts open from the sidebar footer, which a phone keeps on screen.
+  await shoot("mobile-schedules", mobile, async (page) => {
+    await login(page);
+    await page.getByRole("button", { name: "Schedules" }).click();
+    await page.getByText("Daily check-in").waitFor();
+  });
+  await shoot("mobile-hosts", mobile, async (page) => {
+    await login(page);
+    await page.getByRole("button", { name: /Hosts/ }).click();
   });
   await shoot("mobile-list-dark", { ...mobile, colorScheme: "dark" }, login);
   await shoot("login-dark", { ...desktop, colorScheme: "dark" }, async () => {});

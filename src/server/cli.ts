@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { VERSION } from "./version.ts";
 import { RotatingLog } from "./rotating-log.ts";
 import { manageService } from "./autostart.ts";
 import { FAILED_EVENT, StartupFailure, supervise } from "./supervisor.ts";
@@ -18,6 +19,10 @@ import { backup, restore } from "./backup.ts";
 import { Store } from "./store.ts";
 import { resolveDataDirectory } from "./data-dir.ts";
 const command = process.argv[2] ?? "help";
+if (command === "--version" || command === "-v") {
+  console.log(VERSION);
+  process.exit(0);
+}
 const { directory, notice } = await resolveDataDirectory(process.env, homedir(), process.platform);
 if (notice) console.error(notice);
 mkdirSync(directory, { recursive: true, mode: 0o700 });

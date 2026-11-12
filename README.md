@@ -50,10 +50,6 @@ workload. Very large single code blocks can still be expensive. See the
 You need **Node.js 24.11 or newer**, npm, and at least one existing Paseo daemon.
 The server targets Linux and macOS; live validation has primarily been on Linux.
 
-> **Before the first npm release:** this repository's package is still private
-> and unpublished. The commands below describe the planned npm installation.
-> To try the current code, use [Run from source](#run-from-source).
-
 ```sh
 npm install --global litepaseo
 litepaseo start
@@ -169,7 +165,7 @@ To test a local npm installation:
 ```sh
 npm run build
 npm pack
-npm install --global ./litepaseo-0.0.1.tgz
+npm install --global ./litepaseo-0.1.0.tgz
 litepaseo start
 ```
 
@@ -190,3 +186,7 @@ node tests/package.mjs
 - [Markstream integration and measurements](docs/markstream-integration-validation.md).
 - [Performance measurements](docs/performance-plan.md) and the
   [benchmark harness](benchmarks/README.md).
+
+## License
+
+[MIT](LICENSE).

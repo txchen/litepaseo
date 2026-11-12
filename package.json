@@ -1,14 +1,16 @@
 {
   "name": "litepaseo",
-  "version": "0.0.1",
-  "private": true,
-  "description": "A Vue and Hono console for multiple Paseo daemons",
+  "version": "0.1.0",
+  "description": "A resource-conscious web console for your Paseo agents",
   "bin": {
     "litepaseo": "dist/server/cli.mjs"
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "docs/operations.md",
+    "docs/markstream-integration-validation.md",
+    "docs/performance-plan.md"
   ],
   "type": "module",
   "scripts": {
@@ -19,7 +21,8 @@
     "test:browser": "node tests/browser.mjs",
     "check": "npm run typecheck && npm run build && npm test && npm run test:browser",
     "screens": "node tests/screens.mjs",
-    "icons": "node scripts/make-icons.mjs"
+    "icons": "node scripts/make-icons.mjs",
+    "prepack": "npm run build 1>&2"
   },
   "dependencies": {
     "@getpaseo/client": "0.15.3",
@@ -44,5 +47,24 @@
   },
   "engines": {
     "node": ">=24.11.0"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/txchen/litepaseo.git"
+  },
+  "homepage": "https://github.com/txchen/litepaseo#readme",
+  "bugs": {
+    "url": "https://github.com/txchen/litepaseo/issues"
+  },
+  "keywords": [
+    "paseo",
+    "coding-agents",
+    "dashboard",
+    "self-hosted"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "license": "MIT"
 }

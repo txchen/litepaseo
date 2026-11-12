@@ -1,3 +1,4 @@
+import { VERSION } from "./version.ts";
 import { Attachments, MAX_FILE_BYTES } from "./attachments.ts";
 import { confirmedMessages } from "./message-status.ts";
 import { randomUUID } from "node:crypto";
@@ -300,7 +301,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
     }));
     return c.json({ error: "Operation failed; refresh state before retrying", requestId }, 502);
   });
-  app.get("/api/health", (c) => c.json({ ok: true, version: "0.0.1", waiting: notifier.waitingCount }));
+  app.get("/api/health", (c) => c.json({ ok: true, version: VERSION, waiting: notifier.waitingCount }));
   const hostStates = (): HostState[] =>
     store.hosts().map((h) => ({ id: h.id, label: h.label, state: hosts.state(h.id), diagnostic: hosts.diagnostic(h.id) }));
   app.get("/api/hosts", (c) => c.json(hostStates()));

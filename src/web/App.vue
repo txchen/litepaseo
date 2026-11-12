@@ -340,13 +340,21 @@ const working = computed(() => !historyRows.value && active.value?.state === "ru
 const clockNow = ref(Date.now());
 const turnStartedAt = computed(() => (working.value ? active.value?.turnStartedAt ?? null : null));
 const elapsed = computed(() => (turnStartedAt.value ? formatElapsed(clockNow.value - turnStartedAt.value) : ""));
-let elapsedTimer: ReturnType<typeof setInterval> | undefined;
+/** Whole seconds into the turn: the timer text and the spinner's quarter turns move together. */
+const turnSeconds = computed(() => (turnStartedAt.value ? Math.max(0, Math.floor((clockNow.value - turnStartedAt.value) / 1000)) : 0));
+let elapsedTimer: ReturnType<typeof setTimeout> | undefined;
 function syncElapsedClock() {
-  clearInterval(elapsedTimer);
+  clearTimeout(elapsedTimer);
   elapsedTimer = undefined;
-  if (!turnStartedAt.value || document.hidden) return;
-  clockNow.value = Date.now();
-  elapsedTimer = setInterval(() => { clockNow.value = Date.now(); }, 1000);
+  const start = turnStartedAt.value;
+  if (!start || document.hidden) return;
+  // Tick just after each whole second of the turn, so every tick changes the display once.
+  const tick = () => {
+    clockNow.value = Date.now();
+    const into = (clockNow.value - start) % 1000;
+    elapsedTimer = setTimeout(tick, (into < 0 ? -into : 1000 - into) + 10);
+  };
+  tick();
 }
 watch(turnStartedAt, syncElapsedClock, { immediate: true });
 document.addEventListener("visibilitychange", syncElapsedClock);
@@ -1036,7 +1044,7 @@ document.addEventListener("visibilitychange", () => {
 onUnmounted(() => {
   clearInterval(usageTimer);
   clearInterval(deliveryTimer);
-  clearInterval(elapsedTimer);
+  clearTimeout(elapsedTimer);
   document.removeEventListener("visibilitychange", syncElapsedClock);
   attachments.clear();
   window.removeEventListener("storage", onComposerStorage);
@@ -1472,7 +1480,10 @@ onUnmounted(() => {
               <button class="btn btn-ghost" :disabled="busy" @click="showLatest">Back to latest</button>
             </div>
             <div v-if="working" class="timeline-working" role="status" aria-label="Agent is working">
-              <span class="spinner"></span>
+              <span
+                class="spinner spinner-ticked"
+                :style="elapsed ? { transform: `rotate(${turnSeconds * 90}deg)` } : undefined"
+              ></span>
               <span v-if="elapsed" class="timeline-elapsed" aria-hidden="true">{{ elapsed }}</span>
               <span v-else>Working…</span>
             </div>

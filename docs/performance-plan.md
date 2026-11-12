@@ -155,6 +155,10 @@ cadences separate. No claim about measured display FPS or energy follows from th
 CPU counters. The clock tests directly inspect animation-time changes and verify
 that those changes stop when the application receives a hidden visibility signal.
 
+Later change: decorative motion now advances **once per second** (`--motion-step-ms: 1000`),
+the lowest-CPU setting measured above, so it moves in step with the turn timer. The turn's
+working spinner is turned by the timer's own clock rather than by `motion-clock.ts`.
+
 `motion-clock.ts` keeps persistent CSS animations paused and advances their time
 with a low-frequency timer. The timer stops while hidden, under reduced motion,
 or when no persistent animation is present. Short entrance transitions are separate

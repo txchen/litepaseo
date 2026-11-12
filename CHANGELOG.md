@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Settings without environment variables
+
+- `litepaseo config` shows the port, listening address and push contact, and where each value
+  comes from. `litepaseo config set <key> <value>` saves one; it applies on every start and is
+  included in backups. `LITEPASEO_PORT`, `LITEPASEO_BIND` and `LITEPASEO_PUSH_SUBJECT` still
+  work and override the saved value for that run.
+
+### Notifications
+
+- In Brave, turning notifications on no longer fails with a bare "push service error": Settings
+  says to enable **Use Google services for push messaging** in `brave://settings/privacy`. Other
+  browsers that cannot reach their push service get a short explanation too.
+
 ## 0.3.1
 
 ### Faster voice input

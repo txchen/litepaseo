@@ -20,6 +20,7 @@ export type Command = {
 const json: Flag = { name: "json", summary: "Print machine-readable JSON" };
 
 export const TOKEN_ACTIONS = ["set", "rotate"] as const;
+export const CONFIG_ACTIONS = ["set", "unset"] as const;
 export const SERVICE_ACTIONS = ["print", "install", "uninstall", "status", "start", "stop", "restart"] as const;
 
 export const COMMANDS: Command[] = [
@@ -58,6 +59,22 @@ export const COMMANDS: Command[] = [
       "Both actions take effect immediately and sign out every browser.",
     ],
     examples: ["litepaseo token", "litepaseo token set", "litepaseo token rotate"],
+  },
+  {
+    name: "config", group: "Configuration", args: "[set|unset] [key] [value]", summary: "Show or change saved settings",
+    details: [
+      "Saved settings apply on every start, so environment variables are no longer needed.",
+      "An environment variable still overrides its setting for that run.",
+      "",
+      "Keys:",
+      "  port            port the web console listens on (8787)",
+      "  bind            address to listen on (127.0.0.1; keep it behind a tunnel)",
+      "  push-subject    contact for push services: mailto:you@example.com or an https:// URL",
+      "",
+      "Changes apply after 'litepaseo restart' (or 'litepaseo service restart').",
+    ],
+    flags: [json],
+    examples: ["litepaseo config", "litepaseo config set push-subject mailto:you@example.com", "litepaseo config unset port"],
   },
   { name: "totp-reset", group: "Sign-in", summary: "Turn off authenticator sign-in (lost phone)" },
   { name: "signout-all", group: "Sign-in", summary: "Sign out every browser and stop its notifications" },
@@ -166,16 +183,18 @@ const usageOf = (c: Command) => `litepaseo ${c.name}${c.args ? " " + c.args : ""
 export function mainHelp(version: string, directory: string, s: Style) {
   const lines = [`${s.bold("LitePaseo")} ${version}: a resource-conscious web console for your Paseo agents`, "", `${s.bold("Usage:")} litepaseo <command> [options]`];
   const groups = [...new Set(COMMANDS.map((c) => c.group))];
+  const label = (c: Command) => c.name + (c.args ? " " + c.args : "");
+  const width = Math.max(22, ...COMMANDS.map((c) => label(c).length + 2));
   for (const group of groups) {
     lines.push("", s.bold(group));
     for (const c of COMMANDS.filter((x) => x.group === group))
-      lines.push(`  ${s.cyan((c.name + (c.args ? " " + c.args : "")).padEnd(22))}${c.summary}`);
+      lines.push(`  ${s.cyan(label(c).padEnd(width))}${c.summary}`);
   }
   lines.push(
     "", s.bold("Options"),
     `  ${s.cyan("-h, --help".padEnd(22))}Show help (also after a command)`,
     `  ${s.cyan("-v, --version".padEnd(22))}Print the version`,
-    "", s.bold("Environment"),
+    "", `${s.bold("Environment")} ${s.dim("(overrides 'litepaseo config' for one run)")}`,
     `  ${s.cyan("LITEPASEO_HOME".padEnd(24))}Data directory ${s.dim(`(now ${directory})`)}`,
     `  ${s.cyan("LITEPASEO_PORT".padEnd(24))}Port ${s.dim("(8787)")}`,
     `  ${s.cyan("LITEPASEO_BIND".padEnd(24))}Listen address ${s.dim("(127.0.0.1)")}`,

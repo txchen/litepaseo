@@ -101,8 +101,9 @@ responses (SSE) without buffering.
 Open your HTTPS address and install from the browser's menu. On iPhone/iPad,
 use Safari → Share → **Add to Home Screen**, then open the installed app to enable
 push notifications. Turn them on in **Settings → Notifications** to hear when an
-agent needs input or finishes. Set `LITEPASEO_PUSH_SUBJECT=mailto:you@example.com`
-before starting the server for Apple push delivery.
+agent needs input or finishes. For Apple devices, set a contact once with
+`litepaseo config set push-subject mailto:you@example.com` and restart (see
+[Configuration](#configuration)).
 
 If turning notifications on fails with **"Registration failed - push service error"**,
 the browser could not reach its own push service; LitePaseo is not involved yet.
@@ -177,20 +178,34 @@ Reinstall the service after changing its environment settings or Node/CLI paths.
 
 ### Configuration
 
-Set these variables before starting LitePaseo:
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `LITEPASEO_PORT` | `8787` | HTTP port |
-| `LITEPASEO_BIND` | `127.0.0.1` | Listening address |
-| `LITEPASEO_HOME` | `~/.litepaseo` | Application data directory |
-| `LITEPASEO_PUSH_SUBJECT` | — | Contact URL or `mailto:` address for push services |
-
-For example:
+Save settings once with `litepaseo config`; they apply on every start and are
+included in backups:
 
 ```sh
-LITEPASEO_PORT=9000 litepaseo start
+litepaseo config                                         # show settings and where each comes from
+litepaseo config set push-subject mailto:you@example.com
+litepaseo config set port 9000
+litepaseo config unset port                              # back to the default
+litepaseo restart                                        # apply (or: litepaseo service restart)
 ```
+
+| Key | Default | Purpose | Environment override |
+| --- | --- | --- | --- |
+| `port` | `8787` | HTTP port | `LITEPASEO_PORT` |
+| `bind` | `127.0.0.1` | Listening address | `LITEPASEO_BIND` |
+| `push-subject` | `mailto:litepaseo@example.com` | Contact for push services (see below) | `LITEPASEO_PUSH_SUBJECT` |
+
+An environment variable, when set, wins over the saved value for that run.
+`LITEPASEO_HOME` (default `~/.litepaseo`) chooses the data directory itself, so it
+is only an environment variable.
+
+**`push-subject`** is the contact address LitePaseo includes, signed, when it hands a
+notification to Apple, Google or Mozilla. They use it only to reach whoever runs
+the server if its notifications cause problems. It is never shown to anyone or
+emailed, and it does not have to be personal: any `mailto:` address or `https://`
+page you control works, such as your console's own address
+(`https://agents.example.com`). Replace the placeholder default with a real one;
+Apple is the strictest of the push services about this value.
 
 LitePaseo's data directory contains credentials and settings. Conversation
 history stays on your daemons, and drafts stay in browser storage.

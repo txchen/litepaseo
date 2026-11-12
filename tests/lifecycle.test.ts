@@ -11,7 +11,9 @@ test("packaged CLI background readiness, duplicate start, HTTP authentication an
   await new Promise<void>((r) => portServer.listen(0, "127.0.0.1", r));
   const port = (portServer.address() as { port: number }).port;
   await new Promise<void>((r) => portServer.close(() => r()));
-  const env = { ...process.env, LITEPASEO_DATA_DIR: directory, LITEPASEO_PORT: String(port) };
+  // The port comes from saved configuration, not the environment.
+  const env: NodeJS.ProcessEnv = { ...process.env, LITEPASEO_DATA_DIR: directory };
+  delete env.LITEPASEO_PORT;
   const run = (command: string, ...args: string[]) =>
     execFileSync(process.execPath, [resolve("dist/server/cli.mjs"), command, ...args], {
       env,
@@ -28,7 +30,10 @@ test("packaged CLI background readiness, duplicate start, HTTP authentication an
     }
   };
   try {
+    assert.match(run("config", "set", "port", String(port)), /port saved/);
+    assert.equal(JSON.parse(run("config", "--json")).port.source, "saved");
     const first = JSON.parse(run("start", "--json"));
+    assert.equal(new URL(first.url).port, String(port), "the worker listens on the saved port");
     assert.equal(first.ready, true);
     const second = JSON.parse(run("start", "--json"));
     assert.equal(second.pid, first.pid);

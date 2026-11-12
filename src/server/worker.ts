@@ -5,6 +5,7 @@ import { Store } from "./store.ts";
 import { Hosts } from "./hosts.ts";
 import { createApp } from "./app.ts";
 import { generateToken, tokenFile } from "./auth.ts";
+import { effectiveConfig } from "./config.ts";
 
 export async function runWorker(directory: string, webRoot: string) {
   if (!process.send) throw new Error("worker is an internal supervised command");
@@ -14,9 +15,9 @@ export async function runWorker(directory: string, webRoot: string) {
   for (const host of store.hosts()) {
     try { hosts.add(host); } catch { console.error("Could not initialize host", host.id); }
   }
-  const port = Number(process.env.LITEPASEO_PORT ?? 8787), hostname = process.env.LITEPASEO_BIND ?? "127.0.0.1";
-  const app = createApp(store, hosts, tokenFile(tokenPath), webRoot,
-    { pushSubject: process.env.LITEPASEO_PUSH_SUBJECT });
+  const config = effectiveConfig(store, process.env);
+  const port = Number(config.port.value), hostname = config.bind.value;
+  const app = createApp(store, hosts, tokenFile(tokenPath), webRoot, { pushSubject: config["push-subject"].value });
   const server = serve({ fetch: app.fetch, port, hostname });
   app.dictationStreams.attach(server as import("node:http").Server);
   let stopping = false;
@@ -35,7 +36,7 @@ export async function runWorker(directory: string, webRoot: string) {
   process.once("SIGTERM", () => void shutdown());
   process.once("disconnect", () => void shutdown());
   server.once("error", (error: NodeJS.ErrnoException) => {
-    const message = error.code === "EADDRINUSE" ? `Port ${port} on ${hostname} is already in use (set LITEPASEO_PORT to use another)`
+    const message = error.code === "EADDRINUSE" ? `Port ${port} on ${hostname} is already in use (choose another with: litepaseo config set port <number>)`
       : error.code === "EACCES" ? `Not permitted to listen on ${hostname}:${port}` : error.message;
     console.error(message);
     process.send?.({ type: "fatal", error: message });

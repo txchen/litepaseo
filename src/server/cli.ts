@@ -14,8 +14,9 @@ import { backup, restore } from "./backup.ts";
 import { Store } from "./store.ts";
 import { resolveDataDirectory } from "./data-dir.ts";
 import { generateToken, tokenProblem, writeTokenFile } from "./auth.ts";
+import { CONFIG_KEYS, configKeys, effectiveConfig, isConfigKey, setConfig } from "./config.ts";
 import {
-  COMMANDS, SERVICE_ACTIONS, TOKEN_ACTIONS, UsageError, colorEnabled, commandHelp, findCommand, formatStatus, lastLines,
+  COMMANDS, CONFIG_ACTIONS, SERVICE_ACTIONS, TOKEN_ACTIONS, UsageError, colorEnabled, commandHelp, findCommand, formatStatus, lastLines,
   mainHelp, makeStyle, parseArgs, suggest, versionNote, type Parsed, type Status,
 } from "./cli-format.ts";
 
@@ -229,6 +230,42 @@ async function token(paths: Paths, action: string | undefined) {
   if (note) console.error(note);
 }
 
+async function config(paths: Paths, args: Parsed) {
+  const [action, key, value] = args.positional;
+  const store = new Store(paths.directory);
+  try {
+    if (action === undefined) {
+      const entries = Object.values(effectiveConfig(store, process.env));
+      if (args.flags.json) return console.log(JSON.stringify(Object.fromEntries(entries.map((e) => [e.key, { value: e.value, source: e.source }]))));
+      for (const entry of entries) {
+        const note = entry.source === "environment"
+          ? `from ${CONFIG_KEYS[entry.key].env}${entry.saved !== null ? `, overriding saved ${entry.saved}` : ""}`
+          : entry.source;
+        console.log(`${out.cyan(entry.key.padEnd(14))}${entry.value} ${out.dim(`(${note})`)}`);
+      }
+      return;
+    }
+    if (!(CONFIG_ACTIONS as readonly string[]).includes(action)) {
+      const guess = suggest(action, CONFIG_ACTIONS);
+      throw new UsageError(`Unknown config action '${action}'.${guess ? ` Did you mean '${guess}'?` : ""} Actions: ${CONFIG_ACTIONS.join(", ")}.`);
+    }
+    if (!key || !isConfigKey(key)) {
+      const guess = key ? suggest(key, configKeys) : undefined;
+      throw new UsageError(`${key ? `Unknown key '${key}'.` : "Missing key."}${guess ? ` Did you mean '${guess}'?` : ""} Keys: ${configKeys.join(", ")}.`);
+    }
+    if (action === "set" && value === undefined) throw new UsageError(`Missing value for '${key}'.`);
+    if (action === "unset" && value !== undefined) throw new UsageError(`'unset' takes no value.`);
+    setConfig(store, key, action === "set" ? value! : null);
+    const entry = effectiveConfig(store, process.env)[key];
+    console.log(action === "set" ? `${key} saved: ${value}` : `${key} reset to the default: ${CONFIG_KEYS[key].fallback}`);
+    if (entry.source === "environment")
+      console.log(out.yellow(`! ${CONFIG_KEYS[key].env} is set in this shell and overrides it.`));
+  } finally {
+    store.close();
+  }
+  if (await status(paths)) console.log(out.dim("  Restart to apply: litepaseo restart (or litepaseo service restart)"));
+}
+
 async function version(args: Parsed) {
   const paths = await dataDirectory();
   const state = await status(paths);
@@ -299,6 +336,8 @@ async function run(): Promise<void> {
       return supervise(paths.directory, fileURLToPath(import.meta.url));
     case "token":
       return token(paths, args.positional[0]);
+    case "config":
+      return config(paths, args);
     case "totp-reset":
     case "signout-all": {
       const store = new Store(paths.directory);

@@ -545,13 +545,83 @@ try {
   await phone.locator("button.session", { hasText: "alpha conversation" }).click();
   await phone.waitForFunction(() => document.querySelector(".shell.detail-open"));
   await phone.getByRole("button", { name: "Voice input" }).waitFor(); // set up on the other device
+  // Exercise recording, early upload, provisional text, final replacement and cancellation.
+  // Fake only the microphone and socket peer; use the real Vue component and ticket endpoint.
+  await phone.evaluate(() => {
+    window.voiceTracksStopped = 0;
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", { configurable: true, value: async () => ({
+      getTracks: () => [{ stop: () => window.voiceTracksStopped++ }],
+    }) });
+    window.AudioContext = class {
+      sampleRate = 24000;
+      resume() { return Promise.resolve(); }
+      createMediaStreamSource() { return { connect() {} }; }
+      createScriptProcessor() {
+        const node = { onaudioprocess: null, connect() {}, disconnect: () => clearInterval(this.interval) };
+        this.interval = setInterval(() => node.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array(4096).fill(0.05) } }), 30);
+        return node;
+      }
+      close() { clearInterval(this.interval); return Promise.resolve(); }
+    };
+  });
+  let voicePackets = 0, voiceStops = 0, voiceCancels = 0, dropVoice = false;
+  await phone.routeWebSocket("**/api/dictation/stream?*", ws => {
+    ws.onMessage(message => {
+      if (typeof message !== "string") {
+        voicePackets++;
+        ws.send(JSON.stringify({ type: "partial", text: "Provisional voice text" }));
+        if (dropVoice) ws.close();
+      } else {
+        const event = JSON.parse(message);
+        if (event.type === "stop") { voiceStops++; ws.send(JSON.stringify({ type: "done", text: "Corrected voice text" })); }
+        if (event.type === "cancel") voiceCancels++;
+      }
+    });
+    ws.send(JSON.stringify({ type: "ready", mode: "segmented", rate: 24000 }));
+  });
+  await phone.locator(".composer textarea").fill("Mobile draft");
+  await phone.getByRole("button", { name: "Voice input", exact: true }).click();
+  await phone.getByText("Provisional voice text", { exact: true }).waitFor();
+  assert.ok(voicePackets > 0, "audio leaves the browser before Stop");
+  assert.equal(voiceStops, 0);
+  assert.equal(await phone.locator(".composer textarea").inputValue(), "Mobile draft", "partial text must not overwrite an editable draft");
+  await phone.waitForTimeout(100);
+  await phone.getByRole("button", { name: "Stop recording and transcribe" }).click();
+  await phone.waitForFunction(() => document.querySelector(".composer textarea").value === "Mobile draft Corrected voice text");
+  assert.equal(await phone.locator(".dictation-preview").count(), 0);
+  assert.equal(voiceStops, 1);
+  await phone.getByRole("button", { name: "Voice input", exact: true }).click();
+  await phone.getByText("Provisional voice text", { exact: true }).waitFor();
+  await phone.getByRole("button", { name: "Cancel voice input" }).click();
+  await phone.getByRole("button", { name: "Voice input", exact: true }).waitFor();
+  assert.equal(await phone.locator(".dictation-preview").count(), 0);
+  assert.equal(await phone.locator(".composer textarea").inputValue(), "Mobile draft Corrected voice text");
+  assert.equal(await phone.evaluate(() => window.voiceTracksStopped), 2);
+  assert.equal(voiceCancels, 1);
+  dropVoice = true;
+  await phone.locator(".composer textarea").fill("Draft kept");
+  await phone.getByRole("button", { name: "Voice input", exact: true }).click();
+  await phone.waitForFunction(() => document.querySelector(".composer textarea").value === "Draft kept Provisional voice text");
+  await phone.getByRole("button", { name: "Voice input", exact: true }).waitFor();
+  assert.equal(await phone.evaluate(() => window.voiceTracksStopped), 3);
+  // A microphone permission promise may resolve after Cancel; its tracks must still stop.
+  await phone.evaluate(() => {
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", { configurable: true, value: () => new Promise(resolve => {
+      window.resolveVoicePermission = () => resolve({ getTracks: () => [{ stop: () => window.voiceTracksStopped++ }] });
+    }) });
+  });
+  await phone.getByRole("button", { name: "Voice input", exact: true }).click();
+  await phone.getByRole("button", { name: "Cancel voice input" }).click();
+  await phone.evaluate(() => window.resolveVoicePermission());
+  await phone.waitForFunction(() => window.voiceTracksStopped === 4);
+  assert.equal(await phone.locator(".dictation-preview").count(), 0);
   await phone.goBack();
   await phone.waitForFunction(() => !document.querySelector(".shell.detail-open"));
   assert.ok(phone.url().startsWith(`http://127.0.0.1:${port}`), "back must stay in the app");
   assert.deepEqual(errors, []);
   await page.screenshot({ path: join(tmpdir(), "litepaseo-preview.png"), fullPage: true });
   console.log(
-    "PASS browser: login, streamed directory + resume, timeline stream, send routing, approval, new session, board, PWA + service worker, voice input setup, TOTP enroll/sign-in, phone back; no page errors",
+    "PASS browser: login, streamed directory + resume, timeline stream, send routing, approval, new session, board, PWA + service worker, voice setup + streaming/preview/final/cancel, TOTP enroll/sign-in, phone back; no page errors",
   );
 } finally {
   await browser?.close();

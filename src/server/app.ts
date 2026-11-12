@@ -20,6 +20,7 @@ import { Auth, SESSION_TTL_MS } from "./auth.ts";
 import { Notifier, vapidKeys, webPushSender, type PushSender } from "./notifier.ts";
 import { UsageService } from "./usage.ts";
 import { MAX_DICTATION_BYTES, DictationError, clearDictation, dictationConfig, dictationSettings, saveDictation, transcribe } from "./dictation.ts";
+import { DictationStreams } from "./dictation-stream.ts";
 import { Hosts, UnknownHostError } from "./hosts.ts";
 import type {
   CreateSessionRequest,
@@ -73,6 +74,7 @@ type Env = { Variables: { session: LoginSession | null } };
 export function createApp(store: Store, hosts: Hosts, token: string, webRoot: string, options: AppOptions = {}) {
   const app = new Hono<Env>();
   const auth = new Auth(store, token);
+  const dictationStreams = new DictationStreams(options.fetch, (metrics) => console.info(JSON.stringify({ event: "dictation_complete", ...metrics })));
   const attachments = new Attachments();
   const projectIcons = new IconCache();
   const viewers = new Map<string, Map<string, number>>();
@@ -616,10 +618,20 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
   // ---- Dictation ------------------------------------------------------------------------------
   /**
    * Speech to text through the transcription service configured here, once for every host. The
-   * browser records 16 kHz mono PCM and posts it once when the user stops: one request, no
-   * socket kept open while idle. The API key never leaves the server.
+   * browser streams PCM over a short-lived socket. The file endpoint remains for older
+   * clients. The API key never leaves the server.
    */
   app.get("/api/dictation", (c) => c.json(dictationSettings(store)));
+  app.post("/api/dictation/session", (c) => {
+    const config = dictationConfig(store);
+    if (!config) return c.json({ error: "Voice input is not set up. Add a transcription service in Settings." }, 409);
+    const session = c.get("session");
+    try {
+      return c.json(dictationStreams.issue(config, () => session ? auth.stillValid(session.id) : !auth.totpEnabled()));
+    } catch (error) {
+      return c.json({ error: (error as Error).message }, 429);
+    }
+  });
   app.put("/api/dictation", async (c) => {
     try {
       return c.json(saveDictation(store, await c.req.json()));
@@ -821,6 +833,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
   });
   app.use("/*", serveStatic({ root: webRoot, precompressed: true }));
   return Object.assign(app, {
+    dictationStreams,
     /** Open directory streams; lets tests prove that disconnects release them. */
     openStreams: () => directoryStreams.size,
     dispose: () => {
@@ -829,6 +842,7 @@ export function createApp(store: Store, hosts: Hosts, token: string, webRoot: st
       clearTimeout(hostFlush);
       agentFlush = hostFlush = undefined;
       attachments.close();
+      dictationStreams.close();
     },
   });
 }

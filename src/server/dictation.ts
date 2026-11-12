@@ -2,9 +2,9 @@ import { z } from "zod";
 import type { Store } from "./store.ts";
 
 /**
- * Voice input configured once in LitePaseo instead of on every Paseo host. The browser records
- * 16 kHz mono PCM and posts it once; the server wraps it as WAV and sends it to an
- * OpenAI-compatible `/audio/transcriptions` endpoint. No host is involved.
+ * File transcription for phrases from dictation-stream and complete clips from older clients.
+ * Wraps mono PCM as WAV for an OpenAI-compatible `/audio/transcriptions` endpoint.
+ * Voice input is configured in LitePaseo; no Paseo host is involved.
  *
  * Request shape differs by model generation (OpenAI speech-to-text guide, 2026):
  * - `gpt-transcribe` takes `languages[]` (several expected languages, for code-switching) and
@@ -170,7 +170,7 @@ export class DictationError extends Error {
 
 interface Attempt { ok: boolean; status: number; text?: string; detail: string }
 
-async function send(config: DictationConfig, file: Blob, shape: RequestShape, fetchImpl: typeof fetch): Promise<Attempt> {
+async function send(config: DictationConfig, file: Blob, shape: RequestShape, fetchImpl: typeof fetch, signal?: AbortSignal): Promise<Attempt> {
   const form = new FormData();
   form.append("file", file, "dictation.wav");
   for (const [name, value] of transcriptionFields(config, shape)) form.append(name, value);
@@ -180,7 +180,7 @@ async function send(config: DictationConfig, file: Blob, shape: RequestShape, fe
       method: "POST",
       headers: { authorization: `Bearer ${config.apiKey}` },
       body: form,
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)]) : AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
   } catch (error) {
     const timeout = (error as Error).name === "TimeoutError";
@@ -195,14 +195,14 @@ async function send(config: DictationConfig, file: Blob, shape: RequestShape, fe
   return { ok: response.ok, status: response.status, text: typeof data.text === "string" ? data.text : undefined, detail: String(detail) };
 }
 
-export async function transcribe(config: DictationConfig, pcm: Uint8Array, rate: number, fetchImpl: typeof fetch = fetch): Promise<string> {
+export async function transcribe(config: DictationConfig, pcm: Uint8Array, rate: number, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<string> {
   const file = new Blob([wav(pcm, rate)], { type: "audio/wav" });
   const shape = shapeFor(config.model);
-  let result = await send(config, file, shape, fetchImpl);
+  let result = await send(config, file, shape, fetchImpl, signal);
   // A model we guessed wrong about rejects the language/keyword fields; ask once the other way.
   const hinted = config.languages.length > 0 || config.keywords.length > 0;
   if (!result.ok && result.status === 400 && hinted && /language|keyword|prompt/i.test(result.detail))
-    result = await send(config, file, shape === "hints" ? "single" : "hints", fetchImpl).then((retry) => (retry.ok ? retry : result));
+    result = await send(config, file, shape === "hints" ? "single" : "hints", fetchImpl, signal).then((retry) => (retry.ok ? retry : result));
   if (!result.ok) {
     const scrubbed = result.detail.split(config.apiKey).join("…").replace(/\s+/g, " ").trim().slice(0, 200);
     throw new DictationError(`Transcription failed (${result.status})${scrubbed ? ": " + scrubbed : ""}`, 502);

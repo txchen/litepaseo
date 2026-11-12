@@ -1608,6 +1608,19 @@ h3 {
 .composer textarea::placeholder {
   color: var(--fg-faint);
 }
+.dictation-preview {
+  margin: 0 6px 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--fg-muted);
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.5;
+}
 .composer-bar {
   display: flex;
   align-items: center;

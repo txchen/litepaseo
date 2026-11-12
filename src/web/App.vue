@@ -193,6 +193,12 @@ const attachmentPanel = ref<InstanceType<typeof AttachmentPanel> | null>(null);
 const selectedAttachments = computed(() => selectedKey.value ? attachments.get(selectedKey.value) : []);
 /** Voice input shows only once a transcription service is set up in Settings. */
 const dictationReady = ref(false);
+const dictationPreview = ref("");
+const dictationPreviewElement = ref<HTMLDivElement | null>(null);
+watch(dictationPreview, () => {
+  const el = dictationPreviewElement.value;
+  if (el) el.scrollTop = el.scrollHeight;
+}, { flush: "post" });
 async function loadDictation() {
   try { dictationReady.value = !!(await api("/dictation")).configured; } catch { /* keep the last answer */ }
 }
@@ -1535,6 +1541,7 @@ onUnmounted(() => {
               @paste="pasteFiles"
             >
               <AttachmentPanel ref="attachmentPanel" :store="attachments" :agent-key="active.key" :base="'/api' + path(active)" :busy="busy || !!uncertain" />
+              <div v-if="dictationPreview" ref="dictationPreviewElement" class="dictation-preview" role="status" aria-live="polite">{{ dictationPreview }}</div>
               <textarea
                 ref="composerElement"
                 v-model="prompt"
@@ -1576,8 +1583,10 @@ onUnmounted(() => {
                   </button>
                   <DictationButton
                     v-if="dictationReady"
+                    :key="active.key"
                     :disabled="busy"
                     @text="insertDictation"
+                    @preview="dictationPreview = $event"
                     @notice="showComposerNotice"
                   />
                   <button

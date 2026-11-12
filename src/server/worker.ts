@@ -18,6 +18,7 @@ export async function runWorker(directory: string, webRoot: string) {
   const app = createApp(store, hosts, readFileSync(tokenPath, "utf8").trim(), webRoot,
     { pushSubject: process.env.LITEPASEO_PUSH_SUBJECT });
   const server = serve({ fetch: app.fetch, port, hostname });
+  app.dictationStreams.attach(server as import("node:http").Server);
   let stopping = false;
   const shutdown = async () => {
     if (stopping) return;

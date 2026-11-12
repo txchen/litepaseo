@@ -1,6 +1,6 @@
 {
   "name": "litepaseo",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A resource-conscious web console for your Paseo agents",
   "bin": {
     "litepaseo": "dist/server/cli.mjs"
@@ -32,6 +32,7 @@
     "markstream-vue": "2.0.25",
     "qrcode": "1.5.4",
     "web-push": "3.6.7",
+    "ws": "8.22.2",
     "zod": "4.6.7"
   },
   "devDependencies": {
@@ -39,6 +40,7 @@
     "@types/node": "^24.0.0",
     "@types/qrcode": "1.5.5",
     "@types/web-push": "3.6.4",
+    "@types/ws": "^8.18.2",
     "@vitejs/plugin-vue": "6.0.10",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/xterm": "6.0.0",

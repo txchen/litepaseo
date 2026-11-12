@@ -110,9 +110,13 @@ devices can be revoked in Settings. If you lose your authenticator, run
 Voice input is off until you add a transcription service in **Settings → Voice input**: a
 base URL (`https://api.openai.com/v1` by default), an API key, and a model
 (`gpt-transcribe` by default). The microphone button then appears in the composer on every
-device. Recording needs HTTPS or localhost. The browser sends the clip to LitePaseo, and
-LitePaseo calls `/audio/transcriptions`. The key stays on the server and is included in
-backups. Paseo daemons are not involved.
+device. Recording needs HTTPS or localhost. Audio uploads to LitePaseo while you speak.
+LitePaseo uses a Realtime transcription connection when supported; file-only services
+receive phrases at natural pauses through `/audio/transcriptions`. Long continuous speech
+is split after 30 seconds. Recognized text appears above the composer while recording, then
+the final text is inserted into your draft when you stop. Cancel discards the recording.
+The key stays on the server and is included in backups. Paseo daemons are not involved.
+Reverse proxies must allow WebSocket upgrades on `/api/dictation/stream`.
 
 List every language you speak, such as `zh, en` when you mix Chinese and English. Under
 **Vocabulary**, add names and terms the model should spell correctly. `gpt-transcribe`
@@ -225,7 +229,7 @@ To test a local npm installation:
 ```sh
 npm run build
 npm pack
-npm install --global ./litepaseo-0.3.0.tgz
+npm install --global ./litepaseo-0.3.1.tgz
 litepaseo start
 ```
 

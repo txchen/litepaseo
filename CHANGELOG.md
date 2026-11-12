@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.1
+
+### Faster voice input
+
+- Voice input uploads audio while recording. Compatible services use Realtime transcription;
+  file-only services transcribe phrases during pauses so earlier speech is processed before
+  recording ends. Partial text appears above the composer; stopping inserts the final result.
+- Cancel stops microphone capture and pending transcription. Voice sessions use one-use
+  tickets, expire with sign-in sessions, and keep API credentials on the server.
+- Completion logs include audio duration, first-text latency, and time from Stop to final
+  text, without recording audio or transcript content.
+
+**Upgrading from 0.3.0:** existing transcription settings and model selection are preserved.
+Reverse proxies must allow WebSocket upgrades on `/api/dictation/stream`.
+
 ## 0.3.0
 
 ### Voice input, configured once in LitePaseo

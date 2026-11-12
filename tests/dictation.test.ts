@@ -25,7 +25,7 @@ function setup(reply: (url: string, init: RequestInit) => Response | Promise<Res
   const json = (method: string, body: unknown) => ({ method, body: JSON.stringify(body) });
   const speak = (bytes = 16_000 * 2 * 2) =>
     request("/dictation/transcribe", { method: "POST", body: new Uint8Array(bytes), headers: { "Content-Type": "application/octet-stream", "x-audio-format": PCM } });
-  return { store, calls, request, json, speak, done: async () => { await hosts.close(); store.close(); rmSync(directory, { recursive: true, force: true }); } };
+  return { store, calls, request, json, speak, done: async () => { app.dispose(); await hosts.close(); store.close(); rmSync(directory, { recursive: true, force: true }); } };
 }
 
 test("voice input is off until a transcription service is set up, and the key never comes back", async () => {
@@ -33,6 +33,7 @@ test("voice input is off until a transcription service is set up, and the key ne
   try {
     assert.equal((await (await request("/dictation")).json()).configured, false);
     assert.equal((await speak()).status, 409);
+    assert.equal((await request("/dictation/session", { method: "POST" })).status, 409);
     assert.equal((await request("/dictation", json("PUT", { baseUrl: "https://stt.example/v1" }))).status, 400, "a key is required the first time");
     assert.equal((await request("/dictation", json("PUT", { apiKey: "k", baseUrl: "ftp://x" }))).status, 400);
     assert.equal((await request("/dictation", json("PUT", { apiKey: "k", languages: ["Chinese"] }))).status, 400);
@@ -47,6 +48,11 @@ test("voice input is off until a transcription service is set up, and the key ne
       languages: ["zh-tw", "en"], keywords: ["LitePaseo", "Claude Code"], keyHint: "…1234",
     });
     assert.doesNotMatch(await (await request("/dictation")).text(), /secret/);
+    const ticket = await (await request("/dictation/session", { method: "POST" })).json();
+    assert.equal(typeof ticket.ticket, "string");
+    assert.equal(ticket.rate, 24_000);
+    assert.doesNotMatch(JSON.stringify(ticket), /secret/);
+    assert.equal((await request("/dictation/session", { method: "POST", headers: { authorization: "" } })).status, 401);
 
     // Editing without a key keeps the saved one.
     const edited = await (await request("/dictation", json("PUT", { baseUrl: "", model: "whisper-1" }))).json();

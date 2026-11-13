@@ -10,7 +10,7 @@ import "@xterm/xterm/css/xterm.css";
  * first opens; output arrives over one SSE stream per visible terminal, input is posted in
  * small batches. Terminals keep running on the host when the panel closes.
  */
-const props = defineProps<{ hostId: string; cwd: string; api: (path: string, method?: string, body?: unknown) => Promise<any> }>();
+const props = defineProps<{ hostId: string; cwd: string; visible: boolean; api: (path: string, method?: string, body?: unknown) => Promise<any> }>();
 
 interface Term { id: string; name: string; title: string | null }
 const terminals = ref<Term[]>([]);
@@ -27,6 +27,8 @@ let fit: Fit | null = null;
 let stream: ReturnType<typeof openStream> | null = null;
 let observer: ResizeObserver | undefined;
 let lastSize = "";
+let disposed = false;
+let initializing: Promise<void> | null = null;
 
 const THEMES = {
   dark: { background: "#141517", foreground: "#e4e4e7", cursor: "#e4e4e7", selectionBackground: "#3a3b42" },
@@ -34,26 +36,51 @@ const THEMES = {
 };
 
 async function ensureTerminal() {
-  if (term.value || !host.value) return;
-  const [{ Terminal }, { FitAddon }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]);
+  if (term.value || !host.value || disposed) return;
+  if (initializing) return initializing;
+  initializing = setupTerminal().finally(() => { initializing = null; });
+  return initializing;
+}
+async function setupTerminal() {
+  const [{ Terminal }, { FitAddon }, { Unicode11Addon }, { WebglAddon }] = await Promise.all([
+    import("@xterm/xterm"), import("@xterm/addon-fit"), import("@xterm/addon-unicode11"), import("@xterm/addon-webgl"),
+  ]);
+  await document.fonts.ready;
+  if (disposed || !host.value) return;
   const t = new Terminal({
     fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--mono") || "monospace",
-    fontSize: 12.5,
+    fontSize: 14,
     lineHeight: 1.2,
     scrollback: 5000,
     cursorBlink: false,
-    allowProposedApi: false,
+    allowProposedApi: true,
     theme: isDark.value ? THEMES.dark : THEMES.light,
   });
   fit = new FitAddon();
   t.loadAddon(fit);
+  t.loadAddon(new Unicode11Addon());
+  t.unicode.activeVersion = "11";
   t.open(host.value);
+  // WebGL draws continuous box/block/Powerline glyphs. Keep DOM rendering as fallback.
+  const webgl = new WebglAddon();
+  try {
+    t.loadAddon(webgl);
+    webgl.onContextLoss(() => webgl.dispose());
+  } catch {
+    webgl.dispose();
+  }
   t.onData(queueInput);
   term.value = t;
   observer = new ResizeObserver(() => resize());
   observer.observe(host.value);
   resize();
 }
+watch(() => props.visible, async (visible) => {
+  if (!visible) return;
+  await nextTick();
+  resize();
+  term.value?.focus();
+});
 watch(isDark, (dark) => term.value && (term.value.options.theme = dark ? THEMES.dark : THEMES.light));
 
 // Input: keystrokes within one request round trip are sent together, in order.
@@ -153,12 +180,14 @@ async function init() {
   await refresh();
   await nextTick();
   await ensureTerminal();
+  if (disposed) return;
   if (terminals.value[0]) attach(terminals.value[0].id);
 }
-onMounted(init);
+onMounted(() => { void init().catch((e) => { error.value = (e as Error).message; }); });
 watch(() => [props.hostId, props.cwd], init);
 
 onUnmounted(() => {
+  disposed = true;
   stream?.close();
   observer?.disconnect();
   term.value?.dispose();
@@ -195,7 +224,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.terminals { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.terminals { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .term-tabs { flex: none; display: flex; align-items: center; gap: 2px; height: 36px; padding: 0 6px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
 .term-tab { flex: none; display: inline-flex; align-items: center; gap: 6px; max-width: 180px; height: 26px; padding: 0 6px 0 8px; border-radius: 6px; font-size: 12px; color: var(--fg-muted); }
 .term-tab span:not(.term-close) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

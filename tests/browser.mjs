@@ -294,6 +294,40 @@ try {
   await page.emulateMedia({ colorScheme: 'light' });
   await page.locator('.markstream-vue:not(.dark)').waitFor();
 
+  // Terminal lives in the center and loads its renderer only when opened.
+  assert.equal(await page.evaluate(() => performance.getEntriesByType('resource').some(r => /\/xterm-/.test(r.name))), false);
+  const terminalInput = [];
+  await page.route('**/api/hosts/*/terminals**', route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/stream')) return route.fulfill(sse({ t: 'o', d: Buffer.from('中文 😀 e\u0301 ┌──┐ \ue0b0\r\nready> ').toString('base64') }));
+    if (path.endsWith('/input')) {
+      terminalInput.push(route.request().postDataJSON());
+      return route.fulfill({ json: { ok: true } });
+    }
+    return route.fulfill({ json: [{ id: 'term-test', name: 'Shell', title: null }] });
+  });
+  await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+  await page.locator('.chat > .terminals .xterm').waitFor();
+  assert.equal(await page.locator('.side-panel .terminals').count(), 0);
+  assert.equal(await page.locator('.timeline-wrap').isVisible(), false);
+  const terminalBox = await page.locator('.terminals').boundingBox();
+  const chatBox = await page.locator('.chat').boundingBox();
+  assert.ok(terminalBox.width >= chatBox.width - 2 && terminalBox.height > 300);
+  await page.locator('.xterm-helper-textarea').fill('echo hello');
+  await page.waitForFunction(() => performance.getEntriesByType('resource').some(r => /addon-unicode11/.test(r.name)));
+  await page.waitForTimeout(150);
+  assert.ok(terminalInput.some(input => input.data?.includes('echo hello')));
+  await page.locator('.agent-tabs > button').first().click();
+  assert.equal(await page.locator('.terminals').isVisible(), false);
+  await page.locator('.agent-tabs > button').filter({ hasText: 'Terminal' }).click();
+  assert.equal(await page.locator('.terminals').isVisible(), true);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(150);
+  assert.ok((await page.locator('.terminals').boundingBox()).width <= 390);
+  await page.getByLabel('Close terminal tab').click();
+  assert.equal(await page.locator('.terminals').count(), 0);
+  await page.setViewportSize({ width: 1280, height: 900 });
+
   // Appends retain settled paragraph DOM; full-source replacements invalidate it.
   markdownOverride = 'Stable paragraph\n\nstream-tail-one';
   await resync();

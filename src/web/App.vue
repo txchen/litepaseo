@@ -45,10 +45,22 @@ const COLUMNS = ["Todo", "Doing", "Done"] as const;
 const coarsePointer = matchMedia("(pointer: coarse)").matches;
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 const viewMenu = ref(false);
-// Workspace side panel (files / terminal), remembered per browser.
-const panel = ref<"files" | "terminal" | null>((localStorage.getItem("litepaseo-panel") as "files" | "terminal" | null) || null);
+// The file tree stays in the side panel; terminal content opens in the center.
+const panel = ref<"files" | null>(localStorage.getItem("litepaseo-panel") === "files" ? "files" : null);
 watch(panel, (p) => (p ? localStorage.setItem("litepaseo-panel", p) : localStorage.removeItem("litepaseo-panel")));
-const togglePanel = (p: "files" | "terminal") => (panel.value = panel.value === p ? null : p);
+const togglePanel = (p: "files") => (panel.value = panel.value === p ? null : p);
+const terminalTabs = reactive(new Map<string, boolean>());
+const terminalOpen = computed(() => terminalTabs.has(tabOwner.value));
+const terminalActive = computed(() => terminalTabs.get(tabOwner.value) === true);
+function openTerminal() {
+  terminalTabs.set(tabOwner.value, true);
+  activeFile.value = null;
+  if (compact.matches) panel.value = null;
+}
+function showConversation() {
+  terminalTabs.has(tabOwner.value) && terminalTabs.set(tabOwner.value, false);
+  activeFile.value = null;
+}
 // Files opened as tabs, per thread (kept while the page lives; at most a dozen per thread).
 const fileTabs = reactive(new Map<string, { paths: string[]; active: string | null }>());
 const tabOwner = computed(() => selectedThread.value ?? selectedKey.value ?? "");
@@ -58,6 +70,7 @@ const activeFile = computed({
   set: (path: string | null) => {
     const entry = fileTabs.get(tabOwner.value);
     if (entry) entry.active = path;
+    if (path && terminalTabs.has(tabOwner.value)) terminalTabs.set(tabOwner.value, false);
   },
 });
 function openFile(path: string) {
@@ -66,6 +79,7 @@ function openFile(path: string) {
   const entry = fileTabs.get(owner) ?? { paths: [], active: null };
   if (!entry.paths.includes(path)) entry.paths = [...entry.paths, path].slice(-12);
   entry.active = path;
+  if (terminalTabs.has(owner)) terminalTabs.set(owner, false);
   fileTabs.set(owner, entry);
   if (compact.matches) panel.value = null; // phones: show the file, not the tree on top of it
 }
@@ -1947,10 +1961,10 @@ onUnmounted(() => {
           </button>
           <button
             class="icon-btn head-tool"
-            :class="{ chosen: panel === 'terminal' }"
+            :class="{ chosen: terminalActive }"
             aria-label="Terminal"
             title="Terminal"
-            @click="togglePanel('terminal')"
+            @click="openTerminal()"
           >
             <Icon name="terminal" :size="16" />
           </button>
@@ -1965,12 +1979,12 @@ onUnmounted(() => {
           </button>
         </header>
         <!-- Tabs: the thread's agents, then files opened from the side panel (Paseo's workspace tabs). -->
-        <nav v-if="threadAgents.length > 1 || openFiles.length" class="agent-tabs" aria-label="Tabs">
+        <nav v-if="threadAgents.length > 1 || openFiles.length || terminalOpen" class="agent-tabs" aria-label="Tabs">
           <button
             v-for="a in threadAgents.length ? threadAgents : [active]"
             :key="a.key"
-            :class="{ chosen: a.key === selectedKey && !activeFile }"
-            @click="selectedKey = a.key; activeFile = null"
+            :class="{ chosen: a.key === selectedKey && !activeFile && !terminalActive }"
+            @click="selectedKey = a.key; showConversation()"
           >
             <span class="status-dot" :class="'is-' + (a.attention ? 'attention' : a.state === 'failed' ? 'error' : a.state === 'running' ? 'running' : a.unread ? 'unread' : 'idle')"></span>
             <span class="agent-tab-name">{{ a.title || a.provider }}</span>
@@ -1988,7 +2002,18 @@ onUnmounted(() => {
             <span class="agent-tab-name">{{ f.split("/").pop() }}</span>
             <span class="tab-close" role="button" :aria-label="'Close ' + f" @click.stop="closeFile(f)"><Icon name="close" :size="11" /></span>
           </button>
+          <button v-if="terminalOpen" class="file-tab" :class="{ chosen: terminalActive }" @click="openTerminal()">
+            <Icon name="terminal" :size="13" /><span class="agent-tab-name">Terminal</span>
+            <span class="tab-close" role="button" aria-label="Close terminal tab" @click.stop="terminalTabs.delete(tabOwner)"><Icon name="close" :size="11" /></span>
+          </button>
         </nav>
+        <TerminalPanel
+          v-if="terminalOpen"
+          v-show="terminalActive"
+          :key="'t:' + active.hostId + workspaceCwd"
+          :host-id="active.hostId" :cwd="workspaceCwd" :api="api"
+          :visible="terminalActive"
+        />
         <FileViewer
           v-if="activeFile"
           :key="active.hostId + ':' + workspaceCwd + ':' + activeFile"
@@ -1998,7 +2023,7 @@ onUnmounted(() => {
           :api="api"
         />
 
-        <div v-show="!activeFile" class="timeline-wrap">
+        <div v-show="!activeFile && !terminalActive" class="timeline-wrap">
         <div ref="timelineElement" class="timeline" @click="onTimelineClick">
           <div class="timeline-inner">
             <div v-if="canShowOlder" class="older">
@@ -2050,7 +2075,7 @@ onUnmounted(() => {
         <ChatOutline v-if="outlinePrompts.length >= 2 && canHoverOutline" :prompts="outlinePrompts" :active-seq="activePromptSeq" @jump="jumpToPrompt" />
         </div>
 
-        <div v-show="!activeFile" class="dock">
+        <div v-show="!activeFile && !terminalActive" class="dock">
           <div class="dock-inner">
             <PermissionForm v-for="p in active.pendingPermissions" :key="active.key + ':' + p.id" :permission="p" :busy="busy" @respond="respond(p, $event)" />
 
@@ -2177,7 +2202,7 @@ onUnmounted(() => {
           </div>
         </div>
       </section>
-      <aside v-if="panel" class="side-panel" :aria-label="panel === 'files' ? 'Files' : 'Terminal'">
+      <aside v-if="panel" class="side-panel" aria-label="Files">
         <div
           class="panel-resize"
           role="separator"
@@ -2189,7 +2214,6 @@ onUnmounted(() => {
         ></div>
         <div class="panel-tabs">
           <button :class="{ chosen: panel === 'files' }" @click="panel = 'files'"><Icon name="folder" :size="14" />Files</button>
-          <button :class="{ chosen: panel === 'terminal' }" @click="panel = 'terminal'"><Icon name="terminal" :size="14" />Terminal</button>
           <span class="grow"></span>
           <button class="icon-btn" aria-label="Close panel" title="Close panel" @click="panel = null"><Icon name="close" :size="14" /></button>
         </div>
@@ -2204,7 +2228,6 @@ onUnmounted(() => {
               :active-path="activeFile"
               @open="openFile"
             />
-            <TerminalPanel v-else :key="'t:' + active.hostId + workspaceCwd" :host-id="active.hostId" :cwd="workspaceCwd" :api="api" />
           </KeepAlive>
         </div>
       </aside>

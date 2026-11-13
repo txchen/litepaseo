@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.4.2
+
+### Terminal
+
+- Terminals open in the center as workspace tabs, alongside conversations and files.
+  Switching back to the conversation keeps the terminal mounted.
+- Unicode 11 character widths and WebGL rendering improve emoji, box drawing and
+  Powerline symbols, with a DOM renderer fallback when WebGL is unavailable.
+- Terminal code and styles load on demand; the new rendering addons add about 40 KB gzip.
 
 ### Conversation
 

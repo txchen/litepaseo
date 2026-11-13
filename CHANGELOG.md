@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Sidebar
+
+- Project rows follow Paseo: the fold chevron takes the project icon's place on hover
+  (down when open, right when collapsed), and the actions on the right show only on hover.
+- A project's ⋮ menu (or right-click) offers **Project settings…** and **Remove project…**.
+  Removing archives the project's threads and removes it from the host's projects; files
+  on disk are not touched.
+- Project settings is Paseo's form for the project's `paseo.json` on its host: worktree
+  setup and teardown commands, scripts (each edited in its own dialog, optionally run as a
+  service) and metadata-generation instructions for branch names, commit messages and
+  pull requests. Fields the form does not show are kept as they are, and saving never
+  overwrites a `paseo.json` that changed on the host in the meantime.
+- The pencil next to the project's name opens **Edit project**: rename it (blank returns to
+  the derived name) and set its icon from an image file or an image or website URL, or go
+  back to the automatic icon. The LitePaseo server downloads URL icons, since a browser
+  cannot. Sidebar icons now show custom icons and refresh when one changes.
+
 ## 0.4.2
 
 ### Terminal

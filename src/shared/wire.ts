@@ -86,6 +86,12 @@ export interface WorkspaceSummary {
   title: string | null;
   project: string;
   projectKey: string | null;
+  /** The daemon's project id: what project removal addresses. */
+  projectId: string;
+  /** The user's name override for the project (null: the name is derived). */
+  projectCustomName: string | null;
+  /** Identifies a custom project icon; null while the icon is automatic. */
+  projectIconRevision: string | null;
   rootPath: string;
   directory: string;
   kind: string;
@@ -109,6 +115,8 @@ export interface HostState {
   label: string;
   state: string;
   diagnostic?: HostDiagnostic;
+  /** The daemon accepts custom project icons (Paseo 0.2+). */
+  customIcons?: boolean;
 }
 
 export interface Change<T> {
@@ -210,6 +218,16 @@ export interface ProjectOption {
   name: string;
   rootPath: string;
   kind: string;
+}
+
+/** A project's paseo.json as the daemon reads it; revision guards concurrent edits. */
+export interface ProjectConfigState {
+  rootPath: string;
+  /** null when the project has no paseo.json yet. */
+  config: Record<string, unknown> | null;
+  revision: { mtimeMs: number; size: number } | null;
+  /** Setup changes not yet committed: new worktrees are created from the committed file. */
+  uncommittedSetup?: boolean;
 }
 
 export interface CreateSessionRequest {

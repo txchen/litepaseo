@@ -173,3 +173,134 @@ test("thread actions reach the daemon's workspace operations on the right host",
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("project actions: removal and paseo.json edits reach the daemon, errors stay readable", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "litepaseo-proj-"));
+  const store = new Store(directory);
+  const hosts = new Hosts();
+  const calls: unknown[][] = [];
+  const revision = { mtimeMs: 1, size: 10 };
+  let writeError: string | null = null;
+  hosts.attach(
+    "mac",
+    {
+      getConnectionState: () => ({ status: "connected" }),
+      subscribeConnectionStatus: () => () => {},
+      getLastServerInfoMessage: () => ({ features: { directorySync: true } }),
+      observeAgents: () => ({ subscribe: () => () => {}, release: async () => {} }),
+      removeProject: async (id: string) => (calls.push(["remove", id]), { removedWorkspaceIds: ["w1"] }),
+      readProjectConfig: async (root: string) =>
+        root === "/gone"
+          ? { requestId: "r", repoRoot: root, ok: false, error: { code: "project_not_found" } }
+          : { requestId: "r", repoRoot: root, ok: true, config: { worktree: { setup: "npm ci" } }, revision },
+      writeProjectConfig: async (input: unknown) => {
+        calls.push(["write", input]);
+        if (writeError) return { requestId: "r", repoRoot: "/code/app", ok: false, error: { code: writeError, currentRevision: null } };
+        return { requestId: "r", repoRoot: "/code/app", ok: true, config: (input as { config: unknown }).config, revision: { mtimeMs: 2, size: 12 }, hasUncommittedWorktreeSetupChanges: true };
+      },
+      close: async () => {},
+    } as never,
+    { dispose: async () => {} } as never,
+  );
+  const app = createApp(store, hosts, "t", directory, { pushSender: { send: async () => {} } });
+  const call = (path: string, method = "GET", body?: unknown) =>
+    app.request("/api/hosts/mac" + path, {
+      method,
+      headers: { authorization: "Bearer t", "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  try {
+    const removed = await call("/projects/p1", "DELETE");
+    assert.equal(removed.status, 200);
+    assert.deepEqual(await removed.json(), { ok: true, removedWorkspaceIds: ["w1"] });
+
+    const read = await call("/project-config?root=" + encodeURIComponent("/code/app"));
+    assert.deepEqual(await read.json(), { rootPath: "/code/app", config: { worktree: { setup: "npm ci" } }, revision });
+    assert.equal((await call("/project-config?root=%2Fgone")).status, 404);
+
+    const config = { worktree: { setup: ["npm ci"] } };
+    const written = await call("/project-config", "PUT", { root: "/code/app", config, revision });
+    assert.deepEqual(await written.json(), { rootPath: "/code/app", config, revision: { mtimeMs: 2, size: 12 }, uncommittedSetup: true });
+    writeError = "stale_project_config";
+    const stale = await call("/project-config", "PUT", { root: "/code/app", config, revision });
+    assert.equal(stale.status, 409);
+    assert.deepEqual(await stale.json(), { error: "Config changed on disk. Reload to fetch the latest paseo.json before saving.", code: "stale_project_config" });
+    assert.equal((await call("/project-config", "PUT", { root: "/code/app", config: [1], revision })).status, 400);
+    assert.deepEqual(calls.slice(0, 2), [
+      ["remove", "p1"],
+      ["write", { repoRoot: "/code/app", config, expectedRevision: revision }],
+    ]);
+  } finally {
+    await hosts.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("project edit: rename and icon go to the daemon in Paseo's order; failures name their field", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "litepaseo-edit-"));
+  const store = new Store(directory);
+  const hosts = new Hosts();
+  const calls: unknown[][] = [];
+  let customIcons = true;
+  let renameError = false;
+  hosts.attach(
+    "mac",
+    {
+      getConnectionState: () => ({ status: "connected" }),
+      subscribeConnectionStatus: () => () => {},
+      getLastServerInfoMessage: () => ({ features: { directorySync: true, projectCustomIcon: customIcons } }),
+      observeAgents: () => ({ subscribe: () => () => {}, release: async () => {} }),
+      renameProject: async (id: string, name: string | null) => {
+        calls.push(["rename", id, name]);
+        if (renameError) throw new Error("Project not found");
+        return { customName: name };
+      },
+      setProjectIcon: async (id: string, source: unknown) => void calls.push(["icon", id, source]),
+      getProjectIcon: async (id: string) => (calls.push(["get-icon", id]), { projectId: id, icon: { data: "iVBORw0KGgo=", mimeType: "image/png" }, error: null }),
+      requestProjectIcon: async (cwd: string) => (calls.push(["cwd-icon", cwd]), { cwd, icon: null, error: null }),
+      close: async () => {},
+    } as never,
+    { dispose: async () => {} } as never,
+  );
+  const app = createApp(store, hosts, "t", directory, { pushSender: { send: async () => {} } });
+  const edit = (body: unknown) =>
+    app.request("/api/hosts/mac/projects/p1/edit", {
+      method: "POST",
+      headers: { authorization: "Bearer t", "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  try {
+    assert.equal((await edit({ rename: { customName: "  Shop  " }, icon: { type: "upload", data: "AAAA" } })).status, 200);
+    assert.equal((await edit({ rename: { customName: "" }, icon: null })).status, 200);
+    assert.equal((await edit({ rename: null, icon: { type: "automatic" } })).status, 200);
+    assert.deepEqual(calls, [
+      ["rename", "p1", "Shop"],
+      ["icon", "p1", { type: "upload", data: "AAAA" }],
+      ["rename", "p1", null],
+      ["icon", "p1", { type: "automatic" }],
+    ]);
+    calls.length = 0;
+    // An unreachable URL fails before anything is changed, under the icon field.
+    const bad = await edit({ rename: { customName: "X" }, icon: { type: "url", url: "ftp://example.com/x.png" } });
+    assert.equal(bad.status, 422);
+    assert.deepEqual(await bad.json(), { error: "URL must use HTTP or HTTPS without credentials", scope: "icon" });
+    renameError = true;
+    assert.deepEqual(await (await edit({ rename: { customName: "X" }, icon: { type: "automatic" } })).json(), { error: "Project not found", scope: "name" });
+    assert.deepEqual(calls, [["rename", "p1", "X"]], "a failed rename does not go on to the icon");
+
+    // The effective icon (custom or automatic) comes by project when the daemon supports it.
+    const icon = await app.request("/api/hosts/mac/project-icon?cwd=%2Fcode%2Fapp&project=p1&v=r1", { headers: { authorization: "Bearer t" } });
+    assert.equal(icon.status, 200);
+    assert.equal(icon.headers.get("content-type"), "image/png");
+    customIcons = false;
+    const old = await app.request("/api/hosts/mac/project-icon?cwd=%2Fcode%2Fapp&project=p1&v=r2", { headers: { authorization: "Bearer t" } });
+    assert.equal(old.status, 204);
+    assert.deepEqual(calls.slice(1), [["get-icon", "p1"], ["cwd-icon", "/code/app"]]);
+    assert.equal((await edit({ rename: null, icon: { type: "automatic" } })).status, 409, "older daemons cannot store icons");
+  } finally {
+    await hosts.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

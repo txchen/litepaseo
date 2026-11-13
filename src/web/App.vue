@@ -4,6 +4,8 @@ import type { DirectoryMessage, HostState, Permission, TimelineMessage, Timeline
 import { DirectoryStore, comparePinnedFirst } from "./directory-store.ts";
 import ThreadMenu from "./ThreadMenu.vue";
 import RenameThread from "./RenameThread.vue";
+import ProjectMenu from "./ProjectMenu.vue";
+import ProjectSettings from "./ProjectSettings.vue";
 import { ComposerStore } from "./composer-store.ts";
 import { TimelineStore, type RowRef } from "./timeline-store.ts";
 import { PAGE_STEP, pageHistory, RENDER_WINDOW } from "./timeline-window.ts";
@@ -508,7 +510,7 @@ async function api(path: string, method = "GET", body?: unknown, timeoutMs = 200
   });
   const data = await response.json().catch(() => ({}));
   if (response.status === 401 && authenticated.value && path !== "/login") signOut("ended");
-  if (!response.ok) throw Object.assign(new Error((data.error ?? "Request failed") + (data.requestId ? ` (reference ${data.requestId})` : "")), { delivery: data.delivery });
+  if (!response.ok) throw Object.assign(new Error((data.error ?? "Request failed") + (data.requestId ? ` (reference ${data.requestId})` : "")), { delivery: data.delivery, code: data.code, scope: data.scope });
   return data;
 }
 async function action(fn: () => Promise<void>) {
@@ -880,6 +882,58 @@ async function archiveThread(thread: WorkspaceSummary) {
   await action(async () => {
     await api(threadPath(thread) + "/archive", "POST", {});
     if (selectedThread.value === thread.key) selectedThread.value = selectedKey.value = null;
+  });
+}
+// Project actions (Paseo's project menu): edit paseo.json, remove the project from its host.
+type ProjectTarget = { name: string; hostId: string; rootPath: string; projectIds: string[]; threadKeys: string[] };
+const projectMenu = shallowRef<{ project: ProjectTarget; x: number; y: number } | null>(null);
+const projectSettings = shallowRef<ProjectTarget | null>(null);
+/** The open settings follow the live directory, so a rename or new icon shows at once. */
+const settingsProject = computed(() => {
+  directory.version.value;
+  const target = projectSettings.value;
+  if (!target) return null;
+  const thread = target.threadKeys.map((key) => directory.get(key)).find(Boolean);
+  return {
+    projectId: thread?.projectId ?? target.projectIds[0] ?? "",
+    name: thread?.project ?? target.name,
+    customName: thread?.projectCustomName ?? null,
+    iconRevision: thread?.projectIconRevision ?? null,
+  };
+});
+function openProjectMenu(group: ProjectGroup<WorkspaceSummary>, x: number, y: number) {
+  const items = group.items.range(0, group.items.size);
+  const first = items[0];
+  if (!first) return;
+  projectMenu.value = {
+    project: {
+      name: group.name,
+      hostId: first.hostId,
+      rootPath: first.rootPath,
+      // A row groups by name, so it may hold more than one daemon project; removal covers them all.
+      projectIds: [...new Set(items.map((t) => t.projectId).filter(Boolean))],
+      threadKeys: items.map((t) => t.key),
+    },
+    x,
+    y,
+  };
+}
+async function removeProject(project: ProjectTarget) {
+  const host = hostLabels.value.get(project.hostId) ?? "its host";
+  const threads = project.threadKeys.length;
+  if (
+    !confirm(
+      `Remove “${project.name}” from ${host}? Its ${threads === 1 ? "thread is" : `${threads} threads are`} archived ` +
+        "and the project leaves the sidebar. Files on disk are not touched; the host keeps the history.",
+    )
+  )
+    return;
+  await action(async () => {
+    if (!project.projectIds.length) throw new Error("This host did not report a project id; update Paseo on it.");
+    for (const id of project.projectIds)
+      await api(`/hosts/${encodeURIComponent(project.hostId)}/projects/${encodeURIComponent(id)}`, "DELETE", undefined, 60000);
+    if (selectedThread.value && project.threadKeys.includes(selectedThread.value))
+      selectedThread.value = selectedKey.value = null;
   });
 }
 // Viewing an unread thread marks it read (the agent-level read happens below).
@@ -1691,6 +1745,7 @@ onUnmounted(() => {
         @select="selectThread"
         @new="startNew"
         @menu="openMenu"
+        @project-menu="openProjectMenu"
       />
       <UsagePanel :report="usage" :loading="usageLoading" @refresh="loadUsage(true)" />
       <div class="side-foot">
@@ -2265,6 +2320,26 @@ onUnmounted(() => {
       @unread="markThreadUnread"
       @read="markThreadRead"
       @archive="archiveThread"
+    />
+    <ProjectMenu
+      v-if="projectMenu"
+      :name="projectMenu.project.name"
+      :host="hostLabels.get(projectMenu.project.hostId) ?? 'Unknown host'"
+      :x="projectMenu.x"
+      :y="projectMenu.y"
+      @close="projectMenu = null"
+      @settings="projectSettings = projectMenu!.project"
+      @remove="removeProject(projectMenu!.project)"
+    />
+    <ProjectSettings
+      v-if="projectSettings"
+      :host-id="projectSettings.hostId"
+      :host-label="hostLabels.get(projectSettings.hostId) ?? 'Unknown host'"
+      :project="settingsProject!"
+      :root-path="projectSettings.rootPath"
+      :custom-icons="!!hosts.find((h) => h.id === projectSettings!.hostId)?.customIcons"
+      :request="api"
+      @close="projectSettings = null"
     />
     <div v-if="lightbox" class="lightbox" role="dialog" aria-label="Image" @click="lightbox = null">
       <img :src="lightbox" alt="" />

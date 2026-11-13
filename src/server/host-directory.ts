@@ -28,7 +28,7 @@ interface Subscription {
 export interface DirectoryDriver {
   getConnectionState(): { status: string };
   subscribeConnectionStatus(listener: (state: { status: string }) => void): () => void;
-  getLastServerInfoMessage(): { features?: { directorySync?: boolean } } | null;
+  getLastServerInfoMessage(): { features?: { directorySync?: boolean; projectCustomIcon?: boolean } } | null;
   observeAgents(options: Record<string, unknown>): Subscription;
   fetchAgents(options: Record<string, unknown>): Promise<Payload>;
   observeWorkspaces?(options: Record<string, unknown>): Subscription;
@@ -445,6 +445,8 @@ export interface WorkspaceDescriptor {
   id: string;
   projectId: string;
   projectDisplayName: string;
+  projectCustomName?: string | null;
+  projectCustomIconRevision?: string | null;
   projectRootPath: string;
   workspaceDirectory?: string;
   workspaceKind: string;
@@ -478,6 +480,9 @@ export function summarizeWorkspace(hostId: string, ws: WorkspaceDescriptor, acti
     title: ws.title ?? null,
     project: ws.project?.projectName || ws.projectDisplayName || basename(ws.projectRootPath) || "Other",
     projectKey: ws.project?.projectKey ?? ws.projectId,
+    projectId: ws.projectId,
+    projectCustomName: ws.projectCustomName ?? null,
+    projectIconRevision: ws.projectCustomIconRevision ?? null,
     rootPath: ws.projectRootPath,
     directory: ws.workspaceDirectory ?? ws.projectRootPath,
     kind: ws.workspaceKind,

@@ -1,3 +1,4 @@
+import { importProjectIcon, MAX_ICON_BYTES } from "./project-icon-import.ts";
 import { VERSION } from "./version.ts";
 import { eventStream } from "./sse.ts";
 import { registerWorkspaceRoutes } from "./workspace-routes.ts";
@@ -28,6 +29,7 @@ import type {
   DirectoryMessage,
   HostState,
   ProjectOption,
+  ProjectConfigState,
   ProviderOption,
   TimelineItem,
   TimelineMessage,
@@ -302,8 +304,18 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     return c.json({ error: "Operation failed; refresh state before retrying", requestId }, 502);
   });
   app.get("/api/health", (c) => c.json({ ok: true, version: VERSION, waiting: notifier.waitingCount }));
+  /** The daemon stores custom project icons (Paseo's projectCustomIcon feature). */
+  const customIcons = (hostId: string) =>
+    (hosts.clients.get(hostId)?.driver.getLastServerInfoMessage() as { features?: { projectCustomIcon?: boolean } } | null)?.features
+      ?.projectCustomIcon === true;
   const hostStates = (): HostState[] =>
-    store.hosts().map((h) => ({ id: h.id, label: h.label, state: hosts.state(h.id), diagnostic: hosts.diagnostic(h.id) }));
+    store.hosts().map((h) => ({
+      id: h.id,
+      label: h.label,
+      state: hosts.state(h.id),
+      diagnostic: hosts.diagnostic(h.id),
+      ...(customIcons(h.id) ? { customIcons: true } : {}),
+    }));
   app.get("/api/hosts", (c) => c.json(hostStates()));
 
   // Directory streams. Each remembers the last collection seq it delivered, so a flush sends
@@ -612,15 +624,25 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
       "Content-Disposition": "inline",
     });
   });
-  /** A project's icon (favicon/logo the daemon found in its root), cached briefly per host. */
+  /**
+   * A project's icon, cached briefly per host. With `project`, the daemon's effective icon (a
+   * custom one if set; `v` is its revision, so a change is a new cache entry); otherwise the
+   * favicon/logo found in `cwd`.
+   */
   app.get("/api/hosts/:host/project-icon", async (c) => {
     const hostId = c.req.param("host");
     const cwd = z.string().min(1).max(4096).parse(c.req.query("cwd"));
-    const key = `${hostId}\n${cwd}`;
+    const project = z.string().max(200).optional().parse(c.req.query("project") || undefined);
+    const version = z.string().max(200).optional().parse(c.req.query("v") || undefined) ?? "";
+    const key = project ? `${hostId}\np:${project}\n${version}` : `${hostId}\n${cwd}`;
     let icon = projectIcons.get(key);
     if (icon === undefined) {
       try {
-        const result = await hosts.get(hostId).driver.requestProjectIcon(cwd);
+        const { driver } = hosts.get(hostId);
+        const result =
+          project && customIcons(hostId)
+            ? await driver.getProjectIcon(project)
+            : await driver.requestProjectIcon(cwd);
         icon = result.icon && /^image\/(png|jpeg|webp|gif|x-icon|vnd\.microsoft\.icon)$/.test(result.icon.mimeType)
           ? { data: Buffer.from(result.icon.data, "base64"), mimeType: result.icon.mimeType }
           : null;
@@ -841,6 +863,109 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     const { driver, id } = workspace(c);
     await driver.archiveWorkspace(id);
     return c.json({ ok: true });
+  });
+
+  // ---- Project actions: Paseo's project menu (settings, remove) -------------------------------------
+  /** Removes the project from the daemon; its threads are archived (history stays on the host). */
+  app.delete("/api/hosts/:host/projects/:project", async (c) => {
+    const result = await hosts.get(c.req.param("host")).driver.removeProject(c.req.param("project"));
+    return c.json({ ok: true, removedWorkspaceIds: result.removedWorkspaceIds });
+  });
+  /**
+   * Paseo's project edit: name and icon, decided together and saved once. Icon bytes are acquired
+   * first (the step most likely to fail), then rename, then icon; a retry repeats the same calls.
+   * A failure names the field it belongs to.
+   */
+  app.post("/api/hosts/:host/projects/:project/edit", async (c) => {
+    const input = z
+      .object({
+        rename: z.object({ customName: z.string().trim().max(200).nullable() }).nullable(),
+        icon: z
+          .discriminatedUnion("type", [
+            z.object({ type: z.literal("automatic") }),
+            z.object({ type: z.literal("upload"), data: z.string().min(1).max(Math.ceil((MAX_ICON_BYTES * 4) / 3) + 4) }),
+            z.object({ type: z.literal("url"), url: z.string().trim().min(1).max(4096) }),
+          ])
+          .nullable(),
+      })
+      .parse(await c.req.json());
+    const hostId = c.req.param("host");
+    const projectId = c.req.param("project");
+    const { driver } = hosts.get(hostId);
+    if (input.icon && !customIcons(hostId))
+      return c.json({ error: "Update Paseo on this host to set project icons.", scope: "icon" }, 409);
+    const failed = (scope: "name" | "icon", error: unknown) =>
+      c.json({ error: (error as Error)?.message || "Request failed", scope }, 422);
+    let source: { type: "automatic" } | { type: "upload"; data: string } | null = null;
+    if (input.icon) {
+      try {
+        source = input.icon.type === "url" ? { type: "upload", data: await importProjectIcon(input.icon.url) } : input.icon;
+      } catch (error) {
+        return failed("icon", error);
+      }
+    }
+    if (input.rename) {
+      try {
+        await driver.renameProject(projectId, input.rename.customName || null);
+      } catch (error) {
+        return failed("name", error);
+      }
+    }
+    if (source) {
+      try {
+        await driver.setProjectIcon(projectId, source);
+      } catch (error) {
+        return failed("icon", error);
+      }
+    }
+    return c.json({ ok: true });
+  });
+  const configErrors: Record<string, [string, 404 | 409 | 422 | 502]> = {
+    project_not_found: ["The selected host has no record of this project.", 404],
+    invalid_project_config: ["paseo.json couldn’t be parsed. Fix the file on disk, then reload.", 422],
+    stale_project_config: ["Config changed on disk. Reload to fetch the latest paseo.json before saving.", 409],
+    write_failed: ["Couldn’t save paseo.json. Try again, or reload the latest version from disk.", 502],
+  };
+  const configState = (
+    payload: { ok: true; repoRoot: string; config: unknown; revision: ProjectConfigState["revision"]; hasUncommittedWorktreeSetupChanges?: boolean },
+  ): ProjectConfigState => ({
+    rootPath: payload.repoRoot,
+    config: (payload.config as Record<string, unknown> | null) ?? null,
+    revision: payload.revision,
+    ...(payload.hasUncommittedWorktreeSetupChanges ? { uncommittedSetup: true } : {}),
+  });
+  /** The project's paseo.json (worktree setup/teardown, scripts, generation prompts). */
+  app.get("/api/hosts/:host/project-config", async (c) => {
+    const root = z.string().min(1).max(4096).parse(c.req.query("root"));
+    const payload = await hosts.get(c.req.param("host")).driver.readProjectConfig(root);
+    if (!payload.ok) {
+      const [error, status] = configErrors[payload.error.code] ?? ["Could not read paseo.json.", 502];
+      return c.json({ error, code: payload.error.code }, status);
+    }
+    return c.json(configState(payload));
+  });
+  app.put("/api/hosts/:host/project-config", async (c) => {
+    const input = z
+      .object({
+        root: z.string().min(1).max(4096),
+        config: z.record(z.string(), z.unknown()),
+        revision: z.object({ mtimeMs: z.number(), size: z.number() }).nullable(),
+      })
+      .parse(await c.req.json());
+    if (JSON.stringify(input.config).length > 256_000) return c.json({ error: "paseo.json is too large." }, 413);
+    const payload = await hosts.get(c.req.param("host")).driver.writeProjectConfig({
+      repoRoot: input.root,
+      config: input.config as never,
+      expectedRevision: input.revision,
+    });
+    if (!payload.ok) {
+      const [error, status] =
+        payload.error.code === "invalid_project_config"
+          ? ["The host rejected this config: it does not match the paseo.json format.", 422 as const]
+          : (configErrors[payload.error.code] ?? ["Could not write paseo.json.", 502 as const]);
+      return c.json({ error, code: payload.error.code }, status);
+    }
+    return c.json(configState(payload));
   });
 
   // ---- Plugins whose daemon side LitePaseo drives ------------------------------------------------

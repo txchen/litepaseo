@@ -21,7 +21,7 @@ const run = (c) =>
   execFileSync(process.execPath, [resolve("dist/server/cli.mjs"), c], { env, encoding: "utf8", timeout: 15000 });
 
 const hosts = [
-  { id: "mac", label: "MacBook Pro", state: "connected" },
+  { id: "mac", label: "MacBook Pro", state: "connected", customIcons: true },
   { id: "build", label: "build-01", state: "connected" },
   { id: "gpu", label: "gpu-box", state: "disconnected" },
 ];
@@ -78,6 +78,7 @@ const workspaces = agents
     title: a.id === "a5" ? "Release notes (renamed)" : null,
     project: a.project,
     projectKey: a.projectKey,
+    projectId: `prj-${a.hostId}-${a.project}`,
     rootPath: a.cwd,
     directory: a.cwd,
     kind: "worktree",
@@ -403,6 +404,47 @@ try {
       await open.first().click();
     }
   };
+  await shoot("project-menu-dark", { ...desktop, colorScheme: "dark" }, async (page) => {
+    await login(page);
+    const group = page.locator(".group-row").first();
+    await group.hover();
+    await group.locator(".group-more").click();
+    await page.getByRole("menu").waitFor();
+  });
+  const projectConfig = {
+    worktree: { setup: ["npm ci", "cp ../.env .env"], teardown: [] },
+    scripts: { dev: { type: "service", command: "npm run dev", port: 5173 }, test: { command: "npm test" } },
+    metadataGeneration: { commitMessage: { instructions: "Use Conventional Commits with a scope" } },
+  };
+  const openProjectSettings = async (page) => {
+    await page.route("**/project-config**", (route) =>
+      route.fulfill({ json: { rootPath: "/home/me/code/litepaseo", config: projectConfig, revision: { mtimeMs: 1, size: 1 }, uncommittedSetup: true } }),
+    );
+    await login(page);
+    const group = page.locator(".group-row").first();
+    await group.hover();
+    await group.locator(".group-more").click();
+    await page.getByRole("menuitem", { name: "Project settings…" }).click();
+    await page.locator("#ps-setup").waitFor();
+  };
+  await shoot("project-settings", desktop, openProjectSettings);
+  await shoot("project-settings-dark", { ...desktop, colorScheme: "dark" }, openProjectSettings);
+  await shoot("project-settings-mobile", mobile, openProjectSettings);
+  await shoot("project-edit", desktop, async (page) => {
+    await openProjectSettings(page);
+    await page.getByRole("button", { name: "Edit project" }).click();
+    await page.getByLabel("Project name").fill("LitePaseo");
+  });
+  await shoot("project-edit-mobile-dark", { ...mobile, colorScheme: "dark" }, async (page) => {
+    await openProjectSettings(page);
+    await page.getByRole("button", { name: "Edit project" }).click();
+    await page.getByLabel("Project name").waitFor();
+  });
+  await shoot("project-script-edit-dark", { ...desktop, colorScheme: "dark" }, async (page) => {
+    await openProjectSettings(page);
+    await page.locator(".ps-script-main").first().click();
+    await page.getByLabel("Script name").waitFor();
+  });
   await shoot("thread-menu", desktop, async (page) => {
     await openChat(page);
     await page.getByRole("button", { name: "Thread actions" }).click();

@@ -86,6 +86,7 @@ try {
     title: null,
     project: host === "alpha" ? "litepaseo" : "infra",
     projectKey: host === "alpha" ? "litepaseo" : "infra",
+    projectId: "proj-" + host,
     rootPath: "/code/" + host,
     directory: "/code/" + host,
     kind: "local_checkout",
@@ -103,7 +104,7 @@ try {
   const hostsEvent = {
     type: "hosts",
     hosts: [
-      { id: "alpha", label: "Alpha", state: "connected" },
+      { id: "alpha", label: "Alpha", state: "connected", customIcons: true },
       { id: "beta", label: "Beta", state: "connected" },
     ],
   };
@@ -282,6 +283,107 @@ try {
   assert.equal(await litepaseoGroup.locator(".status-dot.is-unread").count(), 1);
   assert.match(await litepaseoGroup.locator(".group-marks").getAttribute("title"), /1 finished, not viewed/);
   await litepaseoGroup.locator(".group-toggle").click();
+  // The lead slot shows the project icon; hovering swaps in the fold chevron.
+  await page.mouse.move(1000, 10);
+  assert.equal(await litepaseoGroup.locator(".group-chevron").evaluate((el) => getComputedStyle(el).opacity), "0");
+  await litepaseoGroup.hover();
+  for (let i = 0; i < 50 && (await litepaseoGroup.locator(".group-chevron").evaluate((el) => getComputedStyle(el).opacity)) !== "1"; i++)
+    await page.waitForTimeout(20);
+  assert.equal(await litepaseoGroup.locator(".group-chevron").evaluate((el) => getComputedStyle(el).opacity), "1");
+  assert.equal(await litepaseoGroup.locator(".group-icon").evaluate((el) => getComputedStyle(el).visibility), "hidden");
+  // Project menu: paseo.json settings with a revision guard, and removal.
+  const configWrites = [];
+  const removals = [];
+  await page.route("**/api/hosts/alpha/project-config**", async (route) => {
+    const request = route.request();
+    if (request.method() === "PUT") {
+      const body = request.postDataJSON();
+      configWrites.push(body);
+      return route.fulfill({ json: { rootPath: body.root, config: body.config, revision: { mtimeMs: 2, size: 20 } } });
+    }
+    return route.fulfill({ json: { rootPath: "/code/alpha", config: { worktree: { setup: "npm ci" } }, revision: { mtimeMs: 1, size: 10 } } });
+  });
+  const projectEdits = [];
+  await page.route("**/api/hosts/alpha/projects/**", (route) => {
+    if (route.request().url().endsWith("/edit")) {
+      projectEdits.push(route.request().postDataJSON());
+      return route.fulfill(projectEdits.length === 1 ? { status: 422, json: { error: "Download failed (404)", scope: "icon" } } : { json: { ok: true } });
+    }
+    removals.push(route.request().method() + " " + new URL(route.request().url()).pathname);
+    return route.fulfill({ json: { ok: true, removedWorkspaceIds: [] } });
+  });
+  await litepaseoGroup.hover();
+  await litepaseoGroup.getByRole("button", { name: "Actions for project litepaseo" }).click();
+  await page.getByRole("menuitem", { name: "Project settings…" }).click();
+  const settings = page.getByRole("dialog", { name: "Project settings" });
+  const setup = settings.getByLabel("Worktree setup commands");
+  await page.waitForFunction(() => document.querySelector("#ps-setup")?.value === "npm ci");
+  assert.equal(await settings.getByRole("button", { name: "Save" }).isDisabled(), true, "nothing to save yet");
+  await setup.fill("npm ci\nnpm run build");
+  await settings.getByLabel("Commit messages").fill("Conventional Commits");
+  // A script is edited in its own dialog; name and command are required.
+  await settings.getByRole("button", { name: "Add script" }).click();
+  await page.getByRole("dialog", { name: "New script" }).waitFor();
+  const scriptDialog = page.locator(".ps-script-overlay [role=dialog]");
+  await scriptDialog.getByRole("button", { name: "Save" }).click();
+  await scriptDialog.getByText("Name is required").waitFor();
+  await scriptDialog.getByText("Command is required").waitFor();
+  await scriptDialog.getByLabel("Script name").fill("dev");
+  await scriptDialog.getByLabel("Script command").fill("npm run dev");
+  await page.getByRole("dialog", { name: "Edit dev" }).waitFor();
+  await scriptDialog.getByLabel("Run as a service").check();
+  await scriptDialog.getByRole("button", { name: "Save" }).click();
+  await settings.getByText("service · npm run dev").waitFor();
+  await settings.getByRole("button", { name: "Save", exact: true }).click();
+  await settings.getByText("Project saved").waitFor();
+  assert.deepEqual(configWrites, [
+    {
+      root: "/code/alpha",
+      config: {
+        worktree: { setup: "npm ci\nnpm run build" },
+        scripts: { dev: { command: "npm run dev", type: "service" } },
+        metadataGeneration: { commitMessage: { instructions: "Conventional Commits" } },
+      },
+      revision: { mtimeMs: 1, size: 10 },
+    },
+  ]);
+  // Name and icon: Paseo's "Edit project" sheet behind the pencil next to the title.
+  await settings.getByRole("button", { name: "Edit project" }).click();
+  const editSheet = page.getByRole("dialog", { name: "Edit project" });
+  assert.equal(await editSheet.getByRole("button", { name: "Save changes" }).isDisabled(), true, "nothing changed yet");
+  assert.equal(await editSheet.getByRole("button", { name: "Use automatic" }).count(), 0, "the icon is automatic already");
+  await editSheet.getByLabel("Project name").fill("  Lite  ");
+  await editSheet.getByLabel("Image or website URL").fill("https://example.com/");
+  await editSheet.getByRole("button", { name: "Save changes" }).click();
+  await editSheet.getByText("Download failed (404)").waitFor();
+  await editSheet.getByLabel("Image or website URL").fill("");
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  await editSheet.locator("input[type=file]").setInputFiles({ name: "logo.png", mimeType: "image/png", buffer: Buffer.from(png, "base64") });
+  await editSheet.getByText("logo.png").waitFor();
+  assert.match(await editSheet.locator(".group-icon img").getAttribute("src"), /^data:image\/png;base64,/);
+  await editSheet.getByRole("button", { name: "Use automatic" }).click();
+  assert.equal(await editSheet.locator(".group-icon img").count(), 0, "automatic shows the letter until the daemon finds an icon");
+  await editSheet.locator("input[type=file]").setInputFiles({ name: "logo.png", mimeType: "image/png", buffer: Buffer.from(png, "base64") });
+  await editSheet.getByRole("button", { name: "Save changes" }).click();
+  await editSheet.waitFor({ state: "detached" });
+  await settings.getByText("Project updated").waitFor();
+  assert.deepEqual(projectEdits, [
+    { rename: { customName: "Lite" }, icon: { type: "url", url: "https://example.com/" } },
+    { rename: { customName: "Lite" }, icon: { type: "upload", data: png } },
+  ]);
+  await page.locator(".project-settings").getByRole("button", { name: "Close", exact: true }).last().click();
+  await page.locator(".project-settings").waitFor({ state: "detached" });
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await litepaseoGroup.hover();
+  await litepaseoGroup.getByRole("button", { name: "Actions for project litepaseo" }).click();
+  await page.getByRole("menuitem", { name: "Remove project…" }).click();
+  assert.deepEqual(removals, [], "dismissing the confirmation removes nothing");
+  page.once("dialog", (dialog) => dialog.accept());
+  await litepaseoGroup.hover();
+  await litepaseoGroup.getByRole("button", { name: "Actions for project litepaseo" }).click();
+  await page.getByRole("menuitem", { name: "Remove project…" }).click();
+  for (let i = 0; i < 50 && !removals.length; i++) await page.waitForTimeout(20);
+  assert.deepEqual(removals, ["DELETE /api/hosts/alpha/projects/proj-alpha"]);
   await page.locator("button.session", { hasText: "beta conversation" }).click();
   await page.getByText("Hello from beta", { exact: true }).waitFor();
   await page.locator('.markstream-vue h1').filter({ hasText: 'Heading beta' }).waitFor();
@@ -432,6 +534,7 @@ try {
   assert.ok(resumes.length > 0 && resumes.every((since) => since === "1" || since === "2"));
   // New session from the litepaseo project's "+": host and project come from the group,
   // model and thinking from the host's defaults; the session opens when the stream delivers it.
+  await page.locator(".group-row", { hasText: "litepaseo" }).hover();
   await page.getByRole("button", { name: "New session in litepaseo" }).click();
   const dialog = page.getByRole("dialog", { name: "New session" });
   await dialog.waitFor();

@@ -10,6 +10,7 @@ import {
   type SidebarRow,
 } from "./directory-store.ts";
 import Icon from "./Icon.vue";
+import ProjectIcon from "./ProjectIcon.vue";
 import { relativeAge } from "./timeline-display.ts";
 
 // The sidebar: projects, then their threads (Paseo workspaces), windowed.
@@ -25,6 +26,7 @@ const emit = defineEmits<{
   select: [key: string];
   new: [group: ProjectGroup<WorkspaceSummary>];
   menu: [thread: WorkspaceSummary, x: number, y: number];
+  projectMenu: [group: ProjectGroup<WorkspaceSummary>, x: number, y: number];
 }>();
 
 const OVERSCAN_PX = 320;
@@ -90,25 +92,8 @@ const groupHosts = (g: ProjectGroup<WorkspaceSummary>) => {
 const groupHostsTitle = (g: ProjectGroup<WorkspaceSummary>) =>
   [...g.hosts.keys()].map((id) => props.hostLabels.get(id) ?? "Unknown host").join(", ");
 
-// Project icons come from the daemon (favicon/logo in the project root); a letter tile otherwise.
-const failedIcons = ref(new Set<string>());
-const groupIcon = (g: ProjectGroup<WorkspaceSummary>) => {
-  const first = g.items.at(0);
-  if (!first?.rootPath) return null;
-  const url = `/api/hosts/${encodeURIComponent(first.hostId)}/project-icon?cwd=${encodeURIComponent(first.rootPath)}`;
-  return failedIcons.value.has(url) ? null : url;
-};
-const iconFailed = (url: string | null) => {
-  if (!url || failedIcons.value.has(url)) return;
-  failedIcons.value = new Set(failedIcons.value).add(url);
-};
-const TILE_COLORS = ["#4f7cc2", "#5a9e6f", "#c27a4f", "#9a6fc2", "#c25a7a", "#4fa7b0", "#b09a3f"];
-const tileColor = (name: string) => {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return TILE_COLORS[h % TILE_COLORS.length];
-};
-const initial = (name: string) => (Array.from(name.trim())[0] ?? "?").toUpperCase();
+// Project icons come from the daemon (custom, or favicon/logo in the project root); a letter tile otherwise.
+const groupIconSource = (g: ProjectGroup<WorkspaceSummary>) => g.items.at(0) ?? null;
 
 // Hover card with the details a single-line row leaves out (Paseo's thread tooltip).
 const canHover = matchMedia("(hover: hover) and (pointer: fine)").matches;
@@ -158,6 +143,10 @@ function menuButton(event: MouseEvent, thread: WorkspaceSummary) {
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
   emit("menu", thread, rect.left, rect.bottom + 4);
 }
+function projectMenuButton(event: MouseEvent, group: ProjectGroup<WorkspaceSummary>) {
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  emit("projectMenu", group, rect.right - 210, rect.bottom + 4);
+}
 
 function onScroll() {
   pressEnd();
@@ -193,16 +182,16 @@ onUnmounted(() => {
           :class="{ collapsed: row.collapsed }"
           :style="{ transform: `translateY(${row.top}px)`, height: GROUP_PITCH - 4 + 'px' }"
         >
-          <button class="group-toggle" :aria-expanded="!row.collapsed" @click="store.toggleGroup(row.group.key)">
-            <span class="group-icon" :style="groupIcon(row.group) ? undefined : { background: tileColor(row.group.name) }">
-              <img
-                v-if="groupIcon(row.group)"
-                :src="groupIcon(row.group)!"
-                alt=""
-                loading="lazy"
-                @error="iconFailed(groupIcon(row.group))"
-              />
-              <template v-else>{{ initial(row.group.name) }}</template>
+          <button
+            class="group-toggle"
+            :aria-expanded="!row.collapsed"
+            @click="store.toggleGroup(row.group.key)"
+            @contextmenu.prevent="emit('projectMenu', row.group, $event.clientX, $event.clientY)"
+          >
+            <!-- Paseo's lead slot: the project icon, swapped for the fold chevron on hover. -->
+            <span class="group-lead">
+              <ProjectIcon :name="row.group.name" :source="groupIconSource(row.group)" />
+              <Icon name="chevron" :size="14" class="group-chevron" />
             </span>
             <span class="group-name">{{ row.group.name }}</span>
             <span class="group-host" :title="groupHostsTitle(row.group)">{{ groupHosts(row.group) }}</span>
@@ -215,7 +204,6 @@ onUnmounted(() => {
               <span v-if="row.group.unread" class="status-dot is-unread"></span>
             </span>
             <span v-if="row.collapsed" class="group-count">{{ row.group.items.size }}</span>
-            <Icon name="chevron" :size="12" class="group-chevron" />
           </button>
           <button
             class="group-add"
@@ -224,6 +212,14 @@ onUnmounted(() => {
             @click="emit('new', row.group)"
           >
             <Icon name="plus" :size="14" />
+          </button>
+          <button
+            class="group-add group-more"
+            :aria-label="'Actions for project ' + row.group.name"
+            title="Project settings, remove project"
+            @click="projectMenuButton($event, row.group)"
+          >
+            <Icon name="more-v" :size="15" />
           </button>
         </div>
         <div

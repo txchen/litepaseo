@@ -664,17 +664,16 @@ h3 {
   place-items: center;
   width: 26px;
   height: 26px;
-  margin-right: 4px;
   border-radius: 7px;
   color: var(--fg-muted);
 }
+.group-more {
+  margin-right: 4px;
+}
 @media (hover: hover) {
-  .group-add {
-    opacity: 0;
-  }
-  .group-row:hover .group-add,
-  .group-add:focus-visible {
-    opacity: 1;
+  /* Off the row until it is hovered or focused, so the name keeps the width (Paseo's row). */
+  .group-row:not(:hover):not(:focus-within) .group-add {
+    display: none;
   }
   .group-add:hover {
     background: var(--selected);
@@ -827,13 +826,41 @@ h3 {
   border-color: rgba(255, 255, 255, 0.35);
   border-top-color: var(--accent-fg);
 }
+/* The lead slot holds the project icon; on hover (or keyboard focus) the fold chevron takes its
+   place, pointing down when open and right when collapsed (Paseo's project row). */
+.group-lead {
+  flex: none;
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+}
 .group-chevron {
-  color: var(--fg-faint);
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  color: var(--fg-muted);
+  opacity: 0;
   transform: rotate(90deg);
   transition: transform 0.15s;
 }
 .group-row.collapsed .group-chevron {
   transform: none;
+}
+.group-toggle:focus-visible .group-icon {
+  visibility: hidden;
+}
+.group-toggle:focus-visible .group-chevron {
+  opacity: 1;
+}
+@media (hover: hover) {
+  .group-row:hover .group-icon {
+    visibility: hidden;
+  }
+  .group-row:hover .group-chevron {
+    opacity: 1;
+  }
 }
 .group-folder {
   color: var(--fg-muted);
@@ -3320,15 +3347,6 @@ h3 {
   font-weight: 400;
   color: var(--fg-faint);
 }
-.group-chevron {
-  flex: none;
-  opacity: 0;
-}
-.group-row.collapsed .group-chevron,
-.group-row:hover .group-chevron,
-.group-toggle:focus-visible .group-chevron {
-  opacity: 1;
-}
 .session-row {
   height: calc(var(--row-h, 36px) - 4px);
 }
@@ -3872,4 +3890,193 @@ h3 {
 .tab-close:hover {
   background: var(--hover);
   color: var(--fg);
+}
+
+/* Project settings: the paseo.json form, laid out like Paseo's settings page */
+.project-settings {
+  width: min(680px, 100%);
+}
+.ps-title {
+  min-width: 0;
+}
+.ps-title .path-hint {
+  margin: 4px 0 0;
+}
+.ps-body {
+  gap: 26px;
+  padding-bottom: 20px;
+}
+.ps-group {
+  display: grid;
+  gap: 12px;
+}
+.ps-group h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.ps-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 26px;
+}
+.ps-info {
+  margin: -6px 0 0;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+}
+.ps-section {
+  display: grid;
+  gap: 6px;
+}
+.ps-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.ps-section-head a {
+  font-weight: 400;
+  color: var(--fg-muted);
+}
+.ps-section-head a:hover {
+  color: var(--accent);
+}
+.ps-section textarea {
+  min-height: 96px;
+}
+.ps-code {
+  font: 12.5px/1.55 var(--mono);
+  tab-size: 2;
+}
+.ps-scripts .card-row {
+  padding: 4px 6px 4px 4px;
+}
+.ps-script-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+.ps-script-main:hover {
+  background: var(--hover);
+}
+.ps-script-main .row-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.ps-script.invalid .row-sub {
+  color: var(--danger);
+}
+.ps-script-more {
+  position: relative;
+}
+.ps-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 150px;
+}
+.ps-callout {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  padding: 11px 13px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  font-size: 13px;
+}
+.ps-callout p {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+}
+.ps-callout .ps-callout-sub {
+  color: var(--fg-muted);
+  padding-left: 21px;
+}
+.ps-callout.is-error {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--danger);
+}
+.ps-callout.is-warn {
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.ps-callout-actions {
+  display: flex;
+  gap: 8px;
+}
+.ps-field-error {
+  margin: -8px 0 0;
+  font-size: 12.5px;
+  color: var(--danger);
+}
+.ps-service {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+.ps-script-overlay {
+  z-index: 55;
+}
+.ps-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ps-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.ps-title-row h2 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ps-title-row .group-icon img {
+  width: 100%;
+  height: 100%;
+}
+.ps-edit {
+  width: 26px;
+  height: 26px;
+  color: var(--fg-muted);
+}
+
+/* Edit project: name and icon */
+.pe-icon-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.pe-icon-row .group-icon {
+  margin-right: 4px;
+}
+.pe-file {
+  display: none;
+}
+.pe-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.pe-icon-error {
+  margin: 6px 0 0;
 }

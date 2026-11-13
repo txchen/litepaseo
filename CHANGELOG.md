@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Command line
+
+- Commands such as `status`, `token`, `config` and `logs` start in about 0.06 s instead of
+  0.3 s: the server code now loads only when the server itself starts.
+
 ## 0.4.1
 
 ### Task board

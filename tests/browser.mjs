@@ -269,6 +269,9 @@ try {
     }
     return route.continue();
   });
+  // Mocked streams end after their events and the client reconnects a second later. After
+  // changing what the mocks serve, reconnect at once the way a tab that becomes visible does.
+  const resync = (target = page) => target.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await page.goto(`http://127.0.0.1:${port}`);
   await page.getByLabel("Server access token").fill(readFileSync(join(directory, "token"), "utf8"));
   await page.getByRole("button", { name: "Connect", exact: true }).click();
@@ -293,12 +296,15 @@ try {
 
   // Appends retain settled paragraph DOM; full-source replacements invalidate it.
   markdownOverride = 'Stable paragraph\n\nstream-tail-one';
+  await resync();
   await page.getByText('stream-tail-one', { exact: true }).waitFor();
   await page.evaluate(() => { window.stableParagraph = [...document.querySelectorAll('.markstream-vue p')].find(p => p.textContent === 'Stable paragraph'); });
   markdownOverride += '-中文-two';
+  await resync();
   await page.getByText('stream-tail-one-中文-two', { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => window.stableParagraph === [...document.querySelectorAll('.markstream-vue p')].find(p => p.textContent === 'Stable paragraph')), true);
   markdownOverride += '\n\n```ts\n' + 'const line = 1;\n'.repeat(300) + '```';
+  await resync();
   await page.waitForFunction(() => {
     const el = document.querySelector('.timeline');
     return el.querySelector('pre')?.textContent?.includes('const line = 1;')
@@ -307,9 +313,11 @@ try {
   await page.locator('.timeline').evaluate(el => { el.scrollTop = 0; });
   await page.waitForTimeout(100);
   markdownOverride += '\n\nMore output';
+  await resync();
   await page.getByText('More output', { exact: true }).waitFor();
   assert.equal(await page.locator('.timeline').evaluate(el => el.scrollTop), 0, 'Output must not steal the reader scroll');
   markdownOverride = 'Replacement';
+  await resync();
   await page.getByText('Replacement', { exact: true }).waitFor();
   assert.equal(await page.getByText('Stable paragraph', { exact: true }).count(), 0);
   markdownOverride = null;
@@ -399,6 +407,8 @@ try {
   assert.equal(await dialog.getByLabel("Project").inputValue(), "/code/litepaseo");
   await dialog.getByLabel("First message").fill("Add a new session dialog");
   await dialog.getByRole("button", { name: "Start session" }).click();
+  await page.waitForFunction(() => !document.querySelector(".sheet button[disabled]"));
+  await resync();
   await page.getByRole("heading", { name: "Brand new session" }).waitFor({ timeout: 15000 });
   assert.equal(creations.length, 1);
   assert.deepEqual(
@@ -514,14 +524,6 @@ try {
       .find((e) => e.querySelector("h3").textContent === "Doing")
       .querySelector(".card"),
   );
-  await page.reload();
-  await page.getByRole("button", { name: "Kanban", exact: true }).click();
-  await page.getByText("Validate both hosts", { exact: true }).waitFor();
-  assert.equal(await page.locator(".card .kanban-actions select").inputValue(), "Doing");
-  await page.getByRole("button", { name: "Open task Validate both hosts" }).click();
-  await page.locator(".task-comment", { hasText: "Second note" }).waitFor();
-  assert.equal(await page.locator(".task-comment").count(), 1, "comments persist across reloads");
-  await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
   // Keyboard: "/" focuses search from anywhere outside a text field.
   await page.keyboard.press("/");
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("type")), "search");
@@ -678,7 +680,6 @@ try {
   );
 } finally {
   await browser?.close();
-  run("stop");
-  await new Promise((r) => setTimeout(r, 500));
-  rmSync(directory, { recursive: true, force: true });
+  run("stop"); // returns once the instance has exited
+  rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 }

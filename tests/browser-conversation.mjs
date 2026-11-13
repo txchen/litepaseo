@@ -141,6 +141,8 @@ try {
   assert.deepEqual(messages.map((m) => [m.text, m.behavior]), [["first queued", "interrupt"]]);
   // The turn ends: the remaining message goes by itself.
   status = "idle";
+  // Mocked streams end after their events; reconnect now, as a tab that becomes visible does.
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await page.waitForFunction(() => !document.querySelector(".queue-item"), null, { timeout: 10000 });
   assert.deepEqual(messages.map((m) => m.text), ["first queued", "after the turn"]);
 
@@ -148,22 +150,33 @@ try {
   const timeline = page.locator(".timeline");
   const firstSeq = () => page.locator(".timeline [data-seq-start]").first().getAttribute("data-seq-start").then(Number);
   const liveFirst = await firstSeq();
-  for (let i = 0; i < 40 && (await firstSeq()) > 1; i++) {
-    await timeline.evaluate((el) => el.scrollBy(0, -1500));
-    await page.waitForTimeout(120);
-  }
+  /**
+   * Reads through the timeline as a person scrolls (wheel + scroll, one step per frame), inside
+   * the page so no step waits on a test round trip. Returns every row rendered on the way.
+   */
+  const readThrough = (direction) => timeline.evaluate(async (el, direction) => {
+    const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
+    const inHistory = () => [...document.querySelectorAll(".older button")].some((b) => b.textContent.includes("Back to latest"));
+    const done = () => !document.querySelector(".older-loading") &&
+      (direction === "up" ? el.querySelector("[data-seq-start]")?.dataset.seqStart === "1" : !inHistory());
+    const seen = new Set();
+    const record = () => el.querySelectorAll("[data-seq-start]").forEach((r) => seen.add(Number(r.dataset.seqStart)));
+    const dy = direction === "up" ? -1500 : 1500;
+    for (let i = 0; i < 3000 && !done(); i++) {
+      record();
+      el.dispatchEvent(new WheelEvent("wheel", { deltaY: dy, bubbles: true }));
+      el.scrollBy(0, dy);
+      await frame();
+    }
+    record();
+    return [...seen];
+  }, direction);
+  await readThrough("up");
   assert.ok((await firstSeq()) === 1, `paged back to the start (first row ${await firstSeq()}, live started at ${liveFirst})`);
   assert.ok(pages.length >= 3, "several earlier pages were fetched");
   assert.ok(await page.locator(".timeline [data-seq-start]").count() <= 150, "the window stays bounded");
   assert.equal(await page.getByRole("button", { name: "Show newer messages" }).count(), 0);
-  const renderedSeqs = () => page.locator(".timeline [data-seq-start]").evaluateAll((rows) => rows.map((r) => Number(r.dataset.seqStart)));
-  const shownOnTheWayDown = new Set();
-  for (let i = 0; i < 60 && (await page.getByRole("button", { name: "Back to latest" }).count()); i++) {
-    for (const s of await renderedSeqs()) shownOnTheWayDown.add(s);
-    await timeline.evaluate((el) => el.scrollBy(0, 1500));
-    await page.waitForTimeout(120);
-  }
-  for (const s of await renderedSeqs()) shownOnTheWayDown.add(s);
+  const shownOnTheWayDown = new Set(await readThrough("down"));
   assert.equal(await page.getByRole("button", { name: "Back to latest" }).count(), 0, "returned to the live tail");
   assert.equal(shownOnTheWayDown.size, TOTAL, "paging forward shows every row once from the start to the tail");
   await timeline.evaluate((el) => el.scrollTo(0, el.scrollHeight));
@@ -204,17 +217,10 @@ try {
   await page.mouse.move(900, 400);
   await page.waitForFunction(() => !document.querySelector(".outline-preview"));
   // From there, scrolling down pages forward through the later turns back to the live tail.
+  // One real wheel event first: the edge of a short window is reached by wheel, not scroll.
   await page.mouse.move(790, 400);
-  const seen = new Set();
-  const record = async () => {
-    for (const s of await page.locator(".timeline [data-seq-start]").evaluateAll((rows) => rows.map((r) => Number(r.dataset.seqStart)))) seen.add(s);
-  };
-  for (let i = 0; i < 150 && (await page.getByRole("button", { name: "Back to latest" }).count()); i++) {
-    await record();
-    await page.mouse.wheel(0, 1500);
-    await page.waitForTimeout(80);
-  }
-  await record();
+  await page.mouse.wheel(0, 1500);
+  const seen = new Set(await readThrough("down"));
   const missing = [];
   for (let s = 21; s <= TOTAL; s++) if (!seen.has(s)) missing.push(s);
   assert.deepEqual(missing, [], "every row from the prompt to the tail was shown on the way down");
@@ -226,7 +232,6 @@ try {
   console.log("PASS browser conversation: highlighted code, queued messages (remove/edit/interrupt/auto-send), auto-paging history both ways, turn footer, rewind, outline rail preview + jump; no page errors");
 } finally {
   await browser?.close();
-  run("stop");
-  await new Promise((r) => setTimeout(r, 500));
-  rmSync(directory, { recursive: true, force: true });
+  run("stop"); // returns once the instance has exited
+  rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 }

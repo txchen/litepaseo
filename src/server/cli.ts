@@ -3,7 +3,6 @@ import { VERSION } from "./version.ts";
 import { RotatingLog } from "./rotating-log.ts";
 import { manageService } from "./autostart.ts";
 import { FAILED_EVENT, StartupFailure, supervise } from "./supervisor.ts";
-import { runWorker } from "./worker.ts";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -294,6 +293,9 @@ async function run(): Promise<void> {
   // Internal: the supervisor forks this to run the server.
   if (name === "worker") {
     const paths = await dataDirectory();
+    // The server (HTTP, Paseo client, protocol schemas) loads only here: every other command
+    // starts in a fraction of the time without it.
+    const { runWorker } = await import("./worker.ts");
     return runWorker(paths.directory, fileURLToPath(new URL("../web/", import.meta.url)));
   }
   const command = findCommand(name);

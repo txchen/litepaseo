@@ -1,10 +1,20 @@
-import test from "node:test";
+import test, { mock } from "node:test";
 import assert from "node:assert/strict";
 import { mergeToolCallItems, TimelineView, type TimelineDriver } from "../src/server/timeline-view.ts";
 import { TimelineStore } from "../src/web/timeline-store.ts";
 import type { TimelineItem, TimelineOp, TimelineRow } from "../src/shared/wire.ts";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// The view batches on timers (500 ms flushes). The clock is simulated: `sleep` lets pending
+// async work settle, then advances time, so the suite does not wait in real time.
+mock.timers.enable({ apis: ["setTimeout"] });
+const settle = async () => {
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+};
+const sleep = async (ms: number) => {
+  await settle();
+  mock.timers.tick(ms);
+  await settle();
+};
 
 /** Independent model of the daemon's live TimelineProjection (append + tail/after/before reads). */
 class ReferenceDaemon {

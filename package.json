@@ -19,8 +19,8 @@
     "build": "vp build && node scripts/compress-web.mjs dist/web && vp pack",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "typecheck": "vue-tsc --noEmit",
-    "test:browser": "node tests/browser.mjs && node tests/browser-conversation.mjs",
-    "check": "npm run typecheck && npm run build && npm test && npm run test:browser",
+    "test:browser": "node scripts/parallel.mjs \"node tests/browser.mjs\" \"node tests/browser-conversation.mjs\"",
+    "check": "node scripts/parallel.mjs \"npm run typecheck\" \"npm run build\" && node scripts/parallel.mjs \"npm test\" \"node tests/browser.mjs\" \"node tests/browser-conversation.mjs\"",
     "screens": "node tests/screens.mjs",
     "icons": "node scripts/make-icons.mjs",
     "prepack": "npm run build 1>&2"

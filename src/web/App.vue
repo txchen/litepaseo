@@ -639,7 +639,10 @@ watch(timelineElement, (element, _previous, cleanup) => {
     // Pages load ahead of the reader in the direction they scroll; our own anchor
     // corrections after a page swap are not reader intent.
     scheduleActivePrompt();
-    if (performance.now() >= pagingQuietUntil) {
+    // The scroll event of our own correction lands where we put it: not reader intent.
+    const ours = programmaticTop !== null && Math.abs(top - programmaticTop) < 2;
+    if (ours) programmaticTop = null;
+    if (!ours && performance.now() >= pagingQuietUntil) {
       if (top < lastTop - 1) pagingIntent = "up";
       else if (top > lastTop + 1) pagingIntent = "down";
       autoPage();
@@ -675,7 +678,15 @@ watch(timelineElement, (element, _previous, cleanup) => {
  * out of view are dropped, so a long read does not accumulate rows in memory.
  */
 let pagingIntent: "up" | "down" | null = null,
-  pagingQuietUntil = 0;
+  pagingQuietUntil = 0,
+  /** Where our last own scroll correction put the timeline; its scroll event is skipped. */
+  programmaticTop: number | null = null;
+/** Moves the timeline ourselves. A brief quiet window covers browsers that settle a pixel off. */
+function setScrollTop(el: HTMLElement, top: number) {
+  el.scrollTop = top;
+  programmaticTop = el.scrollTop;
+  pagingQuietUntil = performance.now() + 40;
+}
 function autoPage() {
   const el = timelineElement.value;
   if (!el || paging.value || !pagingIntent || el.offsetParent === null) return;
@@ -702,8 +713,7 @@ function restoreAnchor(anchor: { seq: string; top: number } | null) {
   const el = timelineElement.value;
   const retained = anchor && el?.querySelector<HTMLElement>(`[data-seq-start="${anchor.seq}"]`);
   if (!el || !retained) return false;
-  pagingQuietUntil = performance.now() + 150;
-  el.scrollTop += retained.getBoundingClientRect().top - anchor!.top;
+  setScrollTop(el, el.scrollTop + retained.getBoundingClientRect().top - anchor!.top);
   return true;
 }
 /** Leaves a history window that reached the newest page, keeping the reader's position. */
@@ -1183,9 +1193,8 @@ function revealRow(seq: number) {
   const row = el?.querySelector<HTMLElement>(`[data-seq-start="${seq}"]`)
     ?? Array.from(el?.querySelectorAll<HTMLElement>("[data-seq-start]") ?? []).find((r) => Number(r.dataset.seqStart) >= seq);
   if (!el || !row) return;
-  pagingQuietUntil = performance.now() + 250;
   followLatest = false;
-  el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top - 12;
+  setScrollTop(el, el.scrollTop + row.getBoundingClientRect().top - el.getBoundingClientRect().top - 12);
   scheduleActivePrompt();
 }
 /**
@@ -1246,7 +1255,7 @@ async function jumpToPrompt(seq: number) {
     revealRow(seq);
     // Read ahead: the next turns are where the reader goes from a jump.
     pagingIntent = "down";
-    setTimeout(autoPage, 300);
+    requestAnimationFrame(autoPage);
   } catch (e) {
     error.value = String((e as Error).message);
   } finally {

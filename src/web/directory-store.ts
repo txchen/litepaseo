@@ -13,6 +13,7 @@ export interface DirectoryItem {
   key: string;
   hostId: string;
   project: string;
+  projectId?: string;
   activityAt: number;
   attention: boolean;
   state?: AgentState;
@@ -46,6 +47,8 @@ export interface ProjectGroup<T extends DirectoryItem = DirectoryItem> {
   byRecency: OrderedIndex<T> | null;
   /** activityAt of the group's most recent member; the group's sort key. */
   recent: number;
+  pinnedAt?: number;
+  pinRanks?: Map<number, number>;
   /** Members per state, so a collapsed project can show what it hides. */
   attention: number;
   failed: number;
@@ -79,7 +82,7 @@ const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: tr
 /** Most recently used project first; name and key keep the order total and stable. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const compareGroups = (a: ProjectGroup<any>, b: ProjectGroup<any>) =>
-  b.recent - a.recent || collator.compare(a.name, b.name) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+  ((a.pinnedAt || b.pinnedAt) ? (!a.pinnedAt ? 1 : !b.pinnedAt ? -1 : a.pinnedAt - b.pinnedAt || collator.compare(a.key, b.key)) : 0) || b.recent - a.recent || collator.compare(a.name, b.name) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 
 const stateOf = (item: DirectoryItem): AgentState =>
   item.state ?? (item.status === "running" ? "running" : "done");
@@ -99,7 +102,9 @@ class View<T extends DirectoryItem> {
   private readonly compare: (a: T, b: T) => number;
   private readonly isCollapsed: (key: string) => boolean;
 
-  constructor(compare: (a: T, b: T) => number, isCollapsed: (key: string) => boolean) {
+  private readonly pinRank: (item: T) => number;
+  constructor(compare: (a: T, b: T) => number, isCollapsed: (key: string) => boolean, pinRank: (item: T) => number) {
+    this.pinRank = pinRank;
     this.compare = compare;
     this.isCollapsed = isCollapsed;
     this.flat = new OrderedIndex<T>(compare);
@@ -200,6 +205,13 @@ class View<T extends DirectoryItem> {
   }
 
   private count(group: ProjectGroup<T>, item: T, delta: number) {
+    const rank = this.pinRank(item);
+    if (rank) {
+      const ranks = group.pinRanks ??= new Map();
+      const count = (ranks.get(rank) ?? 0) + delta;
+      if (count > 0) ranks.set(rank, count); else ranks.delete(rank);
+      group.pinnedAt = ranks.size ? Math.min(...ranks.keys()) : 0;
+    }
     const onHost = (group.hosts.get(item.hostId) ?? 0) + delta;
     if (onHost > 0) group.hosts.set(item.hostId, onHost);
     else group.hosts.delete(item.hostId);
@@ -226,6 +238,17 @@ export type CollectionMessage<T> =
 export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
   generation = "";
   seq = -1;
+  private projectPins: Record<string, number> = {};
+  private readonly pinRank = (item: T) => item.projectId ? this.projectPins[JSON.stringify([item.hostId, item.projectId])] ?? 0 : 0;
+  setProjectPins(pins: Record<string, number>) {
+    this.projectPins = pins;
+    this.all.clear();
+    for (const view of this.byHost.values()) view.clear();
+    this.filtered = null;
+    for (const item of this.byKey.values()) { this.all.add(item); this.hostView(item.hostId).add(item); }
+    if (this.predicate) this.rebuildFiltered();
+    this.version.value++;
+  }
   private readonly byKey = new Map<string, T>();
   private readonly collapsed: Set<string>;
   private readonly compare: (a: T, b: T) => number;
@@ -253,7 +276,7 @@ export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
     this.persist = options.persist ?? (() => {});
     this.compare = options.compare ?? compareAgents;
     this.indexOf = options.indexBy ?? null;
-    this.all = new View<T>(this.compare, this.collapsedFn);
+    this.all = new View<T>(this.compare, this.collapsedFn, this.pinRank);
   }
 
   private readonly collapsedFn = (key: string) => this.collapsed.has(key);
@@ -269,7 +292,7 @@ export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
 
   private hostView(hostId: string) {
     let view = this.byHost.get(hostId);
-    if (!view) this.byHost.set(hostId, (view = new View<T>(this.compare, this.collapsedFn)));
+    if (!view) this.byHost.set(hostId, (view = new View<T>(this.compare, this.collapsedFn, this.pinRank)));
     return view;
   }
 
@@ -411,7 +434,7 @@ export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
 
   private rebuildFiltered() {
     // Search results are always expanded so matches are never hidden in a collapsed group.
-    const filtered = new View<T>(this.compare, () => false);
+    const filtered = new View<T>(this.compare, () => false, this.pinRank);
     const base = this.base;
     for (const item of base.flat.range(0, base.size)) if (this.predicate!(item)) filtered.add(item);
     this.filtered = filtered;

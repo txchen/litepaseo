@@ -30,7 +30,7 @@ async function openEvents(app: Requester, path: string) {
           if (!block.startsWith("data: ")) continue;
           const message = JSON.parse(block.slice(6));
           // These checks are about the agent directory; workspaces have their own test.
-          if (String(message.type).startsWith("workspaces-")) continue;
+          if (message.type === "project-pins" || String(message.type).startsWith("workspaces-")) continue;
           return message;
         }
         const { value, done } = await reader.read();

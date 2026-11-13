@@ -286,6 +286,21 @@ try {
   // The lead slot shows the project icon; hovering swaps in the fold chevron.
   await page.mouse.move(1000, 10);
   assert.equal(await litepaseoGroup.locator(".group-chevron").evaluate((el) => getComputedStyle(el).opacity), "0");
+  let pinnedProjects = {};
+  await page.route('**/api/project-pins', async route => {
+    const input = route.request().postDataJSON();
+    const key = JSON.stringify([input.hostId, input.projectIds[0]]);
+    if (input.pinned) pinnedProjects[key] = 1; else delete pinnedProjects[key];
+    return route.fulfill({json: pinnedProjects});
+  });
+  await litepaseoGroup.hover();
+  await litepaseoGroup.getByRole('button', {name: 'Actions for project litepaseo'}).click();
+  await page.getByRole('menuitem', {name: 'Pin project', exact: true}).click();
+  await litepaseoGroup.locator('[title="Pinned project"]').waitFor();
+  await litepaseoGroup.hover();
+  await litepaseoGroup.getByRole('button', {name: 'Actions for project litepaseo'}).click();
+  await page.getByRole('menuitem', {name: 'Unpin project', exact: true}).click();
+  await litepaseoGroup.locator('[title="Pinned project"]').waitFor({state: 'detached'});
   await litepaseoGroup.hover();
   for (let i = 0; i < 50 && (await litepaseoGroup.locator(".group-chevron").evaluate((el) => getComputedStyle(el).opacity)) !== "1"; i++)
     await page.waitForTimeout(20);

@@ -380,6 +380,22 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     if (session) return () => auth.stillValid(session.id);
     return () => !!bearer && !auth.totpEnabled() && auth.checkToken(bearer);
   };
+  const projectPins = (): Record<string, number> => JSON.parse(store.setting("project-pins") ?? "{}");
+  app.get("/api/project-pins", c => c.json(projectPins()));
+  app.post("/api/project-pins", async c => {
+    const input = z.object({ hostId: z.string().min(1).max(200), projectIds: z.array(z.string().min(1).max(500)).min(1).max(100), pinned: z.boolean() }).parse(await c.req.json());
+    hosts.get(input.hostId);
+    const pins = projectPins();
+    const rank = Math.max(0, ...Object.values(pins)) + 1;
+    for (const id of input.projectIds) {
+      const key = JSON.stringify([input.hostId, id]);
+      if (input.pinned) pins[key] ??= rank; else delete pins[key];
+    }
+    if (Object.keys(pins).length > 2000) return c.json({ error: "Too many pinned projects" }, 400);
+    store.setSetting("project-pins", JSON.stringify(pins));
+    for (const stream of directoryStreams) stream.send({ type: "project-pins", pins });
+    return c.json(pins);
+  });
   app.get("/api/stream", (c) => {
     const since = Number(c.req.query("since"));
     const resumable =
@@ -390,6 +406,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     return eventStream(c.req.raw.signal, (send) => {
       const stream: DirectoryStream = { last: resumable ? since : -1, lastWorkspaces: wresumable ? wsince : -1, send };
       send({ type: "hosts", hosts: hostStates() });
+      send({ type: "project-pins", pins: projectPins() });
       deliverAgents(stream);
       directoryStreams.add(stream);
       return () => directoryStreams.delete(stream);

@@ -642,7 +642,8 @@ function openDirectory() {
     },
     onMessage: (data) => {
       const message = data as DirectoryMessage;
-      if (message.type === "hosts") hosts.value = message.hosts;
+      if (message.type === "project-pins") applyProjectPins(message.pins);
+      else if (message.type === "hosts") hosts.value = message.hosts;
       else if (message.type === "workspaces-snapshot")
         directory.applyCollection({ type: "snapshot", generation: message.generation, seq: message.seq, items: message.workspaces });
       else if (message.type === "workspaces-changes")
@@ -923,6 +924,18 @@ async function archiveThread(thread: WorkspaceSummary) {
 }
 // Project actions (Paseo's project menu): edit paseo.json, remove the project from its host.
 type ProjectTarget = { name: string; hostId: string; rootPath: string; projectIds: string[]; threadKeys: string[] };
+const projectPins = ref<Record<string, number>>({});
+function projectPinned(target: ProjectTarget) { return target.projectIds.some(id => !!projectPins.value[JSON.stringify([target.hostId, id])]); }
+let projectPinsRevision = 0;
+function applyProjectPins(pins: Record<string, number>) { projectPinsRevision++; projectPins.value = pins; directory.setProjectPins(pins); }
+async function pinProject(target: ProjectTarget) {
+  const pinned = !projectPinned(target);
+  const revision = projectPinsRevision;
+  await action(async () => {
+    const pins = await api('/project-pins', 'POST', {hostId: target.hostId, projectIds: target.projectIds, pinned});
+    if (revision === projectPinsRevision) applyProjectPins(pins);
+  });
+}
 const projectMenu = shallowRef<{ project: ProjectTarget; x: number; y: number } | null>(null);
 const projectSettings = shallowRef<ProjectTarget | null>(null);
 /** The open settings follow the live directory, so a rename or new icon shows at once. */
@@ -2334,6 +2347,8 @@ onUnmounted(() => {
     <ProjectMenu
       v-if="projectMenu"
       :name="projectMenu.project.name"
+      :pinned="projectPinned(projectMenu.project)"
+      @pin="pinProject(projectMenu!.project)"
       :host="hostLabels.get(projectMenu.project.hostId) ?? 'Unknown host'"
       :x="projectMenu.x"
       :y="projectMenu.y"

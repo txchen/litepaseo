@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.3
+
+- Pin projects from the project menu to keep driver repositories above unpinned projects. Pinned projects retain their pin order as other projects become active.
+- Project pins persist in the BFF, synchronize across devices, and survive project renames and restarts. Unpin restores normal activity ordering.
+
 ## 0.5.2
 
 - Queue controls: pause/resume, move earlier, and confirm uncertain deliveries without resending. Sidebar badges and queue event streams replace periodic polling.

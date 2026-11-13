@@ -125,6 +125,7 @@ export interface Change<T> {
 }
 
 export type DirectoryMessage =
+  | { type: "project-pins"; pins: Record<string, number> }
   | { type: "snapshot"; generation: string; seq: number; agents: AgentSummary[] }
   | { type: "changes"; generation: string; seq: number; changes: Change<AgentSummary>[] }
   | { type: "workspaces-snapshot"; generation: string; seq: number; workspaces: WorkspaceSummary[] }

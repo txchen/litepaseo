@@ -43,6 +43,7 @@ package, with no separate database service to deploy.
 ## What you can do
 
 - Manage conversations across multiple Paseo hosts in one place.
+- Pin projects from their ⋮ menu to keep important repositories at the top of the Projects sidebar. Pins follow pin order and sync across devices; Unpin restores activity ordering.
 - Create sessions, choose a provider/model, send messages, stop turns, and answer
   permission requests or structured questions.
 - Queue messages on the server while an agent works; they continue after you close the browser

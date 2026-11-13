@@ -167,7 +167,8 @@ field, LitePaseo retries once with the other format.
 | `litepaseo token set` | Choose your own token (at least 16 characters; typed without echo or read from stdin) |
 | `litepaseo token rotate` | Replace the token with a new random one |
 | `litepaseo serve` | Run in the foreground |
-| `litepaseo version` | Show the installed and running versions (`-v` prints just the number) |
+| `litepaseo version` | Show the installed and running versions (`--json` for scripts) |
+| `litepaseo -v` | Print just the installed version number (also `--version`) |
 | `litepaseo --help` | List commands; `litepaseo help <command>` explains one |
 
 For automatic startup, install a systemd user service on Linux or a LaunchAgent

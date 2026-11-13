@@ -38,10 +38,22 @@ const tool = computed(() => {
 });
 /** Thinking shows its first line, as Paseo does; the rest opens on click. */
 const headline = computed(() => (item.value.type === "reasoning" ? reasoningHeadline(String(item.value.text ?? "")) : ""));
+/** The one-line headline is cut off on screen (ellipsis): opening shows the whole line. */
+const headlineClipped = ref(false);
+function measureHeadline(event: Event) {
+  const text = (event.currentTarget as HTMLElement).querySelector<HTMLElement>(".line-text");
+  headlineClipped.value = !!text && text.scrollWidth > text.clientWidth + 1;
+}
+function onReasoningClick(event: MouseEvent) {
+  measureHeadline(event); // touch has no hover: measure at the tap
+  if (!expandable.value) event.preventDefault();
+}
 const reasoningMore = computed(() => {
   const text = String(item.value.text ?? "").trim();
   return text.length > headline.value.length + 4;
 });
+/** Thinking opens when there is more than its first line, or that line does not fit. */
+const expandable = computed(() => reasoningMore.value || headlineClipped.value || open.value);
 const clip = (text: string) => (text.length > MAX_DETAIL ? text.slice(0, MAX_DETAIL) + "\n… (truncated)" : text);
 // Only computed while expanded: collapsed rows cost nothing beyond their summary line.
 const detail = computed(() => {
@@ -108,8 +120,8 @@ async function copyMessage() {
     <div v-else class="prose" v-html="fallbackHtml"></div>
   </div>
 
-  <details v-else-if="item.type === 'reasoning'" class="row row-line row-reasoning" :class="{ 'is-static': !reasoningMore }" @toggle="onToggle">
-    <summary :tabindex="reasoningMore ? undefined : -1" @click="!reasoningMore && $event.preventDefault()">
+  <details v-else-if="item.type === 'reasoning'" class="row row-line row-reasoning" :class="{ 'is-static': !expandable }" @toggle="onToggle">
+    <summary :tabindex="expandable ? undefined : -1" @pointerenter="measureHeadline" @focus="measureHeadline" @click="onReasoningClick">
       <span class="line-icon"><Icon name="bulb" :size="15" /></span>
       <span class="line-text">{{ headline || "Thinking" }}</span>
     </summary>

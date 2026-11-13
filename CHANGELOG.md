@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Conversation
+
+- Thinking that is a single long line can be opened again. It showed cut off with "…" but
+  did not expand, because only thinking with more than one line counted as expandable.
+
 ### Command line
 
 - Commands such as `status`, `token`, `config` and `logs` start in about 0.06 s instead of

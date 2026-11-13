@@ -19,11 +19,14 @@ const env = { ...process.env, LITEPASEO_DATA_DIR: directory, LITEPASEO_PORT: Str
 const run = (c) => execFileSync(process.execPath, [resolve("dist/server/cli.mjs"), c], { env, encoding: "utf8", timeout: 15000 });
 
 const TOTAL = 400, LIVE = 200, START = Date.parse("2026-01-05T10:00:00Z");
+// One line of thinking, too long for the row: shown with an ellipsis, it must still open.
+const LONG_THOUGHT = "Considering whether the cache layer should be invalidated per workspace " + "or per agent, ".repeat(12) + "END_OF_THOUGHT";
 // Two rows per turn: the question (odd seq) and its answer 75 s later.
 const row = (seq) => ({
   seqStart: seq, seqEnd: seq, timestamp: new Date(START + seq * 75_000).toISOString(), provider: "claude",
   turnId: `turn-${Math.ceil(seq / 2)}`,
-  item: seq % 2
+  item: seq === TOTAL - 2 ? { type: "reasoning", text: LONG_THOUGHT }
+    : seq % 2
     ? { type: "user_message", text: `question ${seq}`, messageId: `msg-${seq}` }
     : { type: "assistant_message", text: seq === TOTAL
       ? "Final answer\n\n```ts\nconst answer: number = 42; // the answer\n```"
@@ -113,6 +116,14 @@ try {
     await code.evaluate((el) => getComputedStyle(el).color),
     "keywords are colored",
   );
+
+  // 1b. A single long line of thinking is cut off on screen, so it opens to show all of it.
+  const thought = page.locator(".row-reasoning").last();
+  assert.ok(await thought.locator(".line-text").evaluate((el) => el.scrollWidth > el.clientWidth), "the headline is clipped");
+  await thought.locator("summary").click();
+  await thought.locator(".reasoning-text", { hasText: "END_OF_THOUGHT" }).waitFor();
+  await thought.locator("summary").click();
+  await thought.locator(".reasoning-text").waitFor({ state: "detached" });
 
   // 2. Queue mode while running: the message waits above the composer, not in the conversation.
   const textarea = page.locator(".composer textarea");

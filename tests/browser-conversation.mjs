@@ -47,6 +47,7 @@ try {
   page.on("pageerror", (e) => errors.push(e.message));
 
   let status = "running", seq = 1;
+  const queue = [];
   const messages = [], pages = [], rewinds = [];
   const agent = () => ({
     key: "alpha:a1", hostId: "alpha", id: "a1", workspaceId: "w1", title: "Long conversation",
@@ -89,6 +90,23 @@ try {
       const rows = [];
       for (let s = Math.max(1, cursor.seq - 100); s < cursor.seq; s++) rows.push(row(s));
       return route.fulfill({ json: { epoch: "e1", hasOlder: rows[0]?.seqStart > 1, startCursor: null, rows } });
+    }
+    if (p.endsWith("/queue")) {
+      if (route.request().method() === "POST") {
+        queue.push({ ...route.request().postDataJSON(), attachmentNames: [] });
+        return route.fulfill({ json: { ok: true } });
+      }
+      return route.fulfill({ json: queue });
+    }
+    if (p.includes("/queue/")) {
+      const id = p.split("/queue/")[1].split("/")[0];
+      const index = queue.findIndex(m => m.id === id);
+      if (route.request().method() === "PATCH") queue[index].text = route.request().postDataJSON().text;
+      else {
+        const [message] = queue.splice(index, 1);
+        if (p.endsWith("/send")) messages.push({ ...message, behavior: "interrupt" });
+      }
+      return route.fulfill({ json: { ok: true } });
     }
     if (p.endsWith("/messages/status")) return route.fulfill({ json: { confirmed: [] } });
     if (p.endsWith("/messages")) {
@@ -135,23 +153,24 @@ try {
   assert.equal(await page.locator(".row-user", { hasText: "first queued" }).count(), 0);
   await textarea.fill("second queued");
   await textarea.press("Enter");
+  await page.locator(".queue-item", { hasText: "second queued" }).waitFor();
   await textarea.fill("third queued");
   await textarea.press("Enter");
-  assert.equal(await page.locator(".queue-item").count(), 3);
+  await page.waitForFunction(() => document.querySelectorAll(".queue-item").length === 3);
   await page.waitForTimeout(300);
   assert.equal(messages.length, 0, "nothing is sent while the turn runs");
   // Remove, edit back into the composer, and interrupt with one.
   await page.locator(".queue-item", { hasText: "second queued" }).getByRole("button", { name: "Remove queued message" }).click();
   await page.locator(".queue-item", { hasText: "third queued" }).getByRole("button", { name: "Edit queued message" }).click();
-  assert.equal(await textarea.inputValue(), "third queued");
-  await textarea.fill("");
-  await textarea.fill("after the turn");
-  await textarea.press("Enter");
+  await page.getByRole("textbox", { name: "Queued message text" }).fill("after the turn");
+  await page.locator(".queue-item").getByRole("button", { name: "Save", exact: true }).click();
+  await page.locator(".queue-item", { hasText: "after the turn" }).waitFor();
   await page.locator(".queue-item", { hasText: "first queued" }).getByRole("button", { name: "Interrupt" }).click();
   await page.waitForFunction(() => document.querySelectorAll(".queue-item").length === 1);
   assert.deepEqual(messages.map((m) => [m.text, m.behavior]), [["first queued", "interrupt"]]);
   // The turn ends: the remaining message goes by itself.
   status = "idle";
+  messages.push({ ...queue.shift(), behavior: "steer" }); // BFF owns dispatch; browser only reads the result.
   // Mocked streams end after their events; reconnect now, as a tab that becomes visible does.
   await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await page.waitForFunction(() => !document.querySelector(".queue-item"), null, { timeout: 10000 });

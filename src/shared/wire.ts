@@ -267,3 +267,8 @@ export interface CardPatch {
   description?: string;
   link?: { hostId: string; agentId: string } | null;
 }
+
+export interface ServerQueuedMessage {
+  id: string; host: string; agent: string; text: string; attachmentNames: string[];
+  error?: string; sending?: boolean;
+}

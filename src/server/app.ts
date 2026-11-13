@@ -1,8 +1,10 @@
 import { importProjectIcon, MAX_ICON_BYTES } from "./project-icon-import.ts";
+import { ServerSendQueue } from "./send-queue.ts";
 import { VERSION } from "./version.ts";
 import { eventStream } from "./sse.ts";
 import { registerWorkspaceRoutes } from "./workspace-routes.ts";
 import { Attachments, MAX_FILE_BYTES } from "./attachments.ts";
+import { notificationPreview } from "./notification-preview.ts";
 import { confirmedMessages } from "./message-status.ts";
 import { IconCache, MAX_IMAGE_BYTES, imageMime, isLocalConnection, isMaterializedImagePath, readMaterializedImage } from "./media.ts";
 import { randomUUID } from "node:crypto";
@@ -105,12 +107,14 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
   const auth = new Auth(store, token);
   const dictationStreams = new DictationStreams(options.fetch, (metrics) => console.info(JSON.stringify({ event: "dictation_complete", ...metrics })));
   const attachments = new Attachments();
+  const sendQueue = new ServerSendQueue(store, hosts);
   const projectIcons = new IconCache();
   const viewers = new Map<string, Map<string, number>>();
   const notifier = new Notifier({
     store,
     sender: options.pushSender ?? webPushSender(store, options.pushSubject ?? "mailto:litepaseo@example.com"),
     isViewing: (key, sessionId) => (viewers.get(key)?.get(sessionId) ?? 0) > 0,
+    replyPreview: (agent, previous) => notificationPreview(hosts.get(agent.hostId).driver, agent.id, previous.turnStartedAt, agent.attention ? undefined : agent.activityAt),
     hostLabel: (id) => hosts.label(id) || store.hosts().find((h) => h.id === id)?.label || "",
   });
   hosts.onTransition((previous, next) => notifier.transition(previous, next));
@@ -767,6 +771,39 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     catch { return c.json({ error: "Attachment already expired or unavailable" }, 404); }
     return c.json({ ok: true });
   });
+  app.get("/api/hosts/:host/agents/:agent/queue", c =>
+    c.json(sendQueue.list(c.req.param("host"), c.req.param("agent"))));
+  app.post("/api/hosts/:host/agents/:agent/queue", async c => {
+    const input = z.object({ id: z.string().uuid(), text: z.string().trim().max(100000),
+      attachmentIds: z.array(z.string().uuid()).max(4).default([]) })
+      .refine(v => !!v.text || !!v.attachmentIds.length).parse(await c.req.json());
+    const host = c.req.param("host"), agent = c.req.param("agent");
+    hosts.get(host);
+    if (sendQueue.accepted(host, agent, input.id)) return c.json({ ok: true });
+    try {
+      const attachmentNames = input.attachmentIds.map(id => attachments.get(id, attachmentOwner(c), host, agent).name);
+      const prepared = await attachments.prepare(hosts, attachmentOwner(c), host, agent, input.attachmentIds);
+      sendQueue.add({ id: input.id, text: input.text, host, agent, attachmentNames, prepared });
+      attachments.consumed(input.attachmentIds);
+      return c.json({ ok: true }, 201);
+    } catch (error) { return c.json({ error: (error as Error).message }, 400); }
+  });
+  app.delete("/api/hosts/:host/agents/:agent/queue/:id", c => {
+    try { sendQueue.remove(c.req.param("host"), c.req.param("agent"), c.req.param("id")); }
+    catch (error) { return c.json({ error: (error as Error).message }, 409); }
+    return c.json({ ok: true });
+  });
+  app.patch("/api/hosts/:host/agents/:agent/queue/:id", async c => {
+    const { text } = z.object({ text: z.string().max(100000) }).parse(await c.req.json());
+    try { sendQueue.edit(c.req.param("host"), c.req.param("agent"), c.req.param("id"), text); }
+    catch (error) { return c.json({ error: (error as Error).message }, 409); }
+    return c.json({ ok: true });
+  });
+  app.post("/api/hosts/:host/agents/:agent/queue/:id/send", async c => {
+    try { await sendQueue.interrupt(c.req.param("host"), c.req.param("agent"), c.req.param("id")); }
+    catch (error) { return c.json({ error: (error as Error).message }, 409); }
+    return c.json({ ok: true });
+  });
   app.post("/api/hosts/:host/agents/:agent/messages/status", async c => {
     const { messageIds } = z.object({ messageIds: z.array(z.string().uuid()).min(1).max(20) }).parse(await c.req.json());
     const { driver } = hosts.get(c.req.param("host"));
@@ -1072,6 +1109,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
       clearTimeout(agentFlush);
       clearTimeout(hostFlush);
       agentFlush = hostFlush = undefined;
+      sendQueue.close();
       attachments.close();
       dictationStreams.close();
     },

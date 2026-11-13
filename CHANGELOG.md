@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.1
+
+- Turn-finished push notifications preview the latest agent reply instead of the thread
+  title (usually the first prompt). Failed turns show their error when available.
+
+- Queued messages and attachments are saved by the BFF and sent when the agent finishes,
+  even after the browser closes or the device sleeps. Pending messages survive BFF restarts
+  and are visible across signed-in devices. Edit text, remove, or interrupt from the queue.
+- Uncertain deliveries pause the queue for review instead of automatically retrying.
+
 ## 0.5.0
 
 ### Sidebar

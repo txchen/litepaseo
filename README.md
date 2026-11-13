@@ -45,7 +45,8 @@ package, with no separate database service to deploy.
 - Manage conversations across multiple Paseo hosts in one place.
 - Create sessions, choose a provider/model, send messages, stop turns, and answer
   permission requests or structured questions.
-- Queue messages while an agent works, then edit, drop or send one at once as an
+- Queue messages on the server while an agent works; they continue after you close the browser
+  and survive server restarts. Edit, drop or send one at once as an
   interrupt; rewind a conversation (and, where the provider supports it, its files)
   to an earlier message.
 - Read long conversations without clicking through pages: history loads as you

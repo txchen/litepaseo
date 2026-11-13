@@ -27,7 +27,7 @@ const summary = (extra: Partial<AgentSummary> = {}): AgentSummary => ({
   ...extra,
 });
 
-function setup() {
+function setup(replyPreview?: (agent: AgentSummary, previous: AgentSummary) => Promise<string | null>) {
   const directory = mkdtempSync(join(tmpdir(), "litepaseo-notify-"));
   const store = new Store(directory);
   store.addSession({ id: "s1", secretHash: "test", label: "test", created: 0, lastSeen: 0, expires: 1e15 });
@@ -37,6 +37,7 @@ function setup() {
   let viewing = false;
   const notifier = new Notifier({
     store,
+    replyPreview,
     sender: {
       async send(subscription, payload) {
         if (failing.has(subscription.endpoint)) throw Object.assign(new Error("gone"), { statusCode: 410 });
@@ -81,7 +82,7 @@ test("needs-input and turn-end transitions notify; first sight and idle changes 
     assert.equal(t.sent.length, 2, "attention goes to both devices");
     assert.deepEqual(
       { title: t.sent[0].message.title, body: t.sent[0].message.body, url: t.sent[0].message.url, badge: t.sent[0].message.badge },
-      { title: "repo · needs your input", body: "Fix the tests wants to run npm test — MacBook", url: "/?session=h%3Aa", badge: 1 },
+      { title: "repo · needs your input", body: "The agent wants to run npm test — MacBook", url: "/?session=h%3Aa", badge: 1 },
     );
     assert.equal(t.notifier.waitingCount, 1);
 
@@ -151,5 +152,43 @@ test("viewing suppresses only that device; expired devices cannot receive pushes
     await t.settle();
     assert.equal(t.sent.length, 0);
     assert.deepEqual(t.store.pushSubscriptions().map(s => s.sessionId), ["s1"]);
+  } finally { t.cleanup(); }
+});
+
+
+test("turn notifications use the agent reply, with safe fallback and one lookup for all devices", async () => {
+  let reads = 0;
+  const t = setup(async () => { reads++; return "Fixed the bug.\nAll tests pass."; });
+  try {
+    t.subscribe("https://push.example/1"); t.subscribe("https://push.example/2");
+    t.notifier.transition(summary({ status: "running" }), summary());
+    await t.settle();
+    assert.equal(reads, 1);
+    assert.equal(t.sent.length, 2);
+    assert.equal(t.sent[0].message.body, "Fixed the bug. All tests pass. — MacBook");
+  } finally { t.cleanup(); }
+  for (const preview of [async () => null, async () => { throw new Error("offline"); }]) {
+    const f = setup(preview);
+    try {
+      f.subscribe("https://push.example/1");
+      f.notifier.transition(summary({ status: "running" }), summary());
+      await f.settle();
+      assert.equal(f.sent[0].message.body, "The agent finished this turn. — MacBook");
+    } finally { f.cleanup(); }
+  }
+});
+
+test("failed turns show their error and viewing suppression avoids timeline reads", async () => {
+  let reads = 0;
+  const t = setup(async () => { reads++; return "reply"; });
+  try {
+    t.subscribe("https://push.example/1");
+    t.notifier.transition(summary({ status: "running" }), summary({ status: "error", lastError: "Provider unavailable" }));
+    await t.settle();
+    assert.equal(t.sent[0].message.body, "Provider unavailable — MacBook");
+    t.view(true);
+    t.notifier.transition(summary({ status: "running" }), summary());
+    await t.settle();
+    assert.equal(reads, 0);
   } finally { t.cleanup(); }
 });

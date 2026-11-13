@@ -63,6 +63,7 @@ export class Notifier {
   private readonly waiting = new Set<string>();
   private readonly recent = new Map<string, number>();
   private readonly now: () => number;
+  private readonly replyPreview?: (agent: AgentSummary, previous: AgentSummary) => Promise<string | null>;
 
   constructor(options: {
     store: Store;
@@ -70,12 +71,14 @@ export class Notifier {
     isViewing: (key: string, sessionId: string) => boolean;
     hostLabel: (hostId: string) => string;
     now?: () => number;
+    replyPreview?: (agent: AgentSummary, previous: AgentSummary) => Promise<string | null>;
   }) {
     this.store = options.store;
     this.sender = options.sender;
     this.isViewing = options.isViewing;
     this.hostLabel = options.hostLabel;
     this.now = options.now ?? Date.now;
+    this.replyPreview = options.replyPreview;
   }
 
   get waitingCount() {
@@ -99,15 +102,16 @@ export class Notifier {
           ? `asks: ${permission.title || permission.name}`
           : `wants to ${midSentence(permission.title || permission.name)}`
         : "is waiting for you";
-      this.emit("attention", next, `${next.project} · needs your input`, `${next.title || "Session"} ${what}`);
+      void this.emit("attention", next, `${next.project} · needs your input`, permission ? `The agent ${what}` : "The agent is waiting for your input.", permission ? undefined : previous);
     } else if (previous.status === "running" && next.status !== "running") {
       if (this.now() - next.activityAt > STALE_MS) return;
       const failed = next.status === "error";
-      this.emit(
+      void this.emit(
         failed ? "turn-failed" : "turn-done",
         next,
         `${next.project} · ${failed ? "turn failed" : "turn finished"}`,
-        next.title || "Session",
+        failed ? next.lastError || "The agent could not finish this turn." : "The agent finished this turn.",
+        failed ? undefined : previous,
       );
     }
   }
@@ -129,12 +133,26 @@ export class Notifier {
     return subs.length;
   }
 
-  private emit(kind: NotificationKind, agent: AgentSummary, title: string, body: string) {
+  private async emit(kind: NotificationKind, agent: AgentSummary, title: string, body: string, previous?: AgentSummary) {
     const dedupeKey = `${kind}:${agent.key}`;
     const now = this.now();
     if (now - (this.recent.get(dedupeKey) ?? -Infinity) < DEDUPE_MS) return;
     this.recent.set(dedupeKey, now);
     if (this.recent.size > 5000) this.recent.clear();
+    const pref: keyof PushPrefs = kind === "attention" ? "attention" : "turns";
+    const subscriptions = this.store.pushSubscriptions().filter(s => s.prefs[pref] && !this.isViewing(agent.key, s.sessionId));
+    if (!subscriptions.length) return;
+    if (previous && this.replyPreview) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const preview = await Promise.race([
+          this.replyPreview(agent, previous),
+          new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 5000); timer.unref(); }),
+        ]);
+        if (preview?.trim()) body = preview.replace(/\s+/g, " ").trim();
+      } catch { /* A missing timeline must not suppress the notification. */ }
+      finally { clearTimeout(timer); }
+    }
     const message: PushMessage = {
       title,
       body: `${body} — ${this.hostLabel(agent.hostId)}`.slice(0, 240),
@@ -143,9 +161,8 @@ export class Notifier {
       kind,
       badge: this.waiting.size,
     };
-    const pref: keyof PushPrefs = kind === "attention" ? "attention" : "turns";
-    for (const subscription of this.store.pushSubscriptions())
-      if (subscription.prefs[pref] && !this.isViewing(agent.key, subscription.sessionId))
+    for (const subscription of subscriptions)
+      if (!this.isViewing(agent.key, subscription.sessionId))
         void this.deliver(subscription, message);
   }
 

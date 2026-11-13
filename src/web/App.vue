@@ -17,7 +17,7 @@ import NewSession from "./NewSession.vue";
 import type { ProjectGroup } from "./directory-store.ts";
 import AttachmentPanel from "./AttachmentPanel.vue";
 import { AttachmentStore, type LocalAttachment } from "./attachment-store.ts";
-import { SendQueue, type QueuedMessage } from "./send-queue.ts";
+import type { ServerQueuedMessage as QueuedMessage } from "../shared/wire.ts";
 import PermissionForm from "./PermissionForm.vue";
 import Icon from "./Icon.vue";
 import { cycleTheme, theme } from "./theme.ts";
@@ -207,12 +207,22 @@ const label = ref(""),
   board = ref<{ revision: number; cards: Card[] }>({ revision: 0, cards: [] });
 const composer = new ComposerStore(() => localStorage);
 const attachments = new AttachmentStore();
-const sendQueue = new SendQueue();
-const queued = computed(() => selectedKey.value ? sendQueue.get(selectedKey.value) : []);
-// Queued messages live only in this tab: warn before closing it with some still waiting.
-window.addEventListener("beforeunload", (event) => {
-  if (sendQueue.size) event.preventDefault();
-});
+const queued = ref<QueuedMessage[]>([]);
+const queueAttempts = new Map<string, string>();
+const editingQueued = ref<string | null>(null), queuedText = ref("");
+let queueRead = 0;
+async function refreshQueue() {
+  const a = active.value;
+  const read = ++queueRead;
+  if (!a || !authenticated.value) { queued.value = []; return; }
+  try {
+    const result = await api(path(a) + "/queue");
+    if (read === queueRead && active.value?.key === a.key) queued.value = Array.isArray(result) ? result : [];
+  } catch { /* The connection status already reports connectivity failures. */ }
+}
+watch(selectedKey, () => { queued.value = []; void refreshQueue(); });
+const queuePoll = setInterval(() => void refreshQueue(), 2000);
+onUnmounted(() => clearInterval(queuePoll));
 const attachmentPanel = ref<InstanceType<typeof AttachmentPanel> | null>(null);
 const agentControls = ref<InstanceType<typeof AgentControls> | null>(null);
 /** Model name for turn footers: the open agent's current model, as the composer chip names it. */
@@ -536,8 +546,8 @@ function signOut(reason: "user" | "ended") {
   authenticated.value = false;
   if (reason === "user") {
     composer.clear();
-    for (const key of sendQueue.keys()) for (const m of sendQueue.get(key)) discardQueued(key, m);
-    sendQueue.clear();
+    queued.value = [];
+    queueRead++;
     attachments.clear();
     try { localStorage.setItem("litepaseo-composer-signout", crypto.randomUUID()); } catch {}
   } else {
@@ -1363,24 +1373,31 @@ async function sendText(text: string, fromComposer = false) {
   if (!a || (!text.trim() && (!fromComposer || !selectedAttachments.value.length)) || uncertain.value || busy.value || (fromComposer && !attachmentsReady.value)) return;
   // Queue mode: while a turn runs the message waits above the composer instead of entering
   // the conversation; it goes when the turn ends, or at once if the reader chooses to interrupt.
-  if (behavior.value === "steer" && !turnIdle(a)) {
-    sendQueue.add(a.key, { id: crypto.randomUUID(), text, attachments: fromComposer ? attachments.detach(a.key) : [] });
-    if (fromComposer) composer.setText(a.key, "");
-    if (selectedKey.value === a.key) suggestion.value = null;
-    void nextTick(autosize);
+  if (behavior.value === "steer" && (!turnIdle(a) || queued.value.length > 0)) {
+    const selected = fromComposer ? [...selectedAttachments.value] : [];
+    await action(async () => {
+      const attachmentIds = selected.map(e => e.id!);
+      const attempt = JSON.stringify([a.key, text, attachmentIds]);
+      const id = queueAttempts.get(attempt) ?? crypto.randomUUID();
+      queueAttempts.set(attempt, id);
+      try { await api(path(a) + "/queue", "POST", { id, text, attachmentIds }); }
+      catch (e) { await refreshQueue(); throw e; }
+      queueAttempts.delete(attempt);
+      for (const entry of selected) attachments.remove(a.key, entry, true);
+      if (fromComposer && composer.state(a.key).text === text) composer.setText(a.key, "");
+      if (selectedKey.value === a.key) suggestion.value = null;
+      await refreshQueue();
+      void nextTick(autosize);
+    });
     return;
   }
   const selected = fromComposer ? [...selectedAttachments.value] : [];
   if (fromComposer) composer.setText(a.key, "");
   await deliver(a, text, selected, behavior.value, { restore: fromComposer });
 }
-/**
- * Sends one message. On failure the text returns to an empty composer. A refused queued message
- * goes back to the head of its queue, paused, and is never resent automatically; an unknown
- * outcome stays with the delivery check instead, so nothing is sent twice.
- */
+/** Sends immediately; uncertain outcomes remain in the delivery check. */
 async function deliver(a: AgentSummary, text: string, selected: LocalAttachment[], mode: "steer" | "interrupt",
-  { restore, requeue }: { restore: boolean; requeue?: QueuedMessage }) {
+  { restore }: { restore: boolean }) {
   const state = composer.state(a.key);
   const generation = composer.generation;
   const sent = { text, messageId: crypto.randomUUID(),
@@ -1403,81 +1420,31 @@ async function deliver(a: AgentSummary, text: string, selected: LocalAttachment[
       if (notSent) {
         composer.resolve(a.key, sent.messageId);
         for (const entry of selected) entry.error = "Not sent. Retry the upload or remove this attachment.";
-        if (requeue) {
-          sendQueue.unshift(a.key, { ...requeue, error: String((e as Error).message) });
-          throw e;
-        }
       }
-      if ((restore || requeue) && !state.text) {
+      if (restore && !state.text) {
         composer.restoreFailed(a.key, sent);
-        if (requeue) attachments.reattach(a.key, selected);
       }
       throw e;
     }
   });
   return delivered;
 }
-/** Removes a queued message for good, releasing its staged uploads. */
-function discardQueued(key: string, m: QueuedMessage) {
-  for (const entry of m.attachments) attachments.remove(key, entry);
+async function removeQueued(m: QueuedMessage) {
+  const a = active.value;
+  if (!a) return;
+  await action(async () => { await api(path(a) + "/queue/" + m.id, "DELETE"); await refreshQueue(); });
 }
-function removeQueued(m: QueuedMessage) {
-  const key = selectedKey.value;
-  if (key && sendQueue.take(key, m.id)) discardQueued(key, m);
+async function editQueued(m: QueuedMessage) {
+  const a = active.value;
+  if (!a) return;
+  const text = queuedText.value;
+  await action(async () => { await api(path(a) + "/queue/" + m.id, "PATCH", { text }); editingQueued.value = null; await refreshQueue(); });
 }
-/** Back into the composer for changes; appended below any text already there. */
-function editQueued(m: QueuedMessage) {
-  const key = selectedKey.value;
-  if (!key || !sendQueue.take(key, m.id)) return;
-  prompt.value = prompt.value.trim() ? prompt.value.trimEnd() + "\n\n" + m.text : m.text;
-  attachments.reattach(key, m.attachments);
-  void nextTick(() => {
-    autosize();
-    composerElement.value?.focus();
-  });
-}
-/** Sends a queued message now, interrupting the running turn. */
 async function interruptWith(m: QueuedMessage) {
   const a = active.value;
-  if (!a || busy.value || uncertain.value || !sendQueue.take(a.key, m.id)) return;
-  await deliver(a, m.text, m.attachments, "interrupt", { restore: false, requeue: m });
+  if (!a || busy.value || uncertain.value) return;
+  await action(async () => { await api(path(a) + "/queue/" + m.id + "/send", "POST"); await refreshQueue(); });
 }
-// Dispatch: when an agent's turn ends, its next queued message goes, one per turn. After a send
-// the agent may still look idle until the directory reports the new turn; wait for that (or a
-// timeout) before sending the next, so two queued messages never go into the same gap.
-const dispatching = new Set<string>(), awaitingTurn = new Map<string, number>();
-let dispatchTimer: ReturnType<typeof setTimeout> | undefined;
-const TURN_START_WAIT_MS = 15_000;
-function dispatchQueues() {
-  clearTimeout(dispatchTimer);
-  if (!authenticated.value || busy.value) return;
-  for (const key of sendQueue.keys()) {
-    const a = agentDirectory.get(key);
-    if (!a || dispatching.has(key)) continue;
-    const idle = turnIdle(a);
-    const waitUntil = awaitingTurn.get(key);
-    if (waitUntil !== undefined) {
-      if (!idle || Date.now() >= waitUntil) awaitingTurn.delete(key);
-      else { dispatchTimer = setTimeout(dispatchQueues, waitUntil - Date.now() + 50); continue; }
-    }
-    if (!idle || hostStates.value.get(a.hostId) !== "connected" || composer.unresolved(key).length) continue;
-    const next = sendQueue.next(key);
-    if (!next || !sendQueue.take(key, next.id)) continue;
-    dispatching.add(key);
-    void deliver(a, next.text, next.attachments, "steer", { restore: false, requeue: next }).then((ok) => {
-      if (ok) awaitingTurn.set(key, Date.now() + TURN_START_WAIT_MS);
-    }).finally(() => {
-      dispatching.delete(key);
-      dispatchQueues();
-    });
-    return; // one at a time: `busy` is shared by the whole page
-  }
-}
-watch(() => {
-  agentDirectory.version.value;
-  composer.revision.value;
-  return [sendQueue.size, busy.value, hostStates.value];
-}, dispatchQueues);
 
 async function stop() {
   const a = active.value;
@@ -2158,16 +2125,21 @@ onUnmounted(() => {
               <div v-for="m in queued" :key="m.id" class="queue-item" :class="{ 'is-error': m.error }" role="listitem">
                 <Icon :name="m.error ? 'alert' : 'clock'" :size="14" class="queue-icon" />
                 <div class="queue-body">
-                  <span class="queue-text" :title="m.text">{{ m.text || "(attachments only)" }}</span>
-                  <span v-if="m.attachments.length" class="queue-meta">{{ m.attachments.map(e => e.file.name).join(", ") }}</span>
+                  <template v-if="editingQueued === m.id">
+                    <textarea v-model="queuedText" aria-label="Queued message text" rows="3" />
+                    <button type="button" class="btn btn-ghost" :disabled="busy" @click="editQueued(m)">Save</button>
+                    <button type="button" class="btn btn-ghost" @click="editingQueued = null">Cancel</button>
+                  </template>
+                  <span v-else class="queue-text" :title="m.text">{{ m.text || "(attachments only)" }}</span>
+                  <span v-if="m.attachmentNames.length" class="queue-meta">{{ m.attachmentNames.join(", ") }}</span>
                   <span v-if="m.error" class="queue-meta queue-error">{{ m.error }}</span>
                 </div>
-                <button type="button" class="queue-send" :disabled="busy || !!uncertain"
+                <button type="button" class="queue-send" :disabled="busy || !!uncertain || m.sending"
                   :title="running ? 'Send now: stops the running turn' : 'Send now'" @click="interruptWith(m)">
                   {{ running ? "Interrupt" : "Send" }}
                 </button>
-                <button type="button" class="icon-btn" aria-label="Edit queued message" title="Edit" @click="editQueued(m)"><Icon name="edit" :size="14" /></button>
-                <button type="button" class="icon-btn" aria-label="Remove queued message" title="Remove" @click="removeQueued(m)"><Icon name="close" :size="14" /></button>
+                <button type="button" class="icon-btn" :disabled="busy || m.sending" aria-label="Edit queued message" title="Edit" @click="editingQueued = m.id; queuedText = m.text"><Icon name="edit" :size="14" /></button>
+                <button type="button" class="icon-btn" :disabled="busy || m.sending" aria-label="Remove queued message" title="Remove" @click="removeQueued(m)"><Icon name="close" :size="14" /></button>
               </div>
             </div>
 

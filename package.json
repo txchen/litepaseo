@@ -1,6 +1,6 @@
 {
   "name": "litepaseo",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "A resource-conscious web console for your Paseo agents",
   "bin": {
     "litepaseo": "dist/server/cli.mjs"

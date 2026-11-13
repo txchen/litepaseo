@@ -115,7 +115,7 @@ async function copyMessage() {
     </div>
   </div>
 
-  <div v-else-if="item.type === 'assistant_message'" class="row row-assistant">
+  <div v-else-if="item.type === 'assistant_message'" class="row row-assistant" :data-seq-end="row.seqEnd">
     <component :is="markstream" v-if="markstream" :content="assistantText" :final="final" />
     <div v-else class="prose" v-html="fallbackHtml"></div>
   </div>

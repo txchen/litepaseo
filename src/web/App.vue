@@ -35,6 +35,8 @@ import ProviderIcon from "./ProviderIcon.vue";
 import SchedulesPage from "./SchedulesPage.vue";
 import { defineAsyncComponent } from "vue";
 // The side panel loads on first use: the file viewer and xterm.js stay out of the first page.
+const ChangesPanel = defineAsyncComponent(() => import("./ChangesPanel.vue"));
+const ConversationSearch = defineAsyncComponent(() => import("./ConversationSearch.vue"));
 const FilesPanel = defineAsyncComponent(() => import("./FilesPanel.vue"));
 const FileViewer = defineAsyncComponent(() => import("./FileViewer.vue"));
 const TerminalPanel = defineAsyncComponent(() => import("./TerminalPanel.vue"));
@@ -48,9 +50,9 @@ const coarsePointer = matchMedia("(pointer: coarse)").matches;
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 const viewMenu = ref(false);
 // The file tree stays in the side panel; terminal content opens in the center.
-const panel = ref<"files" | null>(localStorage.getItem("litepaseo-panel") === "files" ? "files" : null);
+const panel = ref<"files" | "changes" | "search" | null>(localStorage.getItem("litepaseo-panel") === "files" ? "files" : null);
 watch(panel, (p) => (p ? localStorage.setItem("litepaseo-panel", p) : localStorage.removeItem("litepaseo-panel")));
-const togglePanel = (p: "files") => (panel.value = panel.value === p ? null : p);
+const togglePanel = (p: "files" | "changes" | "search") => (panel.value = panel.value === p ? null : p);
 const terminalTabs = reactive(new Map<string, boolean>());
 const terminalOpen = computed(() => terminalTabs.has(tabOwner.value));
 const terminalActive = computed(() => terminalTabs.get(tabOwner.value) === true);
@@ -221,8 +223,33 @@ async function refreshQueue() {
   } catch { /* The connection status already reports connectivity failures. */ }
 }
 watch(selectedKey, () => { queued.value = []; void refreshQueue(); });
-const queuePoll = setInterval(() => void refreshQueue(), 2000);
-onUnmounted(() => clearInterval(queuePoll));
+const queueSummary = ref<Record<string, { count: number; paused: boolean }>>({});
+let queueSummaryStream: { close(): void } | null = null;
+watch(authenticated, signedIn => {
+  queueSummaryStream?.close(); queueSummary.value = {};
+  if (signedIn) queueSummaryStream = openStream({ url: () => '/api/queue/stream', onMessage: data => { queueSummary.value = data as typeof queueSummary.value; } });
+});
+onUnmounted(() => queueSummaryStream?.close());
+let queueStream: { close(): void } | null = null;
+watch([selectedKey, authenticated], () => {
+  queueStream?.close(); queueStream = null;
+  queueRead++; queued.value = [];
+  const a = active.value;
+  if (a && authenticated.value) queueStream = openStream({ url: () => '/api' + path(a) + '/queue/stream', onMessage: data => {
+    if (authenticated.value && active.value?.key === a.key && Array.isArray(data)) { queueRead++; queued.value = data; }
+  } });
+});
+onUnmounted(() => queueStream?.close());
+async function controlQueue(m: QueuedMessage, command: string) {
+  const a = active.value; if (!a) return;
+  await action(async () => { await api(path(a) + '/queue/' + m.id + '/control', 'POST', { action: command }); await refreshQueue(); });
+}
+async function jumpSearch(seq: number, epoch: string) {
+  if (timeline.value.epoch !== epoch) { error.value = 'Conversation changed. Search again.'; return; }
+  showConversation();
+  if (compact.matches) panel.value = null;
+  await jumpToPrompt(seq, true);
+}
 const attachmentPanel = ref<InstanceType<typeof AttachmentPanel> | null>(null);
 const agentControls = ref<InstanceType<typeof AgentControls> | null>(null);
 /** Model name for turn footers: the open agent's current model, as the composer chip names it. */
@@ -1269,7 +1296,7 @@ watch([outlinePrompts, historyRows], () => void nextTick(scheduleActivePrompt));
 function revealRow(seq: number) {
   const el = timelineElement.value;
   const row = el?.querySelector<HTMLElement>(`[data-seq-start="${seq}"]`)
-    ?? Array.from(el?.querySelectorAll<HTMLElement>("[data-seq-start]") ?? []).find((r) => Number(r.dataset.seqStart) >= seq);
+    ?? Array.from(el?.querySelectorAll<HTMLElement>("[data-seq-start]") ?? []).find((r) => Number(r.dataset.seqStart) >= seq || (r.classList.contains("row-assistant") && Number(r.dataset.seqEnd) >= seq));
   if (!el || !row) return;
   followLatest = false;
   setScrollTop(el, el.scrollTop + row.getBoundingClientRect().top - el.getBoundingClientRect().top - 12);
@@ -1280,13 +1307,13 @@ function revealRow(seq: number) {
  * from the server (the prompt's turn, up to the next prompt). Later prompts become the forward
  * cursors, so scrolling down from there pages through the turns in order.
  */
-async function jumpToPrompt(seq: number) {
+async function jumpToPrompt(seq: number, exact = false) {
   const agent = active.value;
   const store = timeline.value;
   if (!agent || paging.value) return;
   if (timelineElement.value?.querySelector(`[data-seq-start="${seq}"]`)) return revealRow(seq);
   const rows = store.rows;
-  const local = rows.length && rows[0].seqStart <= seq ? rows.findIndex((r) => r.seqStart >= seq) : -1;
+  const local = rows.length && rows[0].seqStart <= seq ? rows.findIndex((r) => r.seqStart >= seq || (r.row.value.item.type === "assistant_message" && r.row.value.seqEnd >= seq)) : -1;
   if (local >= 0) {
     const start = local;
     historyNewer.value = [];
@@ -1302,7 +1329,7 @@ async function jumpToPrompt(seq: number) {
   const later = outlinePrompts.value.map((p) => p.seq).filter((s) => s > seq && (!rows.length || s < rows[0].seqStart));
   paging.value = "before";
   try {
-    let cursor = later[0] ?? rows[0]?.seqStart ?? Number.MAX_SAFE_INTEGER;
+    let cursor = exact ? seq + 1 : later[0] ?? rows[0]?.seqStart ?? Number.MAX_SAFE_INTEGER;
     let collected: TimelineRow[] = [], hasOlder = false;
     // A turn longer than a page: keep reading back until the prompt itself is in hand.
     for (let request = 0; request < 8; request++) {
@@ -1314,7 +1341,7 @@ async function jumpToPrompt(seq: number) {
       if (!page.rows.length || page.rows[0].seqStart <= seq || !page.hasOlder) break;
       cursor = page.rows[0].seqStart;
     }
-    const at = Math.max(0, collected.findIndex((r) => r.seqStart >= seq));
+    const at = Math.max(0, collected.findIndex((r) => r.seqStart >= seq || (r.item.type === "assistant_message" && r.seqEnd >= seq)));
     const start = at; // the prompt opens the window; earlier rows load as the reader scrolls up
     let jumped: RowRef[] = collected.slice(start, start + RENDER_WINDOW).map((row) => ({ seqStart: row.seqStart, row: shallowRef(row) }));
     historyNewer.value = [...later].reverse();
@@ -1703,6 +1730,7 @@ onUnmounted(() => {
         </div>
       </div>
       <SessionList
+        :queues="queueSummary"
         :mode="listMode"
         :store="directory"
         :host-labels="hostLabels"
@@ -1972,6 +2000,8 @@ onUnmounted(() => {
             :title="[activeProject, hostLabels.get(active.hostId), activeThread?.branch, active.provider].filter(Boolean).join(' · ')"
           >{{ activeProject }}<template v-if="hosts.length > 1"> · {{ hostLabels.get(active.hostId) }}</template><template v-if="activeThread?.branch"> · {{ activeThread.branch }}</template></span>
           <span class="grow"></span>
+          <button class="icon-btn head-tool" aria-label="Changes" title="Workspace changes" @click="togglePanel('changes')"><Icon name="file" :size="16" /></button>
+          <button class="icon-btn head-tool" aria-label="Search conversation" title="Search conversation" @click="togglePanel('search')"><Icon name="search" :size="16" /></button>
           <button
             class="icon-btn head-tool"
             :class="{ chosen: panel === 'files' }"
@@ -2132,8 +2162,12 @@ onUnmounted(() => {
                   </template>
                   <span v-else class="queue-text" :title="m.text">{{ m.text || "(attachments only)" }}</span>
                   <span v-if="m.attachmentNames.length" class="queue-meta">{{ m.attachmentNames.join(", ") }}</span>
+                  <span class="queue-meta">{{ m.sending ? 'Sending…' : m.error ? 'Delivery unknown · queue paused' : m.paused ? 'Paused' : hostStates.get(active.hostId) !== 'connected' ? 'Waiting for host' : 'Waiting for turn to finish' }}</span>
                   <span v-if="m.error" class="queue-meta queue-error">{{ m.error }}</span>
                 </div>
+                <button class="btn btn-ghost" :disabled="busy || m.sending" @click="controlQueue(m, m.paused ? 'resume' : 'pause')">{{ m.paused ? 'Resume' : 'Pause' }}</button>
+                <button class="btn btn-ghost" :disabled="busy || m.sending || queued[0].id === m.id" @click="controlQueue(m, 'up')" aria-label="Move queued message up">↑</button>
+                <button v-if="m.error" class="btn btn-ghost" :disabled="busy" @click="controlQueue(m, 'check')">Check delivery</button>
                 <button type="button" class="queue-send" :disabled="busy || !!uncertain || m.sending"
                   :title="running ? 'Send now: stops the running turn' : 'Send now'" @click="interruptWith(m)">
                   {{ running ? "Interrupt" : "Send" }}
@@ -2241,10 +2275,14 @@ onUnmounted(() => {
         ></div>
         <div class="panel-tabs">
           <button :class="{ chosen: panel === 'files' }" @click="panel = 'files'"><Icon name="folder" :size="14" />Files</button>
+          <button :class="{ chosen: panel === 'changes' }" @click="panel = 'changes'">Changes</button>
+          <button :class="{ chosen: panel === 'search' }" @click="panel = 'search'">Search</button>
           <span class="grow"></span>
           <button class="icon-btn" aria-label="Close panel" title="Close panel" @click="panel = null"><Icon name="close" :size="14" /></button>
         </div>
         <div class="panel-body">
+          <ChangesPanel v-if="panel === 'changes'" :host-id="active.hostId" :cwd="workspaceCwd" :api="api" />
+          <ConversationSearch v-if="panel === 'search'" :base="path(active)" :api="api" @jump="jumpSearch" />
           <KeepAlive>
             <FilesPanel
               v-if="panel === 'files'"

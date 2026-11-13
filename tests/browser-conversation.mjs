@@ -23,7 +23,7 @@ const TOTAL = 400, LIVE = 200, START = Date.parse("2026-01-05T10:00:00Z");
 const LONG_THOUGHT = "Considering whether the cache layer should be invalidated per workspace " + "or per agent, ".repeat(12) + "END_OF_THOUGHT";
 // Two rows per turn: the question (odd seq) and its answer 75 s later.
 const row = (seq) => ({
-  seqStart: seq, seqEnd: seq, timestamp: new Date(START + seq * 75_000).toISOString(), provider: "claude",
+  seqStart: seq, seqEnd: seq === TOTAL ? TOTAL + 2 : seq, timestamp: new Date(START + seq * 75_000).toISOString(), provider: "claude",
   turnId: `turn-${Math.ceil(seq / 2)}`,
   item: seq === TOTAL - 2 ? { type: "reasoning", text: LONG_THOUGHT }
     : seq % 2
@@ -46,7 +46,7 @@ try {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
 
-  let status = "running", seq = 1;
+  let status = "running", seq = 1, diffFailure = false;
   const queue = [];
   const messages = [], pages = [], rewinds = [];
   const agent = () => ({
@@ -91,6 +91,7 @@ try {
       for (let s = Math.max(1, cursor.seq - 100); s < cursor.seq; s++) rows.push(row(s));
       return route.fulfill({ json: { epoch: "e1", hasOlder: rows[0]?.seqStart > 1, startCursor: null, rows } });
     }
+    if (p.endsWith("/queue/stream")) return route.fulfill(sse([...queue]));
     if (p.endsWith("/queue")) {
       if (route.request().method() === "POST") {
         queue.push({ ...route.request().postDataJSON(), attachmentNames: [] });
@@ -108,6 +109,10 @@ try {
       }
       return route.fulfill({ json: { ok: true } });
     }
+    if (p.endsWith("/changes") && diffFailure) return route.fulfill({ status: 409, json: {error: "Host unavailable"} });
+    if (p.endsWith("/changes")) return route.fulfill({ json: { files: [{ path: "src/example.ts", additions: 1, deletions: 0, hunks: [{ oldStart: 1, oldCount: 0, newStart: 1, newCount: 1, lines: [{ type: "add", content: "const changed = true;" }] }] }] } });
+    if (p.endsWith("/search") && url.searchParams.get("q") === "merged") return route.fulfill({json: {epoch: "e1", locations: [{seq: 401, role: "assistant"}], nextCursor: null}});
+    if (p.endsWith("/search")) return route.fulfill({ json: { epoch: "e1", locations: [{ seq: url.searchParams.has("cursor") ? 21 : 301, role: "user", count: 1 }], nextCursor: url.searchParams.has("cursor") ? null : 42 } });
     if (p.endsWith("/messages/status")) return route.fulfill({ json: { confirmed: [] } });
     if (p.endsWith("/messages")) {
       messages.push(route.request().postDataJSON());
@@ -175,6 +180,21 @@ try {
   await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await page.waitForFunction(() => !document.querySelector(".queue-item"), null, { timeout: 10000 });
   assert.deepEqual(messages.map((m) => m.text), ["first queued", "after the turn"]);
+
+  await page.getByRole("button", { name: "Changes", exact: true }).first().click();
+  assert.equal(await page.locator('.changes-panel pre').count(), 0, 'collapsed diffs do not render their hunks');
+  await page.locator('.changes-panel summary').click();
+  await page.getByText('const changed = true;', { exact: false }).waitFor();
+  diffFailure = true;
+  await page.getByRole('button', {name: 'Refresh changes'}).click();
+  await page.locator('.changes-panel [role=alert]').waitFor();
+  assert.equal(await page.locator('.changes-panel details').count(), 0, 'failed refresh does not present stale diffs');
+  diffFailure = false;
+  await page.getByRole('button', { name: 'Search conversation', exact: true }).click();
+  await page.getByRole('searchbox', { name: 'Search conversation content' }).fill('question');
+  await page.locator('.conversation-search').getByRole('button', { name: 'Search', exact: true }).click();
+  await page.locator('.conversation-search .result').waitFor();
+  await page.getByRole('button', { name: 'Close panel', exact: true }).click();
 
   // 3. Scrolling up loads earlier pages by itself; scrolling down pages forward and back to live.
   const timeline = page.locator(".timeline");
@@ -258,6 +278,24 @@ try {
   const seqs = await page.locator(".timeline [data-seq-start]").evaluateAll((rows) => rows.map((r) => Number(r.dataset.seqStart)));
   assert.ok(seqs.every((s, i) => i === 0 || s === seqs[i - 1] + 1), "no rows skipped or repeated");
 
+  await page.getByRole('button', { name: 'Search conversation', exact: true }).click();
+  await page.getByRole('searchbox', { name: 'Search conversation content' }).fill('question');
+  await page.locator('.conversation-search').getByRole('button', { name: 'Search', exact: true }).click();
+  await page.getByRole('button', { name: 'More results', exact: true }).click();
+  await page.locator('.conversation-search .result', { hasText: '#21 ' }).click();
+  await page.getByRole('button', { name: 'Close panel', exact: true }).click();
+  await page.locator('.timeline [data-seq-start="21"]').waitFor();
+  await page.getByRole('button', {name: 'Search conversation', exact: true}).click();
+  await page.getByRole('searchbox', {name: 'Search conversation content'}).fill('question');
+  await page.locator('.conversation-search').getByRole('button', {name: 'Search', exact: true}).click();
+  await page.locator('.conversation-search .result').waitFor();
+  await page.getByRole('searchbox', {name: 'Search conversation content'}).fill('merged');
+  assert.equal(await page.locator('.conversation-search .result').count(), 0);
+  await page.locator('.conversation-search').getByRole('button', {name: 'Search', exact: true}).click();
+  await page.locator('.conversation-search .result').click();
+  await page.getByRole('button', {name: 'Close panel', exact: true}).click();
+  await page.locator('.timeline [data-seq-start="400"]').waitFor();
+  assert.equal(await page.locator('.timeline [data-seq-start="401"]').count(), 0, 'search hit within merged reply opens the containing row');
   assert.deepEqual(errors, []);
   console.log("PASS browser conversation: highlighted code, queued messages (remove/edit/interrupt/auto-send), auto-paging history both ways, turn footer, rewind, outline rail preview + jump; no page errors");
 } finally {

@@ -20,6 +20,12 @@ const path = z.string().min(1).max(4096).refine((p) => !p.includes("\0"));
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function registerWorkspaceRoutes(app: Hono<any>, hosts: Hosts, store: Store, valid: (c: any) => () => boolean) {
+  app.get("/api/hosts/:host/changes", async c => {
+    const cwd = path.parse(c.req.query("cwd"));
+    const result = await hosts.get(c.req.param("host")).driver.getCheckoutDiff(cwd, { mode: "uncommitted" });
+    if (result.error) return c.json({ error: result.error.message }, 409);
+    return c.json(result);
+  });
   // ---- Files -------------------------------------------------------------------------------
   app.get("/api/hosts/:host/fs/list", async (c) => {
     const cwd = path.parse(c.req.query("cwd"));

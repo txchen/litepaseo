@@ -270,5 +270,5 @@ export interface CardPatch {
 
 export interface ServerQueuedMessage {
   id: string; host: string; agent: string; text: string; attachmentNames: string[];
-  error?: string; sending?: boolean;
+  error?: string; sending?: boolean; paused?: boolean;
 }

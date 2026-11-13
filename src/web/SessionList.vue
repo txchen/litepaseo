@@ -21,6 +21,7 @@ const props = defineProps<{
   hostStates: Map<string, string>;
   selectedKey: string | null;
   searching: boolean;
+  queues?: Record<string, { count: number; paused: boolean }>;
 }>();
 const emit = defineEmits<{
   select: [key: string];
@@ -248,6 +249,7 @@ onUnmounted(() => {
             <span class="session-dot"><span v-if="dot(row.item)" class="status-dot" :class="dot(row.item)"></span></span>
             <span class="session-title">
               <Icon v-if="row.item.pinnedAt" name="pin" :size="11" class="pin-mark" />{{ row.item.name }}
+              <small v-if="queues?.[row.item.key]" :title="queues[row.item.key].paused ? 'Queue paused' : 'Queued messages'"> · {{ queues[row.item.key].paused ? 'Paused' : 'Queued' }} {{ queues[row.item.key].count }}</small>
             </span>
             <span v-if="mode === 'recent'" class="session-project">{{ row.item.project }}</span>
             <span v-if="row.item.attention" class="pill pill-attention">Needs you</span>

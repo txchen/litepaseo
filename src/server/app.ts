@@ -771,6 +771,28 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     catch { return c.json({ error: "Attachment already expired or unavailable" }, 404); }
     return c.json({ ok: true });
   });
+  app.get("/api/queue/stream", c => eventStream(c.req.raw.signal, send => {
+    const publish = () => send(sendQueue.summary());
+    const stop = sendQueue.onChange(publish), stopHosts = hosts.onAgentsChanged(publish);
+    publish(); return () => { stop(); stopHosts(); };
+  }, streamValidity(c)));
+  app.get("/api/hosts/:host/agents/:agent/queue/stream", c => eventStream(c.req.raw.signal, send => {
+    const publish = () => send(sendQueue.list(c.req.param("host"), c.req.param("agent")));
+    const stop = sendQueue.onChange(publish); publish(); return stop;
+  }, streamValidity(c)));
+  app.post("/api/hosts/:host/agents/:agent/queue/:id/control", async c => {
+    const { action } = z.object({ action: z.enum(["pause", "resume", "up", "check"]) }).parse(await c.req.json());
+    try { await sendQueue.control(c.req.param("host"), c.req.param("agent"), c.req.param("id"), action); }
+    catch (error) { return c.json({ error: (error as Error).message }, 409); }
+    return c.json({ ok: true });
+  });
+  app.get("/api/hosts/:host/agents/:agent/search", async c => {
+    const query = z.string().trim().min(1).max(500).parse(c.req.query("q"));
+    const cursor = z.coerce.number().int().nonnegative().optional().parse(c.req.query("cursor"));
+    const result = await hosts.get(c.req.param("host")).driver.searchAgentTimeline({ agentId: c.req.param("agent"), query, cursor });
+    if (result.error) return c.json({ error: result.error }, 502);
+    return c.json(result);
+  });
   app.get("/api/hosts/:host/agents/:agent/queue", c =>
     c.json(sendQueue.list(c.req.param("host"), c.req.param("agent"))));
   app.post("/api/hosts/:host/agents/:agent/queue", async c => {

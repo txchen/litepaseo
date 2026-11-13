@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.2
+
+- Queue controls: pause/resume, move earlier, and confirm uncertain deliveries without resending. Sidebar badges and queue event streams replace periodic polling.
+- Queue payloads are stored separately with atomic writes; legacy queues migrate automatically. Completed-message deduplication receipts are retained for 30 days.
+- Read-only workspace Changes panel with expandable diffs and file-path copying.
+- Full-history conversation search with paginated results and jumps to matching messages, including merged streaming replies.
+- Guard concurrent queue delivery checks and ignore stale queue/search responses. Load diff contents only when expanded and clear stale diffs after failed refreshes.
+
 ## 0.5.1
 
 - Turn-finished push notifications preview the latest agent reply instead of the thread

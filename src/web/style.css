@@ -869,9 +869,20 @@ h3 {
 .group-name {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+}
+.group-name-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.project-pin {
+  flex: none;
+  color: var(--fg-muted);
 }
 .group-count {
   min-width: 18px;
@@ -4111,3 +4122,7 @@ h3 {
   .side-foot { height: calc(45px + var(--safe-area-bottom)); }
   .side-foot .icon-btn { width: 44px; height: 44px; }
 }
+
+.user-images { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.user-images a { display: block; max-width: 100%; }
+.user-images img { display: block; max-width: 100%; width: 180px; height: 140px; object-fit: cover; border-radius: 8px; cursor: zoom-in; }

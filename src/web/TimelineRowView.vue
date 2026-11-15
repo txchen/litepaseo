@@ -105,7 +105,11 @@ async function copyMessage() {
 
 <template>
   <div v-if="item.type === 'user_message'" class="row row-user">
-    <div class="bubble" tabindex="-1">{{ item.text }}</div>
+    <div class="bubble" tabindex="-1"><div v-if="item.imageUrls?.length" class="user-images">
+      <a v-for="(url, index) in item.imageUrls" :key="url" :href="url" target="_blank" rel="noopener" >
+        <img :src="url" :alt="`Attached image ${Number(index) + 1}`" loading="lazy" />
+      </a>
+    </div>{{ item.text }}</div>
     <div class="user-actions">
       <span v-if="userTime" class="user-time">{{ userTime }}</span>
       <RewindMenu v-if="rewindModes.length" :modes="rewindModes" :busy="rewindBusy" @rewind="rewind" />

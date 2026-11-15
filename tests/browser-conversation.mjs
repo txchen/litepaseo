@@ -27,7 +27,7 @@ const row = (seq) => ({
   turnId: `turn-${Math.ceil(seq / 2)}`,
   item: seq === TOTAL - 2 ? { type: "reasoning", text: LONG_THOUGHT }
     : seq % 2
-    ? { type: "user_message", text: `question ${seq}`, messageId: `msg-${seq}` }
+    ? { type: "user_message", text: `question ${seq}`, messageId: `msg-${seq}`, ...(seq === TOTAL - 1 ? { imageUrls: ["/fixture-image.png"] } : {}) }
     : { type: "assistant_message", text: seq === TOTAL
       ? "Final answer\n\n```ts\nconst answer: number = 42; // the answer\n```"
       : `answer ${seq}\n\nA second paragraph so that rows have some height.` },
@@ -123,6 +123,7 @@ try {
     return route.fulfill({ json: {} });
   });
 
+  await page.route("**/fixture-image.png", route => route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZk0AAAAASUVORK5CYII=", "base64") }));
   await page.goto(`http://127.0.0.1:${port}`);
   await page.getByLabel("Server access token").fill(readFileSync(join(directory, "token"), "utf8"));
   await page.getByRole("button", { name: "Connect", exact: true }).click();
@@ -139,6 +140,13 @@ try {
     await code.evaluate((el) => getComputedStyle(el).color),
     "keywords are colored",
   );
+
+  const attachedImage = page.locator(".user-images img");
+  await attachedImage.scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => document.querySelector(".user-images img")?.naturalWidth > 0);
+  await attachedImage.click();
+  await page.getByRole("dialog", { name: "Image", exact: true }).waitFor();
+  await page.keyboard.press("Escape");
 
   // 1b. A single long line of thinking is cut off on screen, so it opens to show all of it.
   const thought = page.locator(".row-reasoning").last();

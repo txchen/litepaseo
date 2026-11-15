@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.6
+
+- Align the pinned-project icon beside the project name, preserving a single compact row.
+- Persist newly sent chat images in the BFF and show clickable thumbnails in conversation history, including queued messages and after restarts. Previously discarded images cannot be recovered.
+
 ## 0.5.5
 
 - Compact the usage summary and apply the bottom safe-area inset only once, fixing the sidebar footer layout on iPhone home-screen apps.

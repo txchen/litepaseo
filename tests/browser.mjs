@@ -308,6 +308,13 @@ try {
   await litepaseoGroup.getByRole('button', {name: 'Actions for project litepaseo'}).click();
   await page.getByRole('menuitem', {name: 'Pin project', exact: true}).click();
   await litepaseoGroup.locator('[title="Pinned project"]').waitFor();
+  const pinLayout = await litepaseoGroup.locator('.group-name').evaluate(el => {
+    const name = el.querySelector('.group-name-text').getBoundingClientRect();
+    const pin = el.querySelector('.project-pin').getBoundingClientRect();
+    return {gap: pin.left - name.right, centerOffset: Math.abs((pin.top + pin.bottom - name.top - name.bottom) / 2)};
+  });
+  assert.ok(pinLayout.gap >= 4 && pinLayout.gap <= 6 && pinLayout.centerOffset < 1, JSON.stringify(pinLayout));
+
   await litepaseoGroup.hover();
   await litepaseoGroup.getByRole('button', {name: 'Actions for project litepaseo'}).click();
   await page.getByRole('menuitem', {name: 'Unpin project', exact: true}).click();

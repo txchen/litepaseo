@@ -216,3 +216,19 @@ test("delivery verification excludes concurrent retry, edit, reorder and removal
     assert.deepEqual(f.sends.map(s => s.text), ['first', 'later']);
   } finally { f.close(); }
 });
+
+test("queued images remain readable after delivery and BFF restart", async () => {
+  const f = fixture();
+  try {
+    const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZk0AAAAASUVORK5CYII=", "base64");
+    const uploaded = await (await f.upload(bytes)).json();
+    const id = randomUUID();
+    assert.equal((await f.enqueue("picture", id, [uploaded.id])).status, 201);
+    f.restart(); f.update(false); await settle();
+    assert.equal(f.sends.length, 1);
+    f.restart();
+    const response = await f.request(`message-images/${id}/0`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
+  } finally { f.close(); }
+});

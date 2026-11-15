@@ -1,3 +1,4 @@
+import { saveMessageImages, messageImage, withMessageImages } from "./message-images.ts";
 import { importProjectIcon, MAX_ICON_BYTES } from "./project-icon-import.ts";
 import { ServerSendQueue } from "./send-queue.ts";
 import { VERSION } from "./version.ts";
@@ -536,7 +537,10 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
       const sessionId = c.get("session")?.id;
       const key = `${c.req.param("host")}:${c.req.param("agent")}`;
       const stop = hosts.watchTimeline(c.req.param("host"), c.req.param("agent"), (ops) =>
-        send({ type: "ops", ops } satisfies TimelineMessage));
+        send({ type: "ops", ops: ops.map(op => {
+          const enrich = (row: import("../shared/wire.ts").TimelineRow) => ({ ...row, item: withMessageImages(store, c.req.param("host"), c.req.param("agent"), row.item) });
+          return op.type === "reset" ? { ...op, rows: op.rows.map(enrich) } : op.type === "upsert" ? { ...op, row: enrich(op.row) } : op;
+        }) } satisfies TimelineMessage));
       if (sessionId) {
         let devices = viewers.get(key);
         if (!devices) viewers.set(key, devices = new Map());
@@ -553,6 +557,15 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
         }
       };
     }, streamValidity(c));
+  });
+  app.get("/api/hosts/:host/agents/:agent/message-images/:message/:index", (c) => {
+    const index = c.req.param("index");
+    if (!/^[0-3]$/.test(index)) return c.notFound();
+    const image = messageImage(store, c.req.param("host"), c.req.param("agent"), c.req.param("message"), Number(index));
+    if (!image) return c.notFound();
+    return c.body(new Uint8Array(Buffer.from(image.data, "base64")), 200, {
+      "Content-Type": image.mimeType, "Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff",
+    });
   });
   /** Bounded history pages; the browser bookmarks boundaries for forward navigation. */
   app.get("/api/hosts/:host/agents/:agent/timeline", async (c) => {
@@ -576,7 +589,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
         timestamp: e.timestamp,
         provider: e.provider,
         ...(e.turnId ? { turnId: e.turnId } : {}),
-        item: e.item as TimelineItem,
+        item: withMessageImages(store, c.req.param("host"), c.req.param("agent"), e.item as TimelineItem),
       })),
     } satisfies TimelinePage);
   });
@@ -859,7 +872,10 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
       .refine(input => !!input.text || input.attachmentIds.length > 0)
       .parse(await c.req.json());
     let prepared;
-    try { prepared = await attachments.prepare(hosts, attachmentOwner(c), c.req.param("host"), c.req.param("agent"), input.attachmentIds); }
+    try {
+      prepared = await attachments.prepare(hosts, attachmentOwner(c), c.req.param("host"), c.req.param("agent"), input.attachmentIds);
+      saveMessageImages(store, c.req.param("host"), c.req.param("agent"), input.messageId, prepared.images);
+    }
     catch (error) { return c.json({ error: (error as Error).message, delivery: "not-sent" }, 400); }
     try {
       await hosts

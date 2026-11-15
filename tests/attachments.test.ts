@@ -1,3 +1,4 @@
+import { withMessageImages, messageImage, saveMessageImages } from "../src/server/message-images.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Attachments, MAX_FILE_BYTES, MAX_FILES_PER_OWNER } from "../src/server/attachments.ts";
@@ -92,6 +93,14 @@ test("BFF accepts attachment-only messages and forwards native images and upload
     assert.equal(fixture.sends[0].options.messageId, messageId);
     assert.equal(fixture.sends[0].options.images[0].mimeType, "image/png");
     assert.equal(fixture.sends[0].options.attachments[0].fileName, "readme.txt");
+    const enriched = withMessageImages(store, "h", "a", { type: "user_message", clientMessageId: messageId });
+    const url = (enriched.imageUrls as string[])[0];
+    const downloaded = await app.request(url, { headers });
+    assert.equal(downloaded.status, 200);
+    assert.equal(downloaded.headers.get("content-type"), "image/png");
+    assert.equal(Buffer.from(await downloaded.arrayBuffer()).toString("base64"), fixture.sends[0].options.images[0].data);
+    assert.equal((await app.request(url)).status, 401);
+    assert.equal((await app.request(url.replace("/agents/a/", "/agents/other/"), { headers })).status, 404);
     const retry = await app.request("/api/hosts/h/agents/a/messages", { method: "POST", headers, body: JSON.stringify({ text: "", messageId: randomUUID(), behavior: "steer", attachmentIds: [file.id] }) });
     assert.equal(retry.status, 400);
     assert.equal((await retry.json()).delivery, "not-sent");
@@ -116,4 +125,20 @@ test("a failed operation is logged with its path, route and error, without the q
     assert.match(entry.message, /cancelAgent/);
     assert.ok(!JSON.stringify(entry).includes("secret"));
   } finally { console.error = original; app.dispose(); store.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("message images survive restart, scope IDs and preserve the original on retries", () => {
+  const root = mkdtempSync(join(tmpdir(), "lp-message-images-"));
+  let store = new Store(root);
+  try {
+    const images = [{ data: "aGVsbG8=", mimeType: "image/png" }];
+    saveMessageImages(store, "host", "agent", "id", images);
+    store.close(); store = new Store(root);
+    assert.deepEqual(messageImage(store, "host", "agent", "id", 0), images[0]);
+    assert.equal(messageImage(store, "other", "agent", "id", 0), null);
+    saveMessageImages(store, "host", "agent", "id", [{ data: "different", mimeType: "image/jpeg" }]);
+    assert.deepEqual(messageImage(store, "host", "agent", "id", 0), images[0]);
+    assert.equal((withMessageImages(store, "host", "agent", { type: "user_message", messageId: "id" }).imageUrls as string[]).length, 1);
+    assert.equal(withMessageImages(store, "host", "agent", { type: "assistant_message", messageId: "id" }).imageUrls, undefined);
+  } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
 });

@@ -507,7 +507,7 @@ provide(TIMELINE_CONTEXT, timelineContext);
 const lightbox = ref<string | null>(null);
 function onTimelineClick(event: MouseEvent) {
   const target = event.target as HTMLElement | null;
-  if (target instanceof HTMLImageElement && target.closest(".prose")) lightbox.value = target.currentSrc || target.src;
+  if (target instanceof HTMLImageElement && target.closest(".prose, .user-images")) { event.preventDefault(); lightbox.value = target.currentSrc || target.src; }
 }
 const lastTimelineSeq = computed(() => {
   const store = timeline.value;

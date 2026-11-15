@@ -1,3 +1,4 @@
+import { saveMessageImages } from "./message-images.ts";
 import type { Store } from "./store.ts";
 import { confirmedMessages } from "./message-status.ts";
 import type { Hosts } from "./hosts.ts";
@@ -161,6 +162,7 @@ export class ServerSendQueue {
     this.inflight.add(key); this.awaitingTurn.set(key, this.hosts.agents.get(key)?.activityAt ?? 0);
     e.sending = true; delete e.error; this.save();
     try {
+      saveMessageImages(this.store, e.host, e.agent, e.id, e.prepared.images);
       await this.hosts.get(e.host).api.agents.ref(e.agent).send(e.text, {
         messageId: e.id, activeTurnBehavior: behavior, ...e.prepared,
       });

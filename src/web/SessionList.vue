@@ -194,7 +194,7 @@ onUnmounted(() => {
               <ProjectIcon :name="row.group.name" :source="groupIconSource(row.group)" />
               <Icon name="chevron" :size="14" class="group-chevron" />
             </span>
-            <span class="group-name"><Icon v-if="row.group.pinnedAt" name="pin" :size="12" title="Pinned project" />{{ row.group.name }}</span>
+            <span class="group-name"><span class="group-name-text">{{ row.group.name }}</span><Icon v-if="row.group.pinnedAt" name="pin" :size="11" class="project-pin" title="Pinned project" /></span>
             <span class="group-host" :title="groupHostsTitle(row.group)">{{ groupHosts(row.group) }}</span>
             <!-- Every state present shows, most urgent first, so a collapsed project still says
                  "something is running" even while another thread waits for you. -->

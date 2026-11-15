@@ -29,6 +29,28 @@ const hostId = ref(
   connected.value.find((h) => h.id === props.initialHostId)?.id ?? connected.value[0]?.id ?? "",
 );
 const providers = ref<ProviderOption[] | null>(null);
+const profiles = ref<any[]>([]);
+const featureValues = ref<Record<string, unknown>>({});
+let profileSelection = 0;
+async function applyProfile(id: string) {
+  const p = profiles.value.find(p => p.id === id);
+  if (!p) return;
+  if (!providers.value?.some(provider => provider.id === p.provider)) {
+    error.value = "This profile's provider is unavailable on this host.";
+    return;
+  }
+  const selection = ++profileSelection, host = hostId.value;
+  provider.value = p.provider;
+  await nextTick();
+  if (selection !== profileSelection || host !== hostId.value) return;
+  model.value = p.model ?? models.value.find(m => m.isDefault)?.id ?? models.value[0]?.id ?? "";
+  await nextTick();
+  if (selection !== profileSelection || host !== hostId.value) return;
+  mode.value = p.modeId ?? selectedProvider.value?.defaultModeId ?? "";
+  thinking.value = p.thinkingOptionId ?? selectedModel.value?.defaultThinkingId ?? "";
+  featureValues.value = { ...p.featureValues };
+}
+
 const projects = ref<ProjectOption[] | null>(null);
 const loadError = ref("");
 const project = ref<string>("");
@@ -58,7 +80,9 @@ const canCreate = computed(
 );
 
 async function load(id: string) {
-  providers.value = projects.value = null;
+  ++profileSelection;
+  providers.value = projects.value = null; profiles.value = []; featureValues.value = {};
+  void props.request(`/hosts/${encodeURIComponent(id)}/settings`).then(r => { if (id === hostId.value) profiles.value = r.features.agentProfiles ? r.config.agentProfiles ?? [] : []; }).catch(() => {});
   loadError.value = "";
   if (!id) return;
   try {
@@ -113,6 +137,7 @@ watch(hostId, (id) => {
   void load(id);
 });
 watch(provider, () => {
+  featureValues.value = {};
   const saved = prefs[hostId.value];
   pickModel(saved?.provider === provider.value ? saved.model : undefined);
   const p = selectedProvider.value;
@@ -122,7 +147,7 @@ watch(model, () => {
   const m = selectedModel.value;
   if (m && !m.thinking.some((t) => t.id === thinking.value)) thinking.value = m.defaultThinkingId ?? "";
 });
-watch([hostId, project, customPath, provider, model, thinking, mode, useWorktree, branch, prompt], () => {
+watch([hostId, project, customPath, provider, model, thinking, mode, featureValues, useWorktree, branch, prompt], () => {
   if (error.value) idempotencyKey = crypto.randomUUID();
   error.value = "";
 });
@@ -139,6 +164,7 @@ async function create() {
         idempotencyKey,
         cwd: cwd.value,
         provider: provider.value,
+        ...(Object.keys(featureValues.value).length ? { featureValues: featureValues.value } : {}),
         ...(model.value ? { model: model.value } : {}),
         ...(mode.value ? { modeId: mode.value } : {}),
         ...(thinking.value ? { thinkingOptionId: thinking.value } : {}),
@@ -219,6 +245,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
             ></textarea>
           </label>
           <div class="field-grid three">
+            <label v-if="profiles.length" class="field"><span>Apply agent profile</span><select :disabled="busy" value="" @change="applyProfile(($event.target as HTMLSelectElement).value)"><option value="">Choose profile…</option><option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }}</option></select></label>
             <label class="field field-agent">
               <span>Agent</span>
               <select v-model="provider" :disabled="busy || !providers">

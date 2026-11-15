@@ -14,6 +14,7 @@ const props = defineProps<{ hostId: string; cwd: string; visible: boolean; api: 
 
 interface Term { id: string; name: string; title: string | null }
 const terminals = ref<Term[]>([]);
+const profiles = ref<{id:string;name:string}[]>([]), profileId = ref("");
 const current = ref<string | null>(null);
 const error = ref("");
 const starting = ref(false);
@@ -148,7 +149,7 @@ async function create() {
   starting.value = true;
   try {
     await ensureTerminal();
-    const created = (await props.api(base(), "POST", { cwd: props.cwd, rows: term.value?.rows ?? 24, cols: term.value?.cols ?? 80 })) as Term;
+    const created = (await props.api(base(), "POST", { cwd: props.cwd, ...(profileId.value ? { profileId: profileId.value } : {}), rows: term.value?.rows ?? 24, cols: term.value?.cols ?? 80 })) as Term;
     terminals.value = [...terminals.value, created];
     attach(created.id);
   } catch (e) {
@@ -174,6 +175,9 @@ async function kill(id: string) {
 }
 
 async function init() {
+  profiles.value = []; profileId.value = "";
+  const host = props.hostId;
+  void props.api(`/hosts/${encodeURIComponent(host)}/settings`).then(r => { if (host === props.hostId) profiles.value = r.config.terminalProfiles ?? []; }).catch(() => {});
   stream?.close();
   stream = null;
   current.value = null;
@@ -208,6 +212,7 @@ onUnmounted(() => {
         <Icon name="terminal" :size="12" /><span>{{ t.title || t.name || `Terminal ${i + 1}` }}</span>
         <span class="term-close" role="button" :aria-label="'Close ' + (t.title || t.name)" @click.stop="kill(t.id)"><Icon name="close" :size="11" /></span>
       </button>
+      <select v-if="profiles.length" v-model="profileId" aria-label="New terminal profile" style="max-width: 150px"><option value="">Default shell</option><option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }}</option></select>
       <button class="icon-btn term-new" title="New terminal" aria-label="New terminal" :disabled="starting" @click="create">
         <Icon name="plus" :size="14" />
       </button>

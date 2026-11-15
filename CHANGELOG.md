@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0
+
+- Set an instance name in Web Settings; show it in browser tabs, the sidebar and sign-in, and synchronize it across connected clients.
+- Add per-host settings for agent instructions, orchestration/browser tools, idle cleanup, restart recovery, workspaces, usage and relay, with capability checks, conflict detection and save verification.
+- Manage agent and terminal profiles, and select them when creating sessions and terminals. Configure providers, additional models and metadata generation priorities.
+- Manage Paseo skill selection and installed host plugins, including trusted source installation. Keep LitePaseo voice input and notifications independent.
+- Show remote daemon versions and status; request remote updates and restarts, track progress across navigation, and verify the replacement worker and installed version before reporting success. Respect Desktop-managed and unsupported installations.
+- Increase phone conversation text to 16px and improve form and supporting-text sizes without changing desktop typography.
+
 ## 0.5.7
 
 - Default to Steer for supported providers and Queue otherwise; keep composer controls contained at narrow widths and increased zoom.

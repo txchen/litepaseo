@@ -134,7 +134,7 @@ export type DirectoryMessage =
   | { type: "changes"; generation: string; seq: number; changes: Change<AgentSummary>[] }
   | { type: "workspaces-snapshot"; generation: string; seq: number; workspaces: WorkspaceSummary[] }
   | { type: "workspaces-changes"; generation: string; seq: number; changes: Change<WorkspaceSummary>[] }
-  | { type: "hosts"; hosts: HostState[] };
+  | { type: "hosts"; hosts: HostState[]; instanceName?: string };
 
 export interface TimelineCursor {
   epoch: string;
@@ -242,6 +242,7 @@ export interface CreateSessionRequest {
   model?: string;
   modeId?: string;
   thinkingOptionId?: string;
+  featureValues?: Record<string, unknown>;
   prompt?: string;
   /** Start in a new git worktree on this new branch. */
   worktreeBranch?: string;

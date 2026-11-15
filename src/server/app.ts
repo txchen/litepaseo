@@ -1,3 +1,4 @@
+import { registerHostSettings } from "./host-settings.ts";
 import { messageDeliveryModes } from "./message-delivery.ts";
 import { saveMessageImages, messageImage, withMessageImages } from "./message-images.ts";
 import { importProjectIcon, MAX_ICON_BYTES } from "./project-icon-import.ts";
@@ -177,7 +178,8 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
   });
 
   // ---- Sign-in, sessions and two-factor ------------------------------------------------------
-  app.get("/api/auth", (c) => c.json({ authenticated: !!c.get("session"), totp: auth.totpEnabled() }));
+  const instanceName = () => store.setting("instance-name") ?? "";
+  app.get("/api/auth", (c) => c.json({ authenticated: !!c.get("session"), totp: auth.totpEnabled(), ...(instanceName() ? { instanceName: instanceName() } : {}) }));
   app.post("/api/login", async (c) => {
     const input = z
       .object({ token: z.string().min(1).max(200).optional(), code: z.string().regex(/^\d{6}$/).optional() })
@@ -372,7 +374,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     if (disposed || hostFlush || !directoryStreams.size) return;
     hostFlush = setTimeout(() => {
       hostFlush = undefined;
-      const message: DirectoryMessage = { type: "hosts", hosts: hostStates() };
+      const message: DirectoryMessage = { type: "hosts", hosts: hostStates(), instanceName: instanceName() };
       for (const stream of directoryStreams) stream.send(message);
     }, HOST_FLUSH_MS);
   });
@@ -398,6 +400,15 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     for (const stream of directoryStreams) stream.send({ type: "project-pins", pins });
     return c.json(pins);
   });
+  app.get("/api/instance", c => c.json({ name: instanceName() }));
+  app.put("/api/instance", async c => {
+    const input = z.object({ name: z.string().trim().max(64).refine(name => !/[\u0000-\u001f\u007f]/.test(name), "Use a single-line name") }).strict().safeParse(await c.req.json());
+    if (!input.success) return c.json({ error: "Use an instance name of up to 64 characters on a single line." }, 400);
+    store.setSetting("instance-name", input.data.name || null);
+    const message: DirectoryMessage = { type: "hosts", hosts: hostStates(), instanceName: instanceName() };
+    for (const stream of directoryStreams) stream.send(message);
+    return c.json({ name: instanceName() });
+  });
   app.get("/api/stream", (c) => {
     const since = Number(c.req.query("since"));
     const resumable =
@@ -407,7 +418,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
       c.req.query("wgeneration") === hosts.workspaces.generation && Number.isInteger(wsince);
     return eventStream(c.req.raw.signal, (send) => {
       const stream: DirectoryStream = { last: resumable ? since : -1, lastWorkspaces: wresumable ? wsince : -1, send };
-      send({ type: "hosts", hosts: hostStates() });
+      send({ type: "hosts", hosts: hostStates(), instanceName: instanceName() });
       send({ type: "project-pins", pins: projectPins() });
       deliverAgents(stream);
       directoryStreams.add(stream);
@@ -490,6 +501,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
         model: z.string().trim().min(1).max(300).optional(),
         modeId: z.string().trim().min(1).max(200).optional(),
         thinkingOptionId: z.string().trim().min(1).max(200).optional(),
+        featureValues: z.record(z.string(), z.unknown()).optional(),
         prompt: z.string().max(100000).optional(),
         worktreeBranch: z.string().trim().min(1).max(200).optional(),
       })
@@ -510,6 +522,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
         cwd: input.cwd,
         config: {
           provider: `${input.provider}/${model}`,
+          ...(input.featureValues ? { featureValues: input.featureValues } : {}),
           ...(input.modeId ? { modeId: input.modeId } : {}),
           ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
         },
@@ -1100,6 +1113,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
   });
 
   // ---- Usage across hosts ------------------------------------------------------------------------
+  registerHostSettings(app, hosts);
   registerWorkspaceRoutes(app, hosts, store, (c) => streamValidity(c));
   app.get("/api/usage", async (c) => c.json(await usage.report(c.req.query("refresh") === "1")));
 

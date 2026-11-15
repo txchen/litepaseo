@@ -35,6 +35,7 @@ import ProviderIcon from "./ProviderIcon.vue";
 import SchedulesPage from "./SchedulesPage.vue";
 import { defineAsyncComponent } from "vue";
 // The side panel loads on first use: the file viewer and xterm.js stay out of the first page.
+const HostSettings = defineAsyncComponent(() => import("./HostSettings.vue"));
 const ChangesPanel = defineAsyncComponent(() => import("./ChangesPanel.vue"));
 const ConversationSearch = defineAsyncComponent(() => import("./ConversationSearch.vue"));
 const FilesPanel = defineAsyncComponent(() => import("./FilesPanel.vue"));
@@ -162,10 +163,12 @@ function readJson<T>(key: string, fallback: T): T {
   }
 }
 
+const instanceName = ref("");
+const instanceLabel = computed(() => instanceName.value || "LitePaseo");
 const token = ref(""),
   code = ref(""),
   /** null until the server says how this browser may sign in. */
-  authInfo = ref<{ authenticated: boolean; totp: boolean } | null>(null),
+  authInfo = ref<{ authenticated: boolean; totp: boolean; instanceName?: string } | null>(null),
   authenticated = ref(false),
   error = ref(""),
   busy = ref(false);
@@ -356,6 +359,7 @@ window.addEventListener("storage", onComposerStorage);
 
 const hostLabels = computed(() => new Map(hosts.value.map((h) => [h.id, h.label])));
 const hostStates = computed(() => new Map(hosts.value.map((h) => [h.id, h.state])));
+const settingsHost = ref<HostState | null>(null);
 const connectedHosts = computed(() => hosts.value.filter((h) => h.state === "connected").length);
 // O(1) per directory message: map lookups, not scans.
 const active = computed(() => {
@@ -594,7 +598,7 @@ function signOut(reason: "user" | "ended") {
   error.value = reason === "ended" ? "Your session ended. Sign in again; your drafts are kept." : "";
 }
 async function loadAuth() {
-  try { authInfo.value = await api("/auth"); }
+  try { authInfo.value = await api("/auth"); instanceName.value = authInfo.value?.instanceName ?? ""; }
   catch {
     authInfo.value = { authenticated: false, totp: false };
     return; // An unreachable server must not erase recoverable drafts.
@@ -648,7 +652,7 @@ function openDirectory() {
     onMessage: (data) => {
       const message = data as DirectoryMessage;
       if (message.type === "project-pins") applyProjectPins(message.pins);
-      else if (message.type === "hosts") hosts.value = message.hosts;
+      else if (message.type === "hosts") { hosts.value = message.hosts; if (message.instanceName !== undefined) instanceName.value = message.instanceName; }
       else if (message.type === "workspaces-snapshot")
         directory.applyCollection({ type: "snapshot", generation: message.generation, seq: message.seq, items: message.workspaces });
       else if (message.type === "workspaces-changes")
@@ -1615,10 +1619,11 @@ const waiting = computed(() => {
   directory.version.value;
   return agentDirectory.waiting;
 });
-watch(waiting, (count) => {
-  setBadge(count);
-  document.title = count ? `(${count}) LitePaseo` : "LitePaseo";
-});
+watch(waiting, (count) => setBadge(count));
+watch([waiting, instanceName], ([count, name]) => {
+  const title = name ? `${name} · LitePaseo` : "LitePaseo";
+  document.title = count ? `(${count}) ${title}` : title;
+}, { immediate: true });
 // The tab icon carries a status dot (Paseo's favicon states): needs you > working > unread.
 const tabState = computed(() => {
   agentDirectory.version.value;
@@ -1649,7 +1654,7 @@ onUnmounted(() => {
 <template>
   <div v-if="!authenticated" class="login">
     <form v-if="authInfo" class="login-card" @submit.prevent="login">
-      <div class="brand brand-large"><img class="brand-mark" src="/icons/mark.svg" alt="" width="22" height="22" />LitePaseo</div>
+      <div class="brand brand-large"><img class="brand-mark" src="/icons/mark.svg" alt="" width="22" height="22" />{{ instanceLabel }}</div>
       <p class="login-lede">All your Paseo hosts, one fast console.</p>
       <label class="field">
         <span>Server access token</span>
@@ -1694,6 +1699,7 @@ onUnmounted(() => {
         @keydown.right.prevent="setSidebarWidth(sidebarWidth + 16)"
       ></div>
       <!-- Compact navigation, as in Paseo: search and the few pages, then the workspace list. -->
+      <div v-if="instanceName" class="instance-name" :title="instanceName">{{ instanceName }}</div>
       <nav class="side-nav" aria-label="Pages">
         <label class="side-row side-search" :class="{ active: !!query }">
           <Icon name="search" :size="15" />
@@ -1820,6 +1826,8 @@ onUnmounted(() => {
       <Settings
         v-if="tab === 'settings'"
         :request="api"
+        :instance-name="instanceName"
+        @instance-changed="(name) => instanceName = name"
         :totp-enabled="!!authInfo?.totp"
         @back="closeDetail"
         @signed-out="signOut('user')"
@@ -1827,6 +1835,7 @@ onUnmounted(() => {
         @dictation-changed="(on) => (dictationReady = on)"
       />
 
+      <HostSettings v-else-if="tab === 'hosts' && settingsHost" :key="settingsHost.id" :host="settingsHost" :api="api" @back="settingsHost = null" />
       <section v-else-if="tab === 'hosts'" class="page">
         <header class="page-head">
           <button class="icon-btn back" aria-label="Back" @click="closeDetail">
@@ -1849,6 +1858,7 @@ onUnmounted(() => {
                 <div v-if="h.diagnostic?.attempt" class="row-sub">Connection attempt {{ h.diagnostic.attempt }}</div>
                 <div v-if="h.diagnostic?.nextRetryAt" class="row-sub">Next retry: {{ new Date(h.diagnostic.nextRetryAt).toLocaleString() }}</div>
               </div>
+              <button class="btn btn-outline" :disabled="h.state !== 'connected'" @click="settingsHost = h">Settings</button>
               <button class="btn btn-outline" :disabled="busy" @click="removeHost(h)">Remove</button>
             </div>
             <div v-if="!hosts.length" class="card-row muted-text">No hosts yet.</div>

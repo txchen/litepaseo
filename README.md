@@ -140,6 +140,35 @@ Both take effect immediately and sign out every browser. A token sent as
 `Authorization: Bearer` (for scripts) is accepted only on direct connections, never
 through a tunnel or proxy, and only while authenticator sign-in is off.
 
+### Instance name
+
+Set **Settings → Instance → Instance name** to distinguish multiple LitePaseo
+servers. The name appears in browser tabs, the sidebar and the sign-in screen,
+and is saved on this instance for every device. Connected pages update immediately.
+Clear the name to restore **LitePaseo**.
+
+### Host settings
+
+Open **Hosts → Settings** beside a connected host to configure its agents,
+providers, profiles, metadata generation, terminals, skills and plugins. These
+settings are saved on that Paseo host and affect its other clients too. Save
+changes explicitly; reload if another client has changed the configuration.
+Agent profiles can be applied in **New session**, and terminal profiles are
+available beside the new-terminal button.
+
+The same page shows the daemon version and full status. **Update & restart**
+is available when the daemon supports self-update; Desktop-managed daemons
+must be updated through Paseo Desktop. Remote lifecycle operations continue
+on the LitePaseo server if you leave the page. Reopen the settings page to
+check progress. Completion requires a replacement daemon; updates also verify
+its running version. Operation tracking is in memory: after a LitePaseo server
+restart, check the host version/status before retrying an uncertain operation.
+
+Voice input and notifications keep their existing LitePaseo settings. Provider
+credentials and arbitrary runtime environment overrides remain managed on the
+host; this form does not expose them. Plugin-specific custom settings screens
+and reviewed plugin-source updates remain available in the official client.
+
 ### Voice input
 
 Voice input is off until you add a transcription service in **Settings → Voice input**: a

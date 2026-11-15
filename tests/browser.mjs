@@ -170,9 +170,16 @@ try {
       },
     }),
   );
+  let hostConfig = { appendSystemPrompt: "Original host instructions", mcp: { injectIntoAgents: true }, browserTools: { enabled: false }, agentProfiles: [], terminalProfiles: [], metadataGeneration: { providers: [] }, providers: { codex: { enabled: true } } };
+  const hostSettingsWrites = [];
   await page.route("**/api/hosts**", async (route) => {
     const p = new URL(route.request().url()).pathname;
     const host = p.split("/")[3];
+    if (p.endsWith("/settings")) {
+      if (route.request().method() === 'PATCH') { const body = route.request().postDataJSON(); hostSettingsWrites.push(body); hostConfig = { ...hostConfig, ...body.patch }; }
+      return route.fulfill({json: {config: hostConfig, revision: 'r' + hostSettingsWrites.length, features: {agentProfiles:true,daemonStatusRpc:true}, version:'0.15.3'}});
+    }
+    if (p.endsWith('/lifecycle')) return route.fulfill({json:null});
     if (p.endsWith("/attachments/capabilities")) return route.fulfill({ json: { images: true, files: true, maxBytes: 8 * 1024 * 1024 } });
     if (p.endsWith("/attachments") && route.request().method() === "POST") {
       const id = crypto.randomUUID();
@@ -568,9 +575,11 @@ try {
   // New session from the litepaseo project's "+": host and project come from the group,
   // model and thinking from the host's defaults; the session opens when the stream delivers it.
   await page.locator(".group-row", { hasText: "litepaseo" }).hover();
+  hostConfig.agentProfiles = [{ id: "default-review", name: "Default review", provider: "codex" }];
   await page.getByRole("button", { name: "New session in litepaseo" }).click();
   const dialog = page.getByRole("dialog", { name: "New session" });
   await dialog.waitFor();
+  await dialog.getByLabel("Apply agent profile").selectOption("default-review");
   await expect(dialog.getByLabel("Model")).toHaveValue("gpt-5-codex");
   await expect(dialog.getByLabel("Thinking")).toHaveValue("high");
   assert.equal(await dialog.getByLabel("Project").inputValue(), "/code/litepaseo");
@@ -579,6 +588,7 @@ try {
   await page.waitForFunction(() => !document.querySelector(".sheet button[disabled]"));
   await resync();
   await page.getByRole("heading", { name: "Brand new session" }).waitFor({ timeout: 15000 });
+  hostConfig.agentProfiles = [];
   assert.equal(creations.length, 1);
   assert.deepEqual(
     { ...creations[0], idempotencyKey: typeof creations[0].idempotencyKey },
@@ -640,6 +650,29 @@ try {
   await page.waitForFunction(() => true);
   for (let i = 0; i < 50 && !reads.includes("alpha"); i++) await page.waitForTimeout(100);
   assert.ok(reads.includes("alpha"), "viewing an unread session clears its unread state");
+
+  // Host settings: real form, explicit host scope, sparse patches and profile creation.
+  await page.getByRole('button', {name:/Hosts, /}).click();
+  await page.locator('.card-row', {hasText:'Alpha'}).getByRole('button',{name:'Settings',exact:true}).click();
+  await page.getByRole('heading',{name:'Alpha',exact:true}).waitFor();
+  await page.getByLabel('Additional system instructions').fill('New host instructions');
+  await page.getByRole('button',{name:'Add agent profile',exact:true}).click();
+  await page.locator('.host-settings').getByLabel('Name',{exact:true}).fill('Review');
+  await page.getByRole('button',{name:'Save changes',exact:true}).click();
+  await page.getByText('Saved on this host.',{exact:false}).waitFor();
+  assert.equal(hostSettingsWrites.at(-1).patch.appendSystemPrompt,'New host instructions');
+  assert.equal(hostSettingsWrites.at(-1).patch.agentProfiles[0].name,'Review');
+  assert.equal(hostSettingsWrites.at(-1).patch.mcp,undefined);
+  assert.equal(await page.getByRole('button',{name:'Update & restart daemon…'}).count(),0);
+  for (const width of [390,320]) {
+    await page.setViewportSize({width,height:844});
+    const overflow = await page.locator('.host-settings').evaluate(el => el.scrollWidth > el.clientWidth + 1);
+    assert.equal(overflow,false,`host settings fit ${width}px`);
+    assert.equal(await page.getByLabel('Additional system instructions').evaluate(el => getComputedStyle(el).fontSize),'16px');
+  }
+  await page.screenshot({path:'/tmp/litepaseo-0.6.0-host-settings-mobile.png',fullPage:true});
+  await page.setViewportSize({width:1280,height:900});
+  await page.getByRole('button',{name:'Back to hosts'}).click();
 
   // Usage across hosts in the sidebar.
   await page.getByRole("button", { name: /Codex/ }).click();
@@ -712,6 +745,22 @@ try {
   // Settings → authenticator: enroll with a real TOTP code, sign out, sign back in with a code.
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByText("Push notifications").waitFor();
+  await page.getByLabel('Instance name',{exact:true}).fill('家里 · Build');
+  await page.getByRole('button',{name:'Save instance name',exact:true}).click();
+  await page.getByText('Instance name saved.',{exact:true}).waitFor();
+  await expect(page).toHaveTitle(/家里 · Build · LitePaseo$/);
+  assert.equal(await page.locator('.instance-name').textContent(),'家里 · Build');
+  const namedContext = await browser.newContext({ storageState: await page.context().storageState() });
+  const namedInstance = await namedContext.newPage();
+  await namedInstance.goto(`http://127.0.0.1:${port}`);
+  await expect(namedInstance).toHaveTitle('家里 · Build · LitePaseo');
+  await page.getByLabel('Instance name',{exact:true}).fill('');
+  await page.getByRole('button',{name:'Save instance name',exact:true}).click();
+  await expect(namedInstance).toHaveTitle('LitePaseo'); // actual SSE updates another open tab
+  await namedContext.close();
+  await expect(page).toHaveTitle(/LitePaseo$/);
+  assert.equal(await page.locator('.instance-name').count(),0);
+
   // Voice input is configured once here; the key is kept server-side and only hinted at.
   await page.getByRole("button", { name: "Set up" }).first().click();
   await page.getByLabel("Base URL").fill("https://stt.example/v1");

@@ -82,9 +82,12 @@ export function registerWorkspaceRoutes(app: Hono<any>, hosts: Hosts, store: Sto
   });
   app.post("/api/hosts/:host/terminals", async (c) => {
     const input = z
-      .object({ cwd: path, rows: z.number().int().min(4).max(500), cols: z.number().int().min(10).max(1000), name: z.string().max(80).optional() })
+      .object({ cwd: path, rows: z.number().int().min(4).max(500), cols: z.number().int().min(10).max(1000), name: z.string().max(80).optional(), profileId: z.string().optional() })
       .parse(await c.req.json());
-    const result = await hosts.get(c.req.param("host")).driver.createTerminal(input.cwd, input.name, undefined, { size: { rows: input.rows, cols: input.cols } });
+    const driver = hosts.get(c.req.param("host")).driver;
+    const profile = input.profileId ? (await driver.getDaemonConfig()).config.terminalProfiles?.find(p => p.id === input.profileId) : undefined;
+    if (input.profileId && !profile) return c.json({ error: "Terminal profile no longer exists. Reload profiles." }, 409);
+    const result = await driver.createTerminal(input.cwd, input.name ?? profile?.name, undefined, { ...(profile ? { command: profile.command, args: profile.args } : {}), size: { rows: input.rows, cols: input.cols } });
     if (!result.terminal) return c.json({ error: result.error ?? "Could not open a terminal" }, 502);
     return c.json({ id: result.terminal.id, name: result.terminal.name, title: result.terminal.title ?? null, cwd: result.terminal.cwd }, 201);
   });

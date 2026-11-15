@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import Icon from "./Icon.vue";
 import { PALETTES, applyPalette, applyTheme, palette, theme } from "./theme.ts";
 import {
@@ -18,8 +18,23 @@ import {
 const props = defineProps<{
   request: (path: string, method?: string, body?: unknown) => Promise<any>;
   totpEnabled: boolean;
+  instanceName: string;
 }>();
-const emit = defineEmits<{ back: []; signedOut: []; totpChanged: [enabled: boolean]; dictationChanged: [configured: boolean] }>();
+const emit = defineEmits<{ instanceChanged: [name: string]; back: []; signedOut: []; totpChanged: [enabled: boolean]; dictationChanged: [configured: boolean] }>();
+
+const nameDraft = ref(props.instanceName);
+const nameBusy = ref(false), nameError = ref(""), nameSaved = ref(false);
+watch(() => props.instanceName, (name, previous) => { if (nameDraft.value === previous) nameDraft.value = name; });
+watch(nameDraft, () => { nameSaved.value = false; }, { flush: "sync" });
+async function saveInstance() {
+  nameBusy.value = true; nameError.value = ""; nameSaved.value = false;
+  try {
+    const result = await props.request("/instance", "PUT", { name: nameDraft.value });
+    nameDraft.value = result.name; emit("instanceChanged", result.name);
+    nameSaved.value = true;
+  } catch(e) { nameError.value = (e as Error).message; }
+  finally { nameBusy.value = false; }
+}
 
 // ---- voice input -----------------------------------------------------------------------------
 type VoiceSettings = { configured: boolean; baseUrl: string; model: string; languages: string[]; keywords: string[]; keyHint: string };
@@ -208,6 +223,13 @@ onMounted(() => {
       </div>
     </header>
     <div class="page-body">
+      <h2 class="section-label">Instance</h2>
+      <form class="card form-card" @submit.prevent="saveInstance">
+        <label class="field"><span>Instance name</span><input v-model="nameDraft" maxlength="64" placeholder="LitePaseo" :disabled="nameBusy" /></label>
+        <p class="subtle">Shown in browser tabs and the sidebar for everyone using this instance. Leave blank to use LitePaseo.</p>
+        <div class="form-actions"><button class="btn btn-primary" :disabled="nameBusy || nameDraft === instanceName">{{ nameBusy ? 'Saving…' : 'Save instance name' }}</button></div>
+        <p v-if="nameError" class="setting-note is-error" role="alert">{{ nameError }}</p><p v-if="nameSaved" class="setting-note" role="status">Instance name saved.</p>
+      </form>
       <h2 class="section-label">Appearance</h2>
       <div class="card">
         <div class="card-row">

@@ -4163,3 +4163,17 @@ h3 {
 .user-images { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .user-images a { display: block; max-width: 100%; }
 .user-images img { display: block; max-width: 100%; width: 180px; height: 140px; object-fit: cover; border-radius: 8px; cursor: zoom-in; }
+
+/* Phone reading sizes; desktop typography stays unchanged. */
+@media (max-width: 700px) {
+  .prose, .bubble { font-size: 16px; }
+  .row-title { font-size: 15px; }
+  .row-sub, .subtle, .setting-note, .field-help { font-size: 14px; }
+  .field > span, .section-label { font-size: 14px; }
+  .field input, .field select, .field textarea { font-size: 16px; }
+  .row-reasoning, .tool-summary { font-size: 14px; }
+  .host-settings .card-row { flex-wrap: wrap; }
+}
+
+.instance-name { flex: none; margin: 12px 14px 2px; font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.login .brand-large { max-width: 100%; overflow-wrap: anywhere; }

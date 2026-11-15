@@ -293,6 +293,17 @@ try {
     if (input.pinned) pinnedProjects[key] = 1; else delete pinnedProjects[key];
     return route.fulfill({json: pinnedProjects});
   });
+  await page.getByRole('button', {name: 'View options', exact: true}).click();
+  await page.getByRole('radiogroup', {name: 'Filter by host'}).getByRole('radio', {name: /Alpha/}).click();
+  await page.getByRole('button', {name: 'View options', exact: true}).click();
+  const activeHostFilter = page.getByRole('group', {name: 'Active host filter', exact: true});
+  assert.match(await activeHostFilter.textContent(), /Host: Alpha/);
+  assert.equal(await page.locator('.view-menu').count(), 0);
+  assert.equal(await page.locator('button.session', {hasText: 'beta conversation'}).count(), 0);
+  await activeHostFilter.getByRole('button', {name: 'Clear host filter'}).click();
+  await page.locator('button.session', {hasText: 'beta conversation'}).waitFor();
+  assert.equal(await activeHostFilter.count(), 0);
+  assert.equal(await page.evaluate(() => localStorage.getItem('litepaseo-host-filter')), null);
   await litepaseoGroup.hover();
   await litepaseoGroup.getByRole('button', {name: 'Actions for project litepaseo'}).click();
   await page.getByRole('menuitem', {name: 'Pin project', exact: true}).click();

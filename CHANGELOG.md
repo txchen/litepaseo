@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.4
+
+- Keep the active host filter visible when view options are collapsed. Click the host label to reopen filters, or clear it directly to show all hosts.
+
 ## 0.5.3
 
 - Pin projects from the project menu to keep driver repositories above unpinned projects. Pinned projects retain their pin order as other projects become active.

@@ -1717,6 +1717,13 @@ onUnmounted(() => {
           <Icon name="sliders" :size="15" />
         </button>
       </div>
+      <div v-if="hostFilter" class="active-host-filter" role="group" aria-label="Active host filter">
+        <button class="active-host-label" :title="'Filtered by host: ' + (hostLabels.get(hostFilter) ?? hostFilter)" @click="viewMenu = true">
+          <Icon name="server" :size="13" />
+          <span>Host: {{ hostLabels.get(hostFilter) ?? hostFilter }}</span>
+        </button>
+        <button class="icon-btn" aria-label="Clear host filter" title="Show all hosts" @click="hostFilter = null"><Icon name="close" :size="13" /></button>
+      </div>
       <div v-if="viewMenu" class="view-menu">
         <div class="segmented segmented-sm" role="radiogroup" aria-label="Group sessions">
           <button role="radio" :aria-checked="listMode === 'projects'" :class="{ chosen: listMode === 'projects' }" @click="listMode = 'projects'">

@@ -4085,3 +4085,21 @@ h3 {
   .queue-item { flex-wrap: wrap; }
   .queue-item .queue-body { flex-basis: calc(100% - 30px); }
 }
+
+.active-host-filter {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 3px 4px 6px;
+  padding: 2px 3px 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1);
+  color: var(--accent);
+  font-size: 12px;
+  min-width: 0;
+}
+.active-host-label { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; text-align: left; padding: 4px 0; }
+.active-host-label svg { flex: none; }
+.active-host-label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.active-host-filter .icon-btn { flex: none; width: 28px; height: 28px; }

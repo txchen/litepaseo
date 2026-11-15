@@ -3,6 +3,7 @@
    --------------------------------------------------------------------------------------------- */
 :root {
   --motion-step-ms: 1000;
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --surface-0: #ffffff;
   --surface-1: #fafafa;
   --surface-2: #f4f4f5;
@@ -2957,8 +2958,9 @@ h3 {
 /* Usage */
 .usage {
   position: relative;
-  margin: 0 -10px;
-  padding: 8px 10px max(10px, env(safe-area-inset-bottom));
+  flex: none;
+  margin: 0 -8px;
+  padding: 2px 8px;
   border-top: 1px solid var(--border);
 }
 .usage-summary {
@@ -3705,9 +3707,10 @@ h3 {
   display: flex;
   align-items: center;
   gap: 2px;
-  height: 38px;
+  flex: none;
+  height: calc(38px + var(--safe-area-bottom));
   margin: 0 -8px;
-  padding: 0 8px max(0px, env(safe-area-inset-bottom));
+  padding: 0 8px var(--safe-area-bottom);
   border-top: 1px solid var(--border);
 }
 .side-foot .live {
@@ -4103,3 +4106,8 @@ h3 {
 .active-host-label svg { flex: none; }
 .active-host-label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .active-host-filter .icon-btn { flex: none; width: 28px; height: 28px; }
+
+@media (pointer: coarse) {
+  .side-foot { height: calc(45px + var(--safe-area-bottom)); }
+  .side-foot .icon-btn { width: 44px; height: 44px; }
+}

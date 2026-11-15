@@ -1,4 +1,4 @@
-import { chromium } from "@playwright/test";
+import { chromium, expect } from "@playwright/test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -564,9 +564,8 @@ try {
   await page.getByRole("button", { name: "New session in litepaseo" }).click();
   const dialog = page.getByRole("dialog", { name: "New session" });
   await dialog.waitFor();
-  await page.waitForFunction(() => document.querySelector(".sheet select")?.value);
-  assert.equal(await dialog.getByLabel("Model").inputValue(), "gpt-5-codex");
-  assert.equal(await dialog.getByLabel("Thinking").inputValue(), "high");
+  await expect(dialog.getByLabel("Model")).toHaveValue("gpt-5-codex");
+  await expect(dialog.getByLabel("Thinking")).toHaveValue("high");
   assert.equal(await dialog.getByLabel("Project").inputValue(), "/code/litepaseo");
   await dialog.getByLabel("First message").fill("Add a new session dialog");
   await dialog.getByRole("button", { name: "Start session" }).click();
@@ -758,7 +757,26 @@ try {
   await phone.route("**/timeline/stream", (route) =>
     route.fulfill(sse({ type: "ops", ops: [{ type: "reset", epoch: "e", hasOlder: false, startCursor: null, rows: [] }] })),
   );
+  await phone.route('**/api/usage**', route => route.fulfill({json: {accounts: [{key: 'codex', name: 'Codex (user@example.com)', windows: [{id: 'week', label: 'Weekly', shortLabel: 'wk', remainingPct: 72}], hosts: ['Alpha']}], unavailableHosts: []}}));
   await phone.goto(`http://127.0.0.1:${port}`);
+  await phone.locator('.usage-summary').waitFor();
+  // Model the iPhone home-indicator inset: only the bottom toolbar owns this space.
+  await phone.addStyleTag({content: ':root { --safe-area-bottom: 34px; }'});
+  const footerLayout = await phone.evaluate(() => {
+    const usage = document.querySelector('.usage').getBoundingClientRect();
+    const foot = document.querySelector('.side-foot').getBoundingClientRect();
+    const buttons = [...document.querySelectorAll('.side-foot .icon-btn')].map(el => el.getBoundingClientRect());
+    return {usageHeight: usage.height, gap: foot.top - usage.bottom, footBottom: foot.bottom, height: innerHeight,
+      safe: buttons.every(r => r.top >= foot.top && r.bottom <= foot.bottom - 34), footHeight: foot.height};
+  });
+  assert.ok(footerLayout.usageHeight <= 40, JSON.stringify(footerLayout));
+  assert.ok(Math.abs(footerLayout.gap) <= 1, JSON.stringify(footerLayout));
+  assert.ok(footerLayout.safe, JSON.stringify(footerLayout));
+  assert.ok(footerLayout.footBottom <= footerLayout.height + 1, JSON.stringify(footerLayout));
+  await phone.locator('.usage-summary').click();
+  await phone.getByRole('dialog', {name: 'Usage limits'}).waitFor();
+  await phone.getByRole('dialog', {name: 'Usage limits'}).getByRole('button', {name: 'Close', exact: true}).click();
+
   // Reuse the fully authenticated session for the independent mobile navigation checks.
   await phone.locator("button.session", { hasText: "alpha conversation" }).click();
   await phone.waitForFunction(() => document.querySelector(".shell.detail-open"));

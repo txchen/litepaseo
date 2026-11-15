@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.5
+
+- Compact the usage summary and apply the bottom safe-area inset only once, fixing the sidebar footer layout on iPhone home-screen apps.
+- Preserve 44px touch targets for footer buttons and verify layout with a simulated iPhone safe area.
+
 ## 0.5.4
 
 - Keep the active host filter visible when view options are collapsed. Click the host label to reopen filters, or clear it directly to show all hosts.

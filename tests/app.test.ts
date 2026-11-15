@@ -211,7 +211,7 @@ test("two-host routing, permissions, uncertain sends, authentication and board p
         await request(`/hosts/${b.id}/agents/same-id/messages`, "POST", {
           text: "hello",
           messageId,
-          behavior: "steer",
+          behavior: "interrupt",
         })
       ).status,
       200,
@@ -220,7 +220,7 @@ test("two-host routing, permissions, uncertain sends, authentication and board p
       "Beta",
       "send",
       "hello",
-      { messageId, activeTurnBehavior: "steer" },
+      { messageId, activeTurnBehavior: "interrupt" },
     ]);
     assert.equal(
       (
@@ -245,7 +245,7 @@ test("two-host routing, permissions, uncertain sends, authentication and board p
         await request(`/hosts/${b.id}/agents/same-id/messages`, "POST", {
           text: "uncertain",
           messageId: randomUUID(),
-          behavior: "steer",
+          behavior: "interrupt",
         })
       ).status,
       502,
@@ -256,7 +256,7 @@ test("two-host routing, permissions, uncertain sends, authentication and board p
         await request(`/hosts/${b.id}/agents/same-id/messages`, "POST", {
           text: "",
           messageId: "bad",
-          behavior: "steer",
+          behavior: "interrupt",
         })
       ).status,
       400,

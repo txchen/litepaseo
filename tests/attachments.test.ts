@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 
 function fakeHosts() {
   const hosts = new Hosts(), uploads: string[] = [], sends: any[] = [];
+  hosts.agents.set("h:a", { key: "h:a", hostId: "h", id: "a", status: "idle", turnActive: false } as any);
   let provider = "codex";
   const facts = new Map<string, unknown>();
   const agent = { refresh: async () => {}, current: () => ({ provider }), capabilities: { supportsToolInvocations: true },
@@ -87,7 +88,7 @@ test("BFF accepts attachment-only messages and forwards native images and upload
     const image = await app.request("/api/hosts/h/agents/a/attachments", { method: "POST", headers: { ...headers, "content-type": "image/png", "x-file-name": "pixel.png" }, body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZk0AAAAASUVORK5CYII=", "base64") });
     const img = await image.json();
     const messageId = randomUUID();
-    const sent = await app.request("/api/hosts/h/agents/a/messages", { method: "POST", headers, body: JSON.stringify({ text: "", messageId, behavior: "steer", attachmentIds: [file.id, img.id] }) });
+    const sent = await app.request("/api/hosts/h/agents/a/messages", { method: "POST", headers, body: JSON.stringify({ text: "", messageId, behavior: "send", attachmentIds: [file.id, img.id] }) });
     assert.equal(sent.status, 200);
     assert.deepEqual(fixture.uploads, ["HELLO_FILE"]);
     assert.equal(fixture.sends[0].options.messageId, messageId);
@@ -101,7 +102,7 @@ test("BFF accepts attachment-only messages and forwards native images and upload
     assert.equal(Buffer.from(await downloaded.arrayBuffer()).toString("base64"), fixture.sends[0].options.images[0].data);
     assert.equal((await app.request(url)).status, 401);
     assert.equal((await app.request(url.replace("/agents/a/", "/agents/other/"), { headers })).status, 404);
-    const retry = await app.request("/api/hosts/h/agents/a/messages", { method: "POST", headers, body: JSON.stringify({ text: "", messageId: randomUUID(), behavior: "steer", attachmentIds: [file.id] }) });
+    const retry = await app.request("/api/hosts/h/agents/a/messages", { method: "POST", headers, body: JSON.stringify({ text: "", messageId: randomUUID(), behavior: "send", attachmentIds: [file.id] }) });
     assert.equal(retry.status, 400);
     assert.equal((await retry.json()).delivery, "not-sent");
     assert.equal(fixture.sends.length, 1);

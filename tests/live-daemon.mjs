@@ -79,7 +79,7 @@ try {
     console.log('PASS BFF timeline stream');
   } finally { clearTimeout(timer); await reader.cancel(); }
 
-  const message = { messageId: randomUUID(), behavior: 'steer', text: 'Again without tools: reply exactly LITEPASEO_SECOND_OK.' };
+  const message = { messageId: randomUUID(), behavior: 'send', text: 'Again without tools: reply exactly LITEPASEO_SECOND_OK.' };
   await request(agentPath + '/messages', 'POST', message);
   await until(async () => (await tail()).entries.some(e => e.item.type === 'assistant_message' && e.item.text?.includes('LITEPASEO_SECOND_OK')), 'second answer');
   console.log('PASS message send');
@@ -102,14 +102,14 @@ try {
     const pixels = Buffer.alloc(64 * 193); for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) pixels[y * 193 + 1 + x * 3] = 255;
     const png = Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk('IHDR', header), chunk('IDAT', deflateSync(pixels)), chunk('IEND', Buffer.alloc(0))]);
     const imageId = await upload('red.png', 'image/png', png);
-    await request(agentPath + '/messages', 'POST', { messageId: randomUUID(), behavior: 'steer', attachmentIds: [fileId, imageId],
+    await request(agentPath + '/messages', 'POST', { messageId: randomUUID(), behavior: 'send', attachmentIds: [fileId, imageId],
       text: 'Integration test: read the attached text file using a tool, and inspect the attached image. Reply with the exact file contents and the dominant image color. Do not modify files or use other tools.' });
     await until(async () => (await tail()).entries.some(e => e.item.type === 'assistant_message' && e.item.text?.includes(marker) && /red/i.test(e.item.text)), 'real file and image contents');
     console.log('PASS real file contents and image vision');
   }
 
   if (process.env.LITEPASEO_TEST_QUESTIONS === '1') {
-    await request(agentPath + '/messages', 'POST', { messageId: randomUUID(), behavior: 'steer',
+    await request(agentPath + '/messages', 'POST', { messageId: randomUUID(), behavior: 'send',
       text: 'This is a question protocol test. Use request_user_input_async to ask exactly one question: Which strategy? Suggested options: Incremental, Rewrite. Do not use any other tools or inspect files. Wait for my answer. After receiving it, reply exactly LITEPASEO_QUESTION_OK.' });
     let permission;
     await until(() => {

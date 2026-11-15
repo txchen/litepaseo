@@ -1,3 +1,4 @@
+import { messageDeliveryModes } from "./message-delivery.ts";
 import { saveMessageImages, messageImage, withMessageImages } from "./message-images.ts";
 import { importProjectIcon, MAX_ICON_BYTES } from "./project-icon-import.ts";
 import { ServerSendQueue } from "./send-queue.ts";
@@ -867,10 +868,27 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
         text: z.string().trim().max(100000),
         attachmentIds: z.array(z.string().uuid()).max(4).refine(ids => new Set(ids).size === ids.length).default([]),
         messageId: z.string().uuid(),
-        behavior: z.enum(["steer", "interrupt"]),
+        behavior: z.enum(["send", "steer", "interrupt"]),
       })
       .refine(input => !!input.text || input.attachmentIds.length > 0)
       .parse(await c.req.json());
+    if (input.behavior === "steer") {
+      const provider = hosts.get(c.req.param("host")).directory.facts(c.req.param("agent"))?.provider;
+      if (!provider || !messageDeliveryModes(provider).includes("steer"))
+        return c.json({ error: "Steer is unavailable for this provider. Your message was not sent. Choose Queue or Interrupt.", delivery: "not-sent" }, 409);
+      const summary = hosts.agents.get(`${c.req.param("host")}:${c.req.param("agent")}`);
+      const active = summary && summary.status !== "initializing" &&
+        (summary.turnActive === true || (summary.turnActive === undefined && summary.status === "running"));
+      if (!active)
+        return c.json({ error: "There is no active turn to steer. Your message was not sent. Wait for the agent or send a new message.", delivery: "not-sent" }, 409);
+    }
+    if (input.behavior === "send") {
+      const summary = hosts.agents.get(`${c.req.param("host")}:${c.req.param("agent")}`);
+      const idle = summary && (summary.turnActive === false ||
+        (summary.turnActive === undefined && summary.status !== "running" && summary.status !== "initializing"));
+      if (!idle)
+        return c.json({ error: "The agent is no longer idle. Your message was not sent. Choose Queue or Interrupt.", delivery: "not-sent" }, 409);
+    }
     let prepared;
     try {
       prepared = await attachments.prepare(hosts, attachmentOwner(c), c.req.param("host"), c.req.param("agent"), input.attachmentIds);
@@ -881,7 +899,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
       await hosts
         .get(c.req.param("host"))
         .api.agents.ref(c.req.param("agent"))
-        .send(input.text, { messageId: input.messageId, activeTurnBehavior: input.behavior,
+        .send(input.text, { messageId: input.messageId, activeTurnBehavior: input.behavior === "send" ? "steer" : input.behavior,
           ...(prepared.images.length ? { images: prepared.images } : {}),
           ...(prepared.attachments.length ? { attachments: prepared.attachments } : {}),
         });

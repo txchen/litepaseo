@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.7
+
+- Default to Steer for supported providers and Queue otherwise; keep composer controls contained at narrow widths and increased zoom.
+- Offer separate Queue, native Steer, and Interrupt modes. Reject unsupported providers without sending and preserve drafts. Explain that the existing Paseo API may interrupt if native steering is unavailable at runtime; no daemon changes are included.
+
 ## 0.5.6
 
 - Align the pinned-project icon beside the project name, preserving a single compact row.

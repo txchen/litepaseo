@@ -1,6 +1,6 @@
 {
   "name": "litepaseo",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "description": "A resource-conscious web console for your Paseo agents",
   "bin": {
     "litepaseo": "dist/server/cli.mjs"
@@ -11,7 +11,8 @@
     "CHANGELOG.md",
     "docs/cloudflare-access.md",
     "docs/markstream-integration-validation.md",
-    "docs/performance-plan.md"
+    "docs/performance-plan.md",
+    "docs/provider-message-delivery.md"
   ],
   "type": "module",
   "scripts": {

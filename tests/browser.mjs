@@ -535,7 +535,7 @@ try {
   assert.deepEqual(messages[0].attachmentIds, [uploads[0].id]);
   assert.equal(uploads[0].text, "ATTACHMENT_CONTENT");
   assert.equal(await page.locator(".attachment-item").count(), 0);
-  assert.equal(messages[0].behavior, "steer");
+  assert.equal(messages[0].behavior, "send");
   // Composer: a pasted screenshot becomes an attachment; model controls switch the agent.
   await page.locator(".composer textarea").evaluate((el) => {
     const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));

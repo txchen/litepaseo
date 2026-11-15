@@ -1,3 +1,4 @@
+import { messageDeliveryModes } from "./message-delivery.ts";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
 import { deriveAgentStateBucket } from "@getpaseo/protocol/agent-state-bucket";
 import type { AgentState, AgentSummary, Permission, RewindMode, WorkspaceSummary } from "../shared/wire.ts";
@@ -340,6 +341,7 @@ export function summarize(
     status: agent.status,
     turnActive,
     provider: agent.provider,
+    deliveryModes: messageDeliveryModes(agent.provider),
     cwd: agent.cwd,
     project: project?.projectName || basename(agent.cwd) || "Other",
     projectKey: project?.projectKey ?? null,

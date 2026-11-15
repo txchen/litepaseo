@@ -277,3 +277,20 @@ test("elapsed time reads like Paseo's turn timer", async () => {
   assert.equal(formatElapsed(472_900), "7:52");
   assert.equal(formatElapsed(3_723_000), "1:02:03");
 });
+
+test("directory publishes adapter delivery modes and updates them when the provider changes", () => {
+  const { collection, fake, directory } = setup(true);
+  try {
+    fake.snapshot({
+      entries: [{ agent: agent("a", { provider: "claude" }), syncSeq: 1 }],
+      pageInfo: { hasMore: false, nextCursor: null },
+      sync: { generation: "g1", headSeq: 1, mode: "snapshot", removals: [] },
+    });
+    assert.deepEqual(collection.get("h1:a")?.deliveryModes, ["queue", "steer", "interrupt"]);
+    const cursor = collection.seq;
+    fake.update({ kind: "upsert", agent: agent("a", { provider: "cursor" }), generation: "g1", seq: 2 });
+    assert.deepEqual(collection.changesSince(cursor)?.[0].value?.deliveryModes, ["queue", "interrupt"]);
+    fake.update({ kind: "upsert", agent: agent("a", { provider: "custom-plugin" }), generation: "g1", seq: 3 });
+    assert.deepEqual(collection.get("h1:a")?.deliveryModes, ["queue", "interrupt"]);
+  } finally { directory.dispose(); }
+});

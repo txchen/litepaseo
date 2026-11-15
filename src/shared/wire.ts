@@ -32,6 +32,8 @@ export interface AgentSummary {
   status: string;
   turnActive?: boolean;
   provider: string;
+  /** Delivery options verified for the Paseo adapter; missing means no verified steering. */
+  deliveryModes?: MessageDeliveryMode[];
   cwd: string;
   /** Display name of the daemon's project placement (falls back to the cwd folder). */
   project: string;
@@ -57,6 +59,8 @@ export interface AgentSummary {
   /** How this agent's provider can rewind to an earlier message; empty when it cannot. */
   rewind?: RewindMode[];
 }
+
+export type MessageDeliveryMode = "queue" | "steer" | "interrupt";
 
 /** Rewind the conversation, the tracked files, or both, to just before a user message. */
 export type RewindMode = "conversation" | "files" | "both";

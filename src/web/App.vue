@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, provide, reactive, ref, shallowRef, watch } from "vue";
-import type { DirectoryMessage, HostState, Permission, TimelineMessage, TimelinePage, WorkspaceSummary } from "../shared/wire.ts";
+import type { DirectoryMessage, HostState, Permission, TimelineMessage, TimelinePage, WorkspaceSummary, MessageDeliveryMode } from "../shared/wire.ts";
 import { DirectoryStore, comparePinnedFirst } from "./directory-store.ts";
 import ThreadMenu from "./ThreadMenu.vue";
 import RenameThread from "./RenameThread.vue";
@@ -201,7 +201,7 @@ const hosts = shallowRef<HostState[]>([]),
   detailOpen = ref(false);
 const label = ref(""),
   connection = ref(""),
-  behavior = ref<"steer" | "interrupt">("steer"),
+  behavior = ref<MessageDeliveryMode>("steer"),
   tab = ref<Tab>("chat"),
   cardTitle = ref(""),
   /** The conversation a new task links to: chosen explicitly, none by default. */
@@ -412,6 +412,11 @@ const activeProject = computed(() => {
   return cwd.replace(/\/+$/, "").split("/").pop() || cwd;
 });
 const running = computed(() => active.value?.status === "running");
+const deliveryModes = computed<MessageDeliveryMode[]>(() => active.value?.deliveryModes ?? ["queue", "interrupt"]);
+const deliveryMode = computed(() => deliveryModes.value.includes(behavior.value) ? behavior.value : "queue");
+watch([() => active.value?.key, () => deliveryModes.value.includes("steer")], ([, canSteer]) => {
+  behavior.value = canSteer ? "steer" : "queue";
+}, { immediate: true });
 /** Live-tail working indicator above the composer, like Paseo's in-chat spinner. */
 const working = computed(() => !historyRows.value && active.value?.state === "running");
 // A 1 s clock runs only while the open agent works and the page is visible.
@@ -547,7 +552,7 @@ async function api(path: string, method = "GET", body?: unknown, timeoutMs = 200
   });
   const data = await response.json().catch(() => ({}));
   if (response.status === 401 && authenticated.value && path !== "/login") signOut("ended");
-  if (!response.ok) throw Object.assign(new Error((data.error ?? "Request failed") + (data.requestId ? ` (reference ${data.requestId})` : "")), { delivery: data.delivery, code: data.code, scope: data.scope });
+  if (!response.ok) throw Object.assign(new Error((data.error ?? "Request failed") + (data.requestId ? ` (reference ${data.requestId})` : "")), { status: response.status, delivery: data.delivery, code: data.code, scope: data.scope });
   return data;
 }
 async function action(fn: () => Promise<void>) {
@@ -1055,7 +1060,9 @@ const composerSuggestion = computed(() =>
 const composerPlaceholder = computed(() => {
   if (composerSuggestion.value && !coarsePointer) return composerSuggestion.value;
   if (!running.value) return "Message this agent…";
-  return behavior.value === "steer" ? "Queue a message for when this turn ends" : "Interrupt and send a new message";
+  return deliveryMode.value === "queue" ? "Queue a message for when this turn ends"
+    : deliveryMode.value === "steer" ? "Guide the current turn with a new instruction"
+    : "Interrupt and send a new message";
 });
 
 // Usage across hosts, read while the app is visible (the server caches each host for 5 min).
@@ -1413,7 +1420,7 @@ async function sendText(text: string, fromComposer = false) {
   if (!a || (!text.trim() && (!fromComposer || !selectedAttachments.value.length)) || uncertain.value || busy.value || (fromComposer && !attachmentsReady.value)) return;
   // Queue mode: while a turn runs the message waits above the composer instead of entering
   // the conversation; it goes when the turn ends, or at once if the reader chooses to interrupt.
-  if (behavior.value === "steer" && (!turnIdle(a) || queued.value.length > 0)) {
+  if (deliveryMode.value === "queue" && (!turnIdle(a) || queued.value.length > 0)) {
     const selected = fromComposer ? [...selectedAttachments.value] : [];
     await action(async () => {
       const attachmentIds = selected.map(e => e.id!);
@@ -1433,10 +1440,10 @@ async function sendText(text: string, fromComposer = false) {
   }
   const selected = fromComposer ? [...selectedAttachments.value] : [];
   if (fromComposer) composer.setText(a.key, "");
-  await deliver(a, text, selected, behavior.value, { restore: fromComposer });
+  await deliver(a, text, selected, turnIdle(a) || deliveryMode.value === "queue" ? "send" : deliveryMode.value, { restore: fromComposer });
 }
 /** Sends immediately; uncertain outcomes remain in the delivery check. */
-async function deliver(a: AgentSummary, text: string, selected: LocalAttachment[], mode: "steer" | "interrupt",
+async function deliver(a: AgentSummary, text: string, selected: LocalAttachment[], mode: "send" | "steer" | "interrupt",
   { restore }: { restore: boolean }) {
   const state = composer.state(a.key);
   const generation = composer.generation;
@@ -1459,7 +1466,8 @@ async function deliver(a: AgentSummary, text: string, selected: LocalAttachment[
       const notSent = (e as { delivery?: string }).delivery === "not-sent";
       if (notSent) {
         composer.resolve(a.key, sent.messageId);
-        for (const entry of selected) entry.error = "Not sent. Retry the upload or remove this attachment.";
+        if ((e as { status?: number }).status !== 409)
+          for (const entry of selected) entry.error = "Not sent. Retry the upload or remove this attachment.";
       }
       if (restore && !state.text) {
         composer.restoreFailed(a.key, sent);
@@ -2237,17 +2245,16 @@ onUnmounted(() => {
                   @notice="showComposerNotice"
                 />
                 <div class="composer-actions">
-                  <button
-                    v-if="running"
-                    type="button"
-                    class="chip-behavior"
-                    :class="'is-' + behavior"
-                    :aria-label="behavior === 'steer' ? 'Queue: your message waits until the running turn ends (click for interrupt)' : 'Interrupt: your message stops the running turn (click for queue)'"
-                    :title="behavior === 'steer' ? 'Queue: your message waits above the composer and is sent when the running turn ends' : 'Interrupt: your message stops the running turn and starts a new one'"
-                    @click="behavior = behavior === 'steer' ? 'interrupt' : 'steer'"
-                  >
-                    {{ behavior === "steer" ? "Queue" : "Interrupt" }}
-                  </button>
+                  <label v-if="running" class="chip-behavior" :class="'is-' + behavior"
+                    :title="behavior === 'queue' ? 'Queue: send when the current turn ends' : behavior === 'steer' ? 'Steer: send instructions into the current turn; Paseo may interrupt if steering is unavailable' : 'Interrupt: stop the current turn and start a new one'">
+                    <span>{{ behavior === 'queue' ? 'Queue' : behavior === 'steer' ? 'Steer' : 'Interrupt' }}</span>
+                    <Icon name="chevron" :size="11" class="behavior-caret" />
+                    <select v-model="behavior" aria-label="Message delivery mode">
+                      <option value="queue">Queue</option>
+                      <option v-if="deliveryModes.includes('steer')" value="steer">Steer</option>
+                      <option value="interrupt">Interrupt</option>
+                    </select>
+                  </label>
                   <DictationButton
                     v-if="dictationReady"
                     :key="active.key"

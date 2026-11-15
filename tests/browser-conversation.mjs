@@ -46,12 +46,12 @@ try {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
 
-  let status = "running", seq = 1, diffFailure = false;
+  let status = "running", seq = 1, diffFailure = false, provider = "claude", rejectNextSend = false;
   const queue = [];
   const messages = [], pages = [], rewinds = [];
   const agent = () => ({
     key: "alpha:a1", hostId: "alpha", id: "a1", workspaceId: "w1", title: "Long conversation",
-    status, turnActive: status === "running", provider: "claude", model: "claude-opus-5-5", rewind: ["conversation", "files", "both"],
+    status, turnActive: status === "running", provider, deliveryModes: provider === "claude" ? ["queue", "steer", "interrupt"] : ["queue", "interrupt"], model: "claude-opus-5-5", rewind: ["conversation", "files", "both"],
     cwd: "/code/app", project: "app", projectKey: null,
     activityAt: 1, attention: false, state: status === "running" ? "running" : "done", unread: false,
     lastError: null, pendingPermissions: [],
@@ -115,6 +115,10 @@ try {
     if (p.endsWith("/search")) return route.fulfill({ json: { epoch: "e1", locations: [{ seq: url.searchParams.has("cursor") ? 21 : 301, role: "user", count: 1 }], nextCursor: url.searchParams.has("cursor") ? null : 42 } });
     if (p.endsWith("/messages/status")) return route.fulfill({ json: { confirmed: [] } });
     if (p.endsWith("/messages")) {
+      if (rejectNextSend) {
+        rejectNextSend = false;
+        return route.fulfill({ status: 409, json: { error: "Message not sent. Choose Queue or Interrupt.", delivery: "not-sent" } });
+      }
       messages.push(route.request().postDataJSON());
       return route.fulfill({ json: { status: "acknowledged" } });
     }
@@ -158,7 +162,66 @@ try {
 
   // 2. Queue mode while running: the message waits above the composer, not in the conversation.
   const textarea = page.locator(".composer textarea");
-  await page.getByRole("button", { name: /^Queue:/ }).waitFor();
+  const deliveryMode = page.getByRole("combobox", { name: "Message delivery mode" });
+  await deliveryMode.waitFor();
+  assert.equal(await deliveryMode.inputValue(), "steer", "native steering is the default");
+  await deliveryMode.selectOption("queue");
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await page.waitForTimeout(300);
+  assert.equal(await deliveryMode.inputValue(), "queue", "refresh preserves the explicit choice");
+  for (const width of [1280, 768, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const mode of ["queue", "steer", "interrupt"]) {
+      await deliveryMode.selectOption(mode);
+      await textarea.fill("layout check");
+      const boxes = await page.locator(".composer").evaluate(form => {
+        const box = el => { const r = el.getBoundingClientRect(); return { x: r.x, right: r.right, width: r.width }; };
+        return { form: box(form), mode: box(form.querySelector('.chip-behavior')), buttons: [...form.querySelectorAll('.composer-actions button')].map(box) };
+      });
+      assert.ok(boxes.mode.width < 110, `${width}/${mode}: compact mode control`);
+      for (const button of boxes.buttons) {
+        assert.ok(button.x >= boxes.form.x && button.right <= boxes.form.right, `${width}/${mode}: button stays inside composer`);
+        assert.ok(button.width >= 28, `${width}/${mode}: button is not squeezed`);
+      }
+    }
+    await textarea.fill("");
+    await deliveryMode.selectOption("queue");
+    if (width !== 768) await page.locator(".composer").screenshot({ path: `/tmp/litepaseo-composer-${width}.png` });
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  // Stress the action row with voice/cancel-sized controls, long labels and zoom.
+  await page.locator('.composer-actions').evaluate(actions => {
+    for (let i = 0; i < 3; i++) {
+      const button = document.createElement('button');
+      button.className = 'disc layout-fixture';
+      button.type = 'button';
+      button.textContent = '●';
+      actions.append(button);
+    }
+  });
+  for (const width of [1280, 320, 280]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const zoom of [1, 1.5, 2]) {
+      await page.evaluate(zoom => { document.body.style.zoom = String(zoom); }, zoom);
+      await textarea.fill('a very long unbroken input '.repeat(100));
+      await page.locator('.chip-behavior > span').evaluate(el => { el.textContent = 'A very long translated delivery mode label'; });
+      const overflow = await page.locator('.composer').evaluate(form => {
+        const bounds = form.getBoundingClientRect();
+        const controls = form.querySelectorAll('.composer-actions > *, .composer-tool, .agent-controls, textarea');
+        return [...controls].filter(el => {
+          const r = el.getBoundingClientRect();
+          return r.left < bounds.left - 1 || r.right > bounds.right + 1 || r.top < bounds.top - 1 || r.bottom > bounds.bottom + 1;
+        }).map(el => el.className);
+      });
+      assert.deepEqual(overflow, [], `${width}px at ${zoom} zoom: all controls stay inside composer`);
+    }
+  }
+  await page.evaluate(() => { document.body.style.zoom = ''; document.querySelectorAll('.layout-fixture').forEach(el => el.remove()); });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await deliveryMode.selectOption('interrupt');
+  await deliveryMode.selectOption('queue');
+
   await textarea.fill("first queued");
   await textarea.press("Enter");
   await page.locator(".queue-item", { hasText: "first queued" }).waitFor();
@@ -181,13 +244,48 @@ try {
   await page.locator(".queue-item", { hasText: "first queued" }).getByRole("button", { name: "Interrupt" }).click();
   await page.waitForFunction(() => document.querySelectorAll(".queue-item").length === 1);
   assert.deepEqual(messages.map((m) => [m.text, m.behavior]), [["first queued", "interrupt"]]);
+  // Explicit Interrupt bypasses the queue and preserves its remaining message.
+  for (const mode of ["steer", "interrupt"]) {
+    await deliveryMode.selectOption(mode);
+    await textarea.fill(`direct ${mode}`);
+    const sent = page.waitForResponse(response => response.url().endsWith("/messages") && response.request().method() === "POST");
+    await textarea.press("Enter");
+    await sent;
+    await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === "" && !document.querySelector('.composer textarea')?.disabled);
+    assert.equal(messages.at(-1).text, `direct ${mode}`);
+    assert.equal(messages.at(-1).behavior, mode);
+    assert.equal(queue.length, 1);
+    assert.equal(await page.locator(".queue-item").count(), 1);
+  }
+  await deliveryMode.selectOption("steer");
+  assert.match(await page.locator(".chip-behavior").getAttribute("title"), /Paseo may interrupt/);
+  provider = "cursor";
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await page.waitForFunction(() => !document.querySelector('select[aria-label="Message delivery mode"] option[value="steer"]'));
+  assert.equal(await deliveryMode.inputValue(), "queue");
+  provider = "claude";
+  await deliveryMode.selectOption("queue");
   // The turn ends: the remaining message goes by itself.
   status = "idle";
   messages.push({ ...queue.shift(), behavior: "steer" }); // BFF owns dispatch; browser only reads the result.
   // Mocked streams end after their events; reconnect now, as a tab that becomes visible does.
   await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await page.waitForFunction(() => !document.querySelector(".queue-item"), null, { timeout: 10000 });
-  assert.deepEqual(messages.map((m) => m.text), ["first queued", "after the turn"]);
+  assert.deepEqual(messages.map((m) => m.text), ["first queued", "direct steer", "direct interrupt", "after the turn"]);
+
+  // A definite rejection restores the draft and never retries in another mode.
+  rejectNextSend = true;
+  await textarea.fill("keep my instruction");
+  const rejected = page.waitForResponse(response => response.url().endsWith("/messages") && response.status() === 409);
+  await textarea.press("Enter");
+  await rejected;
+  await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === "keep my instruction");
+  await page.getByText("Message not sent. Choose Queue or Interrupt.", { exact: false }).waitFor();
+  assert.equal(messages.length, 4);
+  assert.equal(queue.length, 0);
+  assert.equal(await page.locator(".uncertain").count(), 0);
+  await page.locator(".toast button").click();
+  await textarea.fill("");
 
   await page.getByRole("button", { name: "Changes", exact: true }).first().click();
   assert.equal(await page.locator('.changes-panel pre').count(), 0, 'collapsed diffs do not render their hunks');

@@ -46,6 +46,7 @@ package, with no separate database service to deploy.
 - Pin projects from their ⋮ menu to keep important repositories at the top of the Projects sidebar. Pins follow pin order and sync across devices; Unpin restores activity ordering.
 - Create sessions, choose a provider/model, send messages, stop turns, and answer
   permission requests or structured questions.
+- Choose Queue to wait for the current turn or Interrupt to stop it and send a new message. Native Claude, Codex, OpenCode, Pi and OMP adapters also offer Steer. Paseo may interrupt if native steering is unavailable at runtime; Litepaseo cannot suppress that fallback through the current API. See [provider support](docs/provider-message-delivery.md).
 - Queue messages on the server while an agent works; they continue after you close the browser
   and survive server restarts. Edit, drop or send one at once as an
   interrupt; rewind a conversation (and, where the provider supports it, its files)

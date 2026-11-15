@@ -9,7 +9,7 @@ import { Hosts } from "../src/server/hosts.ts";
 import { createApp } from "../src/server/app.ts";
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
-function fixture() {
+function fixture(provider = "codex") {
   const dir = mkdtempSync(join(tmpdir(), "lp-queue-")), store = new Store(dir), hosts = new Hosts();
   const sends: any[] = [];
   let connected = true, fail = false;
@@ -17,10 +17,10 @@ function fixture() {
   const listeners = new Set<() => void>();
   hosts.onAgentsChanged = listener => { listeners.add(listener); return () => listeners.delete(listener); };
   const update = (running: boolean) => {
-    hosts.agents.set("h:a", { key: "h:a", hostId: "h", id: "a", status: running ? "running" : "idle", turnActive: running, activityAt: 0 } as any);
+    hosts.agents.set("h:a", { key: "h:a", hostId: "h", id: "a", status: running ? "running" : "idle", turnActive: running, activityAt: 0, provider } as any);
     for (const listener of listeners) listener();
   };
-  hosts.clients.set("h", { directory: { facts: () => ({ provider: "codex", capabilities: { supportsImages: true } }) },
+  hosts.clients.set("h", { directory: { facts: () => ({ provider, capabilities: { supportsImages: true } }) },
     driver: { getConnectionState: () => ({ status: connected ? "connected" : "disconnected" }) },
     api: { agents: { ref: () => ({ send: async (text: string, options: any) => {
       sends.push({ text, options });
@@ -230,5 +230,63 @@ test("queued images remain readable after delivery and BFF restart", async () =>
     const response = await f.request(`message-images/${id}/0`);
     assert.equal(response.status, 200);
     assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
+  } finally { f.close(); }
+});
+
+
+test("unsupported running steering is rejected before send; queue, interrupt and idle sends remain available", async () => {
+  for (const provider of ["copilot", "cursor", "custom-acp"]) {
+    const f = fixture(provider);
+    try {
+      const send = (behavior: string) => f.request("messages", "POST", { text: "instruction", messageId: randomUUID(), behavior });
+      const rejected = await send("steer");
+      assert.equal(rejected.status, 409, provider);
+      assert.equal((await rejected.json()).delivery, "not-sent");
+      assert.equal(f.sends.length, 0);
+      assert.equal((await send("interrupt")).status, 200);
+      assert.equal(f.sends[0].options.activeTurnBehavior, "interrupt");
+      assert.equal((await f.enqueue("later")).status, 201);
+      assert.equal(f.sends.length, 1, "queue waits for the current turn");
+      f.update(false); await settle();
+      assert.equal(f.sends[1].text, "later");
+      assert.equal((await send("send")).status, 200, "idle sends start a normal turn");
+    } finally { f.close(); }
+  }
+});
+
+test("native adapters forward steering without selecting another mode locally", async () => {
+  for (const provider of ["claude", "codex", "opencode", "pi", "omp"]) {
+    const f = fixture(provider);
+    try {
+      const response = await f.request("messages", "POST", { text: "instruction", messageId: randomUUID(), behavior: "steer" });
+      assert.equal(response.status, 200);
+      assert.equal(f.sends[0].options.activeTurnBehavior, "steer");
+    } finally { f.close(); }
+  }
+});
+
+
+test("ordinary sends reject a busy agent without dispatching or selecting another mode", async () => {
+  const f = fixture("codex");
+  try {
+    const response = await f.request("messages", "POST", { text: "keep this draft", messageId: randomUUID(), behavior: "send" });
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).delivery, "not-sent");
+    assert.equal(f.sends.length, 0);
+    assert.equal((await (await f.request("queue")).json()).length, 0);
+  } finally { f.close(); }
+});
+
+
+test("steering rejects idle, initializing and unknown turn states without dispatch", async () => {
+  const f = fixture("codex");
+  try {
+    for (const state of [{ status: "idle", turnActive: false }, { status: "initializing", turnActive: true }, { status: "idle" }]) {
+      f.hosts.agents.set("h:a", { key: "h:a", hostId: "h", id: "a", provider: "codex", ...state } as any);
+      const response = await f.request("messages", "POST", { text: "instruction", messageId: randomUUID(), behavior: "steer" });
+      assert.equal(response.status, 409);
+      assert.equal((await response.json()).delivery, "not-sent");
+      assert.equal(f.sends.length, 0);
+    }
   } finally { f.close(); }
 });

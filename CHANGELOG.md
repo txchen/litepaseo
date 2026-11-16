@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.3
+
+- Suppress conversation push notifications across devices while a foreground browser is viewing that conversation; expire disconnected viewers automatically.
+
 ## 0.6.2
 
 - Trigger automatic history paging from touch gestures at scroll boundaries, including short windows; reset paging intent when switching conversations.

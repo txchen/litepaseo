@@ -58,7 +58,7 @@ export function webPushSender(store: Store, subject: string): PushSender {
 export class Notifier {
   private readonly store: Store;
   private readonly sender: PushSender;
-  private readonly isViewing: (key: string, sessionId: string) => boolean;
+  private readonly isViewing: (key: string) => boolean;
   private readonly hostLabel: (hostId: string) => string;
   private readonly waiting = new Set<string>();
   private readonly recent = new Map<string, number>();
@@ -68,7 +68,7 @@ export class Notifier {
   constructor(options: {
     store: Store;
     sender: PushSender;
-    isViewing: (key: string, sessionId: string) => boolean;
+    isViewing: (key: string) => boolean;
     hostLabel: (hostId: string) => string;
     now?: () => number;
     replyPreview?: (agent: AgentSummary, previous: AgentSummary) => Promise<string | null>;
@@ -140,7 +140,7 @@ export class Notifier {
     this.recent.set(dedupeKey, now);
     if (this.recent.size > 5000) this.recent.clear();
     const pref: keyof PushPrefs = kind === "attention" ? "attention" : "turns";
-    const subscriptions = this.store.pushSubscriptions().filter(s => s.prefs[pref] && !this.isViewing(agent.key, s.sessionId));
+    const subscriptions = this.store.pushSubscriptions().filter(s => s.prefs[pref] && !this.isViewing(agent.key));
     if (!subscriptions.length) return;
     if (previous && this.replyPreview) {
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -162,7 +162,7 @@ export class Notifier {
       badge: this.waiting.size,
     };
     for (const subscription of subscriptions)
-      if (!this.isViewing(agent.key, subscription.sessionId))
+      if (!this.isViewing(agent.key))
         void this.deliver(subscription, message);
   }
 

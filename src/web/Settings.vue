@@ -300,7 +300,7 @@ onMounted(() => {
             <input v-model="prefs.turns" class="switch" type="checkbox" :disabled="pushBusy" @change="savePrefs" />
           </label>
           <div class="card-row">
-            <div class="grow row-sub">Not sent while you are viewing that conversation.</div>
+            <div class="grow row-sub">Not sent while you are viewing that conversation on any device.</div>
             <button class="btn btn-outline" :disabled="pushBusy" @click="test">Send a test</button>
           </div>
         </template>

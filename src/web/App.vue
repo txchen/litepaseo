@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { trackViewingPresence } from "./viewing-presence.ts";
 import { computed, nextTick, onUnmounted, provide, reactive, ref, shallowRef, watch } from "vue";
 import type { DirectoryMessage, HostState, Permission, TimelineMessage, TimelinePage, WorkspaceSummary, MessageDeliveryMode } from "../shared/wire.ts";
 import { DirectoryStore, comparePinnedFirst } from "./directory-store.ts";
@@ -1639,6 +1640,10 @@ function openTab(next: Tab) {
   if (next !== "chat" || selectedKey.value) openDetail();
   else closeDetail();
 }
+
+trackViewingPresence(() => authenticated.value && tab.value === "chat" &&
+  (!compact.matches || detailOpen.value) && !activeFile.value && !terminalActive.value
+  ? active.value?.key ?? null : null, () => authenticated.value);
 
 void loadAuth();
 // Waiting sessions show on the app icon and in the tab title.

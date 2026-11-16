@@ -98,7 +98,7 @@ test("cookie sign-in, CSRF header, revocation, and a daemon update becoming a pu
     assert.equal((await call("/push/subscribe", { ...subscribe, csrf: true })).status, 200);
     assert.match((await (await call("/push/key", { cookie })).json()).publicKey, /^[\w-]{80,}$/);
 
-    // A second signed-in browser viewing this conversation must not suppress this device.
+    // A timeline subscription alone does not mean the conversation is visible.
     const otherLogin = await call("/login", { method: "POST", body: { token: "test-token" } });
     const otherCookie = otherLogin.headers.get("set-cookie")!.split(";")[0];
     const otherSubscribe = { ...subscribe, cookie: otherCookie, csrf: true,
@@ -120,23 +120,40 @@ test("cookie sign-in, CSRF header, revocation, and a daemon update becoming a pu
       },
     });
     await new Promise((r) => setImmediate(r));
-    assert.equal(pushes.length, 1);
+    assert.equal(pushes.length, 2);
     assert.equal(pushes[0].endpoint, subscription.endpoint);
     assert.equal(pushes[0].payload.title, "litepaseo · needs your input");
     assert.equal(pushes[0].payload.url, `/?session=${encodeURIComponent(host.id + ":a1")}`);
     assert.equal((await (await call("/health", { cookie })).json()).waiting, 1);
 
     await desktopStream.body!.cancel();
-    await call("/logout", { method: "POST", cookie: otherCookie, csrf: true });
-
-    // The turn ends: a second push.
-    // Paseo flags a finished turn for attention ("finished"); that is a turn-end, not a request for input.
+    pushes.length = 0;
+    // A desktop without push enrollment can quiet every device.
+    store.removePushSubscription("https://push.example/desktop");
+    const presence = { method: "PUT", cookie: otherCookie,
+      body: { tab: "82ef3b61-c044-4626-968d-f3ec6f386775", seq: 1, key: host.id + ":a1" } };
+    assert.equal((await call("/presence", presence)).status, 403);
+    assert.equal((await call("/presence", { ...presence, csrf: true })).status, 200);
     observer.update({
       type: "agent_update",
-      payload: { kind: "upsert", agent: agent({ status: "idle", requiresAttention: true, attentionReason: "finished" }), generation: "g", seq: 3 },
+      payload: { kind: "upsert", agent: agent({ status: "idle" }), generation: "g", seq: 3 },
+    });
+    await new Promise(r => setImmediate(r));
+    assert.equal(pushes.length, 0, "desktop presence suppresses the phone too");
+    // Revoking the viewing browser must release its quiet lease immediately.
+    await call("/logout", { method: "POST", cookie: otherCookie, csrf: true });
+
+    // The next turn fails after signing out the viewer: the phone receives it.
+    observer.update({
+      type: "agent_update",
+      payload: { kind: "upsert", agent: agent(), generation: "g", seq: 4 },
+    });
+    observer.update({
+      type: "agent_update",
+      payload: { kind: "upsert", agent: agent({ status: "error", lastError: "failed" }), generation: "g", seq: 5 },
     });
     await new Promise((r) => setImmediate(r));
-    assert.deepEqual(pushes.map((p) => p.payload.title), ["litepaseo · needs your input", "litepaseo · turn finished"]);
+    assert.deepEqual(pushes.map((p) => p.payload.title), ["litepaseo · turn failed"]);
     assert.equal((await (await call("/health", { cookie })).json()).waiting, 0, "an unread finished turn is not waiting for input");
 
     // Devices and revocation: signing out the session removes its push subscription too.

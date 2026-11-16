@@ -133,10 +133,32 @@ try {
     const [width,height] = shape === 'tall' ? [600,2400] : shape === 'wide' ? [2400,400] : [1600,1600];
     return route.fulfill({contentType:'image/svg+xml',body:`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#408080"/><text x="20" y="40">Top</text><text x="20" y="${height-20}">Bottom</text></svg>`});
   });
+  const presenceReports = [];
+  await page.route("**/api/presence", async route => {
+    presenceReports.push(route.request().postDataJSON());
+    await route.continue();
+  });
   await page.goto(`http://127.0.0.1:${port}`);
   await page.getByLabel("Server access token").fill(readFileSync(join(directory, "token"), "utf8"));
   await page.getByRole("button", { name: "Connect", exact: true }).click();
+  const initialPresence = page.waitForResponse(response => response.url().endsWith("/api/presence") && response.ok());
   await page.locator("button.session", { hasText: "Long conversation" }).click();
+
+  // Foreground viewing is reported independently of the open timeline stream.
+  await initialPresence;
+  assert.equal(presenceReports.at(-1).key, "alpha:a1");
+  const hiddenReport = page.waitForRequest(request => request.url().endsWith("/api/presence") && request.postDataJSON().key === null);
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await hiddenReport;
+  const foregroundReport = page.waitForRequest(request => request.url().endsWith("/api/presence") && request.postDataJSON().key === "alpha:a1");
+  await page.evaluate(() => {
+    delete document.hidden;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await foregroundReport;
 
   // 1. Code blocks are highlighted (highlight.js token spans inside the Markstream message).
   const code = page.locator(".markstream-vue pre.code[data-language=ts]");

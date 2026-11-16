@@ -111,6 +111,12 @@ responses (SSE) without buffering.
 
 ### Phone app & notifications
 
+When any foreground browser is viewing a conversation, notifications for that
+conversation are suppressed on every device connected to the same LitePaseo
+instance. Switching away restores notifications for new events; suppressed events
+are not replayed. Disconnected browsers stop suppressing within 45 seconds.
+
+
 Open your HTTPS address and install from the browser's menu. On iPhone/iPad,
 use Safari → Share → **Add to Home Screen**, then open the installed app to enable
 push notifications. Turn them on in **Settings → Notifications** to hear when an

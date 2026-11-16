@@ -1,3 +1,4 @@
+import { ViewingPresence } from "./viewing-presence.ts";
 import { registerHostSettings } from "./host-settings.ts";
 import { messageDeliveryModes } from "./message-delivery.ts";
 import { saveMessageImages, messageImage, withMessageImages } from "./message-images.ts";
@@ -112,11 +113,11 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
   const attachments = new Attachments();
   const sendQueue = new ServerSendQueue(store, hosts);
   const projectIcons = new IconCache();
-  const viewers = new Map<string, Map<string, number>>();
+  const presence = new ViewingPresence(id => (store.sessionById(id)?.expires ?? 0) > Date.now());
   const notifier = new Notifier({
     store,
     sender: options.pushSender ?? webPushSender(store, options.pushSubject ?? "mailto:litepaseo@example.com"),
-    isViewing: (key, sessionId) => (viewers.get(key)?.get(sessionId) ?? 0) > 0,
+    isViewing: key => presence.isViewing(key),
     replyPreview: (agent, previous) => notificationPreview(hosts.get(agent.hostId).driver, agent.id, previous.turnStartedAt, agent.attention ? undefined : agent.activityAt),
     hostLabel: (id) => hosts.label(id) || store.hosts().find((h) => h.id === id)?.label || "",
   });
@@ -400,6 +401,13 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     for (const stream of directoryStreams) stream.send({ type: "project-pins", pins });
     return c.json(pins);
   });
+  app.put("/api/presence", async c => {
+    const session = c.get("session");
+    if (!session) return c.json({ error: "Browser sign-in required" }, 403);
+    const input = z.object({ tab: z.string().uuid(), seq: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), key: z.string().min(1).max(1024).nullable() }).strict().parse(await c.req.json());
+    presence.update(session.id, input.tab, input.seq, input.key);
+    return c.json({ ok: true });
+  });
   app.get("/api/instance", c => c.json({ name: instanceName() }));
   app.put("/api/instance", async c => {
     const input = z.object({ name: z.string().trim().max(64).refine(name => !/[\u0000-\u001f\u007f]/.test(name), "Use a single-line name") }).strict().safeParse(await c.req.json());
@@ -548,28 +556,12 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
   app.get("/api/hosts/:host/agents/:agent/timeline/stream", (c) => {
     hosts.get(c.req.param("host"));
     return eventStream(c.req.raw.signal, (send) => {
-      const sessionId = c.get("session")?.id;
-      const key = `${c.req.param("host")}:${c.req.param("agent")}`;
       const stop = hosts.watchTimeline(c.req.param("host"), c.req.param("agent"), (ops) =>
         send({ type: "ops", ops: ops.map(op => {
           const enrich = (row: import("../shared/wire.ts").TimelineRow) => ({ ...row, item: withMessageImages(store, c.req.param("host"), c.req.param("agent"), row.item) });
           return op.type === "reset" ? { ...op, rows: op.rows.map(enrich) } : op.type === "upsert" ? { ...op, row: enrich(op.row) } : op;
         }) } satisfies TimelineMessage));
-      if (sessionId) {
-        let devices = viewers.get(key);
-        if (!devices) viewers.set(key, devices = new Map());
-        devices.set(sessionId, (devices.get(sessionId) ?? 0) + 1);
-      }
-      return () => {
-        stop();
-        const devices = viewers.get(key);
-        if (sessionId && devices) {
-          const count = (devices.get(sessionId) ?? 1) - 1;
-          if (count) devices.set(sessionId, count);
-          else devices.delete(sessionId);
-          if (!devices.size) viewers.delete(key);
-        }
-      };
+      return stop;
     }, streamValidity(c));
   });
   app.get("/api/hosts/:host/agents/:agent/message-images/:message/:index", (c) => {

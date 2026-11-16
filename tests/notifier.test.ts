@@ -44,7 +44,7 @@ function setup(replyPreview?: (agent: AgentSummary, previous: AgentSummary) => P
         sent.push({ endpoint: subscription.endpoint, message: JSON.parse(payload) });
       },
     },
-    isViewing: (_key, sessionId) => viewing && sessionId === "s1",
+    isViewing: () => viewing,
     hostLabel: () => "MacBook",
     now: () => now,
   });
@@ -136,7 +136,7 @@ test("failed turns, dedupe, stale ends, viewing suppression and dead subscriptio
 });
 
 
-test("viewing suppresses only that device; expired devices cannot receive pushes", async () => {
+test("viewing suppresses all devices; expired devices cannot receive pushes", async () => {
   const t = setup();
   try {
     t.subscribe("https://push.example/desktop");
@@ -145,12 +145,13 @@ test("viewing suppresses only that device; expired devices cannot receive pushes
     t.view(true);
     t.notifier.transition(summary(), summary({ attention: true }));
     await t.settle();
-    assert.deepEqual(t.sent.map(s => s.endpoint), ["https://push.example/phone"]);
+    assert.equal(t.sent.length, 0);
+    t.view(false);
     t.sent.length = 0;
     t.tick(20_000);
     t.notifier.transition(summary(), summary({ attention: true }));
     await t.settle();
-    assert.equal(t.sent.length, 0);
+    assert.deepEqual(t.sent.map(s => s.endpoint), ["https://push.example/desktop"]);
     assert.deepEqual(t.store.pushSubscriptions().map(s => s.sessionId), ["s1"]);
   } finally { t.cleanup(); }
 });
@@ -190,5 +191,19 @@ test("failed turns show their error and viewing suppression avoids timeline read
     t.notifier.transition(summary({ status: "running" }), summary());
     await t.settle();
     assert.equal(reads, 0);
+  } finally { t.cleanup(); }
+});
+
+
+test("viewing is rechecked after preparing the reply preview", async () => {
+  let finish!: (value: string) => void;
+  const t = setup(() => new Promise(resolve => { finish = resolve; }));
+  try {
+    t.subscribe("https://push.example/phone");
+    t.notifier.transition(summary({ status: "running" }), summary());
+    t.view(true);
+    finish("Finished");
+    await t.settle();
+    assert.equal(t.sent.length, 0);
   } finally { t.cleanup(); }
 });

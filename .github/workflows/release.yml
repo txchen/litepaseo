@@ -70,6 +70,10 @@ jobs:
       - if: steps.version.outputs.published != 'true'
         run: npm run typecheck
 
+      # The CLI lifecycle tests run the built dist/server/cli.mjs.
+      - if: steps.version.outputs.published != 'true'
+        run: npm run build
+
       - if: steps.version.outputs.published != 'true'
         run: npm test
 

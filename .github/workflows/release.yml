@@ -49,13 +49,16 @@ jobs:
 
       - name: Check the tag matches package.json
         id: version
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           version=$(node -p "require('./package.json').version")
           if [ "$TAG" != "v$version" ]; then
             echo "::error::Tag $TAG does not match package.json version $version (expected v$version)."
             exit 1
           fi
-          if npm view "litepaseo@$version" version >/dev/null 2>&1; then
+          # A dry run still builds and tests an already published version.
+          if [ "$DRY_RUN" != "true" ] && npm view "litepaseo@$version" version >/dev/null 2>&1; then
             echo "::notice::litepaseo@$version is already on npm; nothing to publish."
             echo "published=true" >> "$GITHUB_OUTPUT"
           fi

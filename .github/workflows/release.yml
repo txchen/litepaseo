@@ -64,6 +64,25 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      # Dry runs also check that npmjs.com trusts this workflow: the same OIDC exchange npm
+      # publish performs, without publishing. The short-lived npm token is never printed.
+      - name: Check npm Trusted Publishing
+        if: inputs.dry_run
+        run: |
+          id_token=$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=npm:registry.npmjs.org" | jq -r .value)
+          echo "::add-mask::$id_token"
+          status=$(curl -sS -o exchange.json -w '%{http_code}' -X POST -H "Authorization: Bearer $id_token" \
+            https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/litepaseo)
+          if [ "${status:0:1}" = 2 ] && jq -e '.token | length > 0' exchange.json >/dev/null; then
+            echo "npm Trusted Publishing accepts this workflow."
+            rm -f exchange.json
+          else
+            echo "::error::npm rejected the OIDC exchange (HTTP $status): $(jq -r '.message // .error // empty' exchange.json 2>/dev/null)"
+            rm -f exchange.json
+            exit 1
+          fi
+
       - if: steps.version.outputs.published != 'true'
         run: npm ci
 

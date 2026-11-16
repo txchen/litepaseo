@@ -251,7 +251,8 @@ export class TimelineView {
         direction: "tail",
         limit: TAIL_LIMIT,
         projection: "projected",
-        wholeTurns: true,
+        // A single tool-heavy turn can contain thousands of rows. Keep the initial tail bounded.
+        wholeTurns: false,
       });
       if (token !== this.token || load !== this.loads) return;
       this.replaceWith(page);

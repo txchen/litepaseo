@@ -359,7 +359,7 @@ try {
    * Reads through the timeline as a person scrolls (wheel + scroll, one step per frame), inside
    * the page so no step waits on a test round trip. Returns every row rendered on the way.
    */
-  const readThrough = (direction) => timeline.evaluate(async (el, direction) => {
+  const readThrough = (direction, touch = false) => timeline.evaluate(async (el, { direction, touch }) => {
     const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
     const inHistory = () => [...document.querySelectorAll(".older button")].some((b) => b.textContent.includes("Back to latest"));
     const done = () => !document.querySelector(".older-loading") &&
@@ -369,13 +369,18 @@ try {
     const dy = direction === "up" ? -1500 : 1500;
     for (let i = 0; i < 3000 && !done(); i++) {
       record();
-      el.dispatchEvent(new WheelEvent("wheel", { deltaY: dy, bubbles: true }));
+      if (touch) {
+        const finger = y => new Touch({identifier:1,target:el,clientX:100,clientY:y});
+        el.dispatchEvent(new TouchEvent('touchstart',{touches:[finger(200)],bubbles:true}));
+        el.dispatchEvent(new TouchEvent('touchmove',{touches:[finger(direction === 'up' ? 260 : 140)],bubbles:true}));
+        el.dispatchEvent(new TouchEvent('touchend',{touches:[],bubbles:true}));
+      } else el.dispatchEvent(new WheelEvent("wheel", { deltaY: dy, bubbles: true }));
       el.scrollBy(0, dy);
       await frame();
     }
     record();
     return [...seen];
-  }, direction);
+  }, { direction, touch });
   await readThrough("up");
   assert.ok((await firstSeq()) === 1, `paged back to the start (first row ${await firstSeq()}, live started at ${liveFirst})`);
   assert.ok(pages.length >= 3, "several earlier pages were fetched");
@@ -384,6 +389,12 @@ try {
   const shownOnTheWayDown = new Set(await readThrough("down"));
   assert.equal(await page.getByRole("button", { name: "Back to latest" }).count(), 0, "returned to the live tail");
   assert.equal(shownOnTheWayDown.size, TOTAL, "paging forward shows every row once from the start to the tail");
+  await page.setViewportSize({width:390,height:844});
+  await readThrough("up", true);
+  assert.equal(await firstSeq(),1,"touch-only paging reaches the beginning without clicking load more");
+  await readThrough("down", true);
+  assert.equal(await page.getByRole("button", {name:"Back to latest"}).count(),0);
+  await page.setViewportSize({width:1280,height:900});
   await timeline.evaluate((el) => el.scrollTo(0, el.scrollHeight));
   await page.locator(`.timeline [data-seq-start="${TOTAL}"]`).waitFor();
 

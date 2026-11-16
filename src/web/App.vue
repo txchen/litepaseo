@@ -723,12 +723,37 @@ watch(timelineElement, (element, _previous, cleanup) => {
     pagingIntent = event.deltaY < 0 ? "up" : "down";
     autoPage();
   };
+  // Touch browsers do not emit wheel events when a swipe reaches the scroll boundary.
+  let touchY: number | null = null;
+  let touchRetry: ReturnType<typeof setTimeout> | undefined;
+  const onTouchStart = (event: TouchEvent) => { touchY = event.touches.length === 1 ? event.touches[0].clientY : null; };
+  const onTouchMove = (event: TouchEvent) => {
+    if (event.touches.length !== 1) { touchY = null; return; }
+    const y = event.touches[0].clientY;
+    if (touchY !== null && Math.abs(y - touchY) > 2) {
+      pagingIntent = y > touchY ? "up" : "down";
+      if (pagingIntent === "up") followLatest = false;
+      if (performance.now() >= pagingQuietUntil) autoPage();
+      else { clearTimeout(touchRetry); touchRetry = setTimeout(autoPage, 50); }
+    }
+    touchY = y;
+  };
+  const onTouchEnd = () => { touchY = null; };
+  element.addEventListener("touchstart", onTouchStart, { passive: true });
+  element.addEventListener("touchmove", onTouchMove, { passive: true });
+  element.addEventListener("touchend", onTouchEnd, { passive: true });
+  element.addEventListener("touchcancel", onTouchEnd, { passive: true });
   element.addEventListener("scroll", onScroll, { passive: true });
   element.addEventListener("wheel", onWheel, { passive: true });
   observer.observe(inner);
   // The viewport shrinks when the composer grows (attachments, multi-line drafts): keep the tail in view.
   observer.observe(element);
   cleanup(() => {
+    clearTimeout(touchRetry);
+    element.removeEventListener("touchstart", onTouchStart);
+    element.removeEventListener("touchmove", onTouchMove);
+    element.removeEventListener("touchend", onTouchEnd);
+    element.removeEventListener("touchcancel", onTouchEnd);
     observer.disconnect();
     element.removeEventListener("scroll", onScroll);
     element.removeEventListener("wheel", onWheel);
@@ -1095,6 +1120,7 @@ watch(
   (key) => {
   timelineStream?.close();
   timelineStream = null;
+  pagingIntent = null; programmaticTop = null; pagingQuietUntil = 0; followLatest = true;
   const store = new TimelineStore();
   timeline.value = store;
   historyRows.value = null;

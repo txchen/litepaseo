@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.2
+
+- Trigger automatic history paging from touch gestures at scroll boundaries, including short windows; reset paging intent when switching conversations.
+- Bound the initial timeline fetch instead of expanding entire turns, avoiding oversized initial loads for tool-heavy conversations.
+
 ## 0.6.1
 
 - Make message image previews scrollable so square and tall images remain fully accessible on desktop and mobile; keep a visible close button and support keyboard scrolling.

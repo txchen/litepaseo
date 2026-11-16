@@ -112,6 +112,7 @@ function harness(daemon: ReferenceDaemon) {
       return Object.assign(() => {}, { ready: Promise.resolve(), release: async () => {} });
     },
     fetchAgentTimeline: async (_id, options) => {
+      if (options.direction === "tail") assert.equal(options.wholeTurns, false, "initial load must not expand an unbounded turn");
       await null;
       return daemon.fetch(options);
     },

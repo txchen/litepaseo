@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+- Make message image previews scrollable so square and tall images remain fully accessible on desktop and mobile; keep a visible close button and support keyboard scrolling.
+
 ## 0.6.0
 
 - Set an instance name in Web Settings; show it in browser tabs, the sidebar and sign-in, and synchronize it across connected clients.

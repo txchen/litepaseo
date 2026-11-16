@@ -29,7 +29,7 @@ const row = (seq) => ({
     : seq % 2
     ? { type: "user_message", text: `question ${seq}`, messageId: `msg-${seq}`, ...(seq === TOTAL - 1 ? { imageUrls: ["/fixture-image.png"] } : {}) }
     : { type: "assistant_message", text: seq === TOTAL
-      ? "Final answer\n\n```ts\nconst answer: number = 42; // the answer\n```"
+      ? "Final answer\n\n```ts\nconst answer: number = 42; // the answer\n```\n\n![Agent diagram](/fixture-image.png)"
       : `answer ${seq}\n\nA second paragraph so that rows have some height.` },
 });
 const sse = (...events) => ({
@@ -127,7 +127,12 @@ try {
     return route.fulfill({ json: {} });
   });
 
-  await page.route("**/fixture-image.png", route => route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZk0AAAAASUVORK5CYII=", "base64") }));
+  await page.route("**/api/hosts/alpha/agents/a1/image?**", route => route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1600"><rect width="100%" height="100%" fill="#408080"/></svg>'}));
+  await page.route("**/fixture-image.png*", route => {
+    const shape = new URL(route.request().url()).searchParams.get('shape');
+    const [width,height] = shape === 'tall' ? [600,2400] : shape === 'wide' ? [2400,400] : [1600,1600];
+    return route.fulfill({contentType:'image/svg+xml',body:`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#408080"/><text x="20" y="40">Top</text><text x="20" y="${height-20}">Bottom</text></svg>`});
+  });
   await page.goto(`http://127.0.0.1:${port}`);
   await page.getByLabel("Server access token").fill(readFileSync(join(directory, "token"), "utf8"));
   await page.getByRole("button", { name: "Connect", exact: true }).click();
@@ -145,12 +150,56 @@ try {
     "keywords are colored",
   );
 
+  const agentImage = page.locator('.prose img[alt="Agent diagram"]');
+  await agentImage.waitFor();
+  await agentImage.evaluate(img => img.decode());
+  await agentImage.click();
+  await page.getByRole('dialog',{name:'Image',exact:true}).waitFor();
+  await page.keyboard.press('Escape');
+
   const attachedImage = page.locator(".user-images img");
   await attachedImage.scrollIntoViewIfNeeded();
   await page.waitForFunction(() => document.querySelector(".user-images img")?.naturalWidth > 0);
   await attachedImage.click();
   await page.getByRole("dialog", { name: "Image", exact: true }).waitFor();
   await page.keyboard.press("Escape");
+
+  // Square and tall previews must scroll to both ends, with a reachable close button.
+  for (const [width,height,shape] of [[1280,720,'square'],[390,844,'tall'],[844,390,'square'],[390,844,'wide']]) {
+    await page.setViewportSize({width,height});
+    await attachedImage.evaluate(async (img, shape) => { img.src = '/fixture-image.png?shape=' + shape; await img.decode(); },shape);
+    await attachedImage.click();
+    const preview = page.getByRole('dialog',{name:'Image',exact:true});
+    await preview.locator('img').evaluate(img => img.decode());
+    const before = await preview.evaluate(el => ({height:el.clientHeight,scrollHeight:el.scrollHeight,top:el.querySelector('img').getBoundingClientRect().top}));
+    assert.ok(before.top >= 0,'the top is reachable without negative scrolling');
+    if (shape !== 'wide') {
+      assert.ok(before.scrollHeight > before.height,'large images have a real scroll range');
+      await page.mouse.move(width / 2, height / 2);
+      await page.mouse.wheel(0, 250);
+      await page.waitForFunction(() => document.querySelector('.lightbox').scrollTop > 0);
+      await preview.focus();
+      await page.keyboard.press('Home');
+      await page.waitForFunction(() => document.querySelector('.lightbox').scrollTop === 0);
+      await page.keyboard.press('End');
+      await page.waitForFunction(() => { const el=document.querySelector('.lightbox'); return el.scrollTop + el.clientHeight >= el.scrollHeight - 2; });
+      const bottom = await preview.locator('img').evaluate(el => el.getBoundingClientRect().bottom);
+      assert.ok(bottom <= height,'image bottom is reachable');
+    }
+    const point = await preview.locator('img').evaluate(el => { const r=el.getBoundingClientRect(); return {x:r.left+r.width/2,y:(Math.max(r.top,0)+Math.min(r.bottom,innerHeight))/2}; });
+    await page.mouse.click(point.x,point.y);
+    assert.equal(await preview.count(),1,'clicking the image does not dismiss the preview');
+    const close = preview.getByRole('button',{name:'Close image'});
+    const box = await close.boundingBox();
+    assert.ok(box.y >= 0 && box.y + box.height <= height,'close stays on screen');
+    await page.keyboard.press('n');
+    assert.equal(await page.getByRole('dialog', {name:'New session',exact:true}).count(),0,'preview does not trigger background shortcuts');
+    await page.keyboard.press('Tab');
+    assert.equal(await close.evaluate(el => document.activeElement === el),true);
+    await close.click();
+    assert.equal(await preview.count(),0);
+  }
+  await page.setViewportSize({width:1280,height:900});
 
   // 1b. A single long line of thinking is cut off on screen, so it opens to show all of it.
   const thought = page.locator(".row-reasoning").last();

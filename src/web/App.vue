@@ -10,6 +10,7 @@ import { ComposerStore } from "./composer-store.ts";
 import { TimelineStore, type RowRef } from "./timeline-store.ts";
 import { PAGE_STEP, pageHistory, RENDER_WINDOW } from "./timeline-window.ts";
 import ChatOutline from "./ChatOutline.vue";
+import ImagePreview from "./ImagePreview.vue";
 import { openStream, type StreamState } from "./event-stream.ts";
 import SessionList from "./SessionList.vue";
 import TimelineRowView from "./TimelineRowView.vue";
@@ -2390,9 +2391,7 @@ onUnmounted(() => {
       :request="api"
       @close="projectSettings = null"
     />
-    <div v-if="lightbox" class="lightbox" role="dialog" aria-label="Image" @click="lightbox = null">
-      <img :src="lightbox" alt="" />
-    </div>
+    <ImagePreview v-if="lightbox" :src="lightbox" @close="lightbox = null" />
     <RenameThread v-if="renaming" :thread="renaming" :busy="busy" @close="renaming = null" @save="renameThread" />
     <NewSession
       v-if="newSession"

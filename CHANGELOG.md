@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.5
+
+- Publish releases to npm automatically from GitHub Releases through npm Trusted Publishing, with provenance. No application changes.
+
 ## 0.6.4
 
 - Open local file links in agent messages in a workspace file tab instead of a page that does not exist. Absolute, relative, `file://`, `~/` and Windows drive paths are recognized, including link text with brackets or an image; the link also works in a new tab.

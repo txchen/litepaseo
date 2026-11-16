@@ -77,6 +77,10 @@ jobs:
       - if: steps.version.outputs.published != 'true'
         run: npm test
 
-      # prepack builds dist/ (web + server) before packing.
-      - if: steps.version.outputs.published != 'true'
-        run: npm publish ${{ inputs.dry_run && '--dry-run' || '' }}
+      # prepack builds dist/ (web + server) before packing. A dry run only packs: npm refuses
+      # even a dry-run publish of a version that is already on the registry.
+      - if: steps.version.outputs.published != 'true' && inputs.dry_run
+        run: npm pack --dry-run
+
+      - if: steps.version.outputs.published != 'true' && !inputs.dry_run
+        run: npm publish

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.4
+
+- Open local file links in agent messages in a workspace file tab instead of a page that does not exist. Absolute, relative, `file://`, `~/` and Windows drive paths are recognized, including link text with brackets or an image; the link also works in a new tab.
+- Scroll to and mark the lines a link names (`:12`, `:12:3`, `:12-20`, `#L12`, `#L12-L20`) once; returning to a file tab keeps its scroll position, rendered or source view and marked lines. Markdown files opened at a line show their numbered source.
+- Show directory links in the Files panel, expanded and selected.
+- Resolve relative links and images in Markdown files opened in a tab against that file. Images in messages and files load when the host can serve them; SVG and other non-raster files become links that open them, and anything else (paths outside the workspace, images Paseo saved on a remote daemon's machine) becomes a click-to-copy path instead of a broken image or link.
+- Fix Copy path in file tabs for absolute paths.
+
 ## 0.6.3
 
 - Suppress conversation push notifications across devices while a foreground browser is viewing that conversation; expire disconnected viewers automatically.

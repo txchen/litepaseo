@@ -6,6 +6,12 @@ export interface TimelineContext {
   /** "/api/hosts/<host>/agents/<agent>" for the open conversation. */
   base: string;
   cwd: string;
+  /** The open agent's key, for file links that open in a tab (`?session=`). */
+  session?: string;
+  /** The directory file tabs read from (the workspace checkout, else the agent's cwd). */
+  workspace?: string;
+  /** The host's daemon is on the server's machine (images Paseo saved can be read). */
+  localHost?: boolean;
   /** What the provider can rewind to before a user message (none: no rewind button). */
   rewindModes?: RewindMode[];
   rewinding?: Ref<boolean>;
@@ -295,4 +301,259 @@ export function rewriteImageSources(markdown: string, base: string): string {
     if (!IMAGE_EXT.test(path)) return match;
     return `![${alt}](${base}/image?path=${encodeURIComponent(path)}${title})`;
   });
+}
+
+/** Where a local file link in a message leads: a workspace file to open, or a path to copy. */
+/** A file tab's reading state, kept while the tab is switched away from. */
+export interface FileViewState {
+  rendered: boolean;
+  scrollTop: number;
+  mark: { top: number; height: number } | null;
+  /** The `seq` of the last line jump carried out. */
+  jumped: number;
+}
+/** A line, or an inclusive range of lines, in a file (1-based). */
+export interface LineRange { line: number; end?: number }
+/**
+ * Where a local link in a message leads: a workspace file to open in a tab, a workspace
+ * directory to show in the Files panel, or a path this app cannot open, to copy.
+ */
+export type FileLink =
+  | ({ kind: "open"; session: string; path: string } & Partial<LineRange>)
+  | { kind: "reveal"; session: string; path: string }
+  | { kind: "copy"; path: string };
+export interface FileLinkContext {
+  /** The conversation's agent key (the `?session=` deep link). */
+  session: string;
+  /** The agent's cwd: relative links resolve against it. */
+  cwd: string;
+  /** The directory the file viewer reads from; only files under it can open. */
+  workspace: string;
+  /** False when the daemon runs elsewhere: images Paseo saved on that machine cannot load here. */
+  localHost?: boolean;
+}
+const COPY_PREFIX = "#litepaseo-copy-path=";
+const COPY_TITLE = "Can't be opened here: click to copy the path";
+/** Link text may hold balanced brackets and images: `[see [1]](a.md)`, `[![logo](l.png)](a.md)`. */
+const LINK = /(?<![!\\])\[((?:[^[\]\n]|\[[^[\]\n]*\](?:\([^()\s]*(?:\s+"[^"\n]*")?\))?)*)\]\(\s*(<[^>\n]+>|[^)\s]+)(\s+"[^"\n]*")?\s*\)/g;
+/** Characters that would end or confuse a Markdown link destination. */
+const mdHref = (href: string) => href.replace(/[()<>\s]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0"));
+const mdTitle = (title: string) => `"${title.replace(/"/g, "'")}"`;
+
+/** `C:\repo` or `C:/repo` (a Windows host's absolute path). */
+const DRIVE = /^[A-Za-z]:[\\/]/;
+const isAbsolutePath = (path: string) => path.startsWith("/") || DRIVE.test(path);
+/** Collapses `.`, `..` and repeated slashes; Windows paths use `/` and an upper-case drive. */
+function normalize(path: string) {
+  let p = /^\/[A-Za-z]:[\\/]/.test(path) ? path.slice(1) : path; // file:///C:/…
+  let prefix = "/";
+  if (DRIVE.test(p)) {
+    prefix = p[0].toUpperCase() + ":/";
+    p = p.slice(3).replace(/\\/g, "/");
+  }
+  const out: string[] = [];
+  for (const part of p.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") out.pop();
+    else out.push(part);
+  }
+  return prefix + out.join("/");
+}
+/** The home directory a workspace path sits in (`/home/me`, `/Users/me`, `C:/Users/me`), if any. */
+function homeOf(workspace: string) {
+  return workspace ? /^(\/home\/[^/]+|\/Users\/[^/]+|\/root|[A-Z]:\/Users\/[^/]+)(?=\/|$)/.exec(normalize(workspace))?.[1] ?? null : null;
+}
+/** `path` relative to directory `dir` ("" for `dir` itself), or null when it is not inside. */
+function within(path: string, dir: string) {
+  if (!dir) return null;
+  const base = normalize(dir);
+  const p = path.replace(/\/$/, "") || "/";
+  if (p === base) return "";
+  const root = base.endsWith("/") ? base : base + "/";
+  return p.startsWith(root) ? p.slice(root.length) : null;
+}
+
+/**
+ * The absolute file path a Markdown link destination names, or null when it is not a local
+ * file (web/mail URLs, in-page anchors, this app's own endpoints). `:12`, `:12:3` and `#L12`
+ * suffixes are dropped; relative paths resolve against `cwd`. Directories keep a trailing `/`.
+ */
+export function localLinkPath(href: string, cwd: string): string | null {
+  return localLinkTarget(href, cwd)?.path ?? null;
+}
+
+const lineRange = (line: string | undefined, end: string | undefined): LineRange | undefined => {
+  const start = Number(line);
+  if (!Number.isInteger(start) || start < 1) return undefined;
+  const last = Number(end);
+  return Number.isInteger(last) && last > start ? { line: start, end: last } : { line: start };
+};
+/** "12" or "12-20" (the `line=` deep-link parameter). */
+export function parseLineRange(text: string | null | undefined): LineRange | undefined {
+  const m = /^(\d+)(?:-(\d+))?$/.exec(text ?? "");
+  return m ? lineRange(m[1], m[2]) : undefined;
+}
+const formatLineRange = (range: LineRange) => (range.end ? `${range.line}-${range.end}` : String(range.line));
+
+/**
+ * localLinkPath plus the line it points at: `:12`, `:12:3` (line:column), `:12-20`, `#L12`,
+ * `#L12C3`, `#L12-L20`. `~/…` resolves against `home` when it is known.
+ */
+export function localLinkTarget(href: string, cwd: string, home?: string | null): ({ path: string } & Partial<LineRange>) | null {
+  let target = href.trim().replace(/^<(.*)>$/, "$1").trim();
+  if (!target || /^[#?]/.test(target) || target.startsWith("//") || target.startsWith("/?") || target.startsWith("/api/")) return null;
+  if (/^file:/i.test(target)) {
+    try {
+      target = new URL(target).pathname;
+    } catch {
+      return null;
+    }
+  } else if (!DRIVE.test(target) && /^[a-z][a-z\d+.-]*:/i.test(target)) return null;
+  const hash = /#L(\d+)(?:C\d+)?(?:-L?(\d+)(?:C\d+)?)?$/i.exec(target);
+  let range = hash ? lineRange(hash[1], hash[2]) : undefined;
+  target = target.replace(/[?#].*$/, "");
+  try {
+    target = decodeURIComponent(target);
+  } catch {
+    /* keep it as written */
+  }
+  const colon = /:(\d+)(?::\d+|-(\d+))?$/.exec(target);
+  if (colon) {
+    range ??= lineRange(colon[1], colon[2]);
+    target = target.slice(0, colon.index);
+  }
+  if (!target) return null;
+  const directory = /[\\/]$/.test(target);
+  if (/^~(?=[\\/]|$)/.test(target)) {
+    if (!home) return { path: target, ...(directory ? {} : range) };
+    target = home + "/" + target.slice(1);
+  }
+  const path = isAbsolutePath(target) ? normalize(target) : cwd ? normalize(`${cwd}/${target}`) : null;
+  if (!path) return null;
+  return directory ? { path: path.endsWith("/") ? path : path + "/" } : { path, ...range };
+}
+
+/** Applies `fn` outside fenced code blocks and inline code spans, where links are literal. */
+function mapProse(markdown: string, fn: (text: string) => string) {
+  let out = "";
+  let fence: string | null = null;
+  let prose = "";
+  const flush = () => {
+    out += prose.split(/((`+)[\s\S]*?[^`]\2(?!`))/).map((part, i) => (i % 3 === 0 ? fn(part) : i % 3 === 1 ? part : "")).join("");
+    prose = "";
+  };
+  for (const line of markdown.split(/(?<=\n)/)) {
+    const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) {
+      out += line;
+      if (marker && marker[0] === fence[0] && marker.length >= fence.length && !line.trim().slice(marker.length).trim()) fence = null;
+    } else if (marker) {
+      flush();
+      fence = marker;
+      out += line;
+    } else prose += line;
+  }
+  flush();
+  return out;
+}
+
+const deepLink = (context: FileLinkContext, params: string) => mdHref(`/?session=${encodeURIComponent(context.session)}&${params}`);
+/** The Markdown link for a local target: open (file), reveal (directory) or copy (anything else). */
+function localLink(shown: string, found: { path: string } & Partial<LineRange>, context: FileLinkContext) {
+  const relative = isAbsolutePath(found.path) ? within(found.path, context.workspace) : null;
+  if (relative !== null && found.path.endsWith("/"))
+    return `[${shown}](${deepLink(context, `dir=${encodeURIComponent(relative || ".")}`)} ${mdTitle((relative || ".") + "/")})`;
+  if (relative) {
+    const lines = found.line ? formatLineRange({ line: found.line, end: found.end }) : "";
+    return `[${shown}](${deepLink(context, `file=${encodeURIComponent(relative)}${lines ? `&line=${lines}` : ""}`)} ${mdTitle(relative + (lines ? `:${lines}` : ""))})`;
+  }
+  return `[${shown}](${COPY_PREFIX}${mdHref(encodeURIComponent(found.path))} ${mdTitle(COPY_TITLE)})`;
+}
+const resolveIn = (context: FileLinkContext) => ({ cwd: context.cwd || context.workspace, home: homeOf(context.workspace || context.cwd) });
+
+/**
+ * Rewrites local links in an agent message so none lead to a page that does not exist:
+ * workspace files become `/?session=…&file=…` (opened in a file tab; the URL also works in a
+ * new tab), workspace directories `…&dir=…` (shown in the Files panel), and anything the daemon
+ * would refuse becomes a click-to-copy path. Web links are kept.
+ */
+export function rewriteFileLinks(markdown: string, context: FileLinkContext): string {
+  if (!markdown.includes("](") || !context.session) return markdown;
+  const { cwd, home } = resolveIn(context);
+  return mapProse(markdown, (text) =>
+    text.replace(LINK, (match, label: string, href: string) => {
+      const found = localLinkTarget(href, cwd, home);
+      return found ? localLink(label.trim() || found.path, found, context) : match;
+    }),
+  );
+}
+
+/** Images Paseo materialized from provider output (`/tmp/paseo-attachments-…/<sha256>.png`). */
+const MATERIALIZED = /\/paseo-attachments-[A-Za-z0-9_-]{1,32}\/[a-f0-9]{64}\.[a-z0-9]+$/i;
+
+/**
+ * One rule for local images everywhere: a raster image the host can serve shows (`raster`
+ * returns its URL); another workspace file (SVG, say) becomes a link that opens it in a tab;
+ * anything else becomes a click-to-copy path. No image points at a missing page. Remote, data
+ * and this app's own sources, and images in code, stay as written. Run before rewriteFileLinks.
+ */
+function rewriteLocalImages(markdown: string, context: FileLinkContext, raster: (path: string, relative: string | null) => string | null) {
+  if (!markdown.includes("![") || !context.session) return markdown;
+  const { cwd, home } = resolveIn(context);
+  return mapProse(markdown, (text) =>
+    text.replace(IMAGE, (match, alt: string, src: string, title = "") => {
+      const found = localLinkTarget(src, cwd, home);
+      if (!found) return match;
+      const { path } = found;
+      const relative = isAbsolutePath(path) && !path.endsWith("/") ? within(path, context.workspace) || null : null;
+      const url = IMAGE_EXT.test(path) ? raster(path, relative) : null;
+      if (url) return `![${alt}](${mdHref(url)}${title})`;
+      return localLink(alt.trim() || path.replace(/\/$/, "").split("/").pop() || path, { path }, context);
+    }),
+  );
+}
+
+/**
+ * Images in an agent message (`base` is "/api/hosts/<host>/agents/<agent>"). Paseo's
+ * materialized images (when its daemon is on this machine) and files under the agent's cwd
+ * load through the agent image endpoint; other workspace images through the host's file endpoint.
+ */
+export function rewriteMessageImages(markdown: string, base: string, context: FileLinkContext): string {
+  const fs = base.replace(/\/agents\/[^/]+$/, "/fs");
+  const workspace = context.workspace;
+  return rewriteLocalImages(markdown, context, (path, relative) => {
+    if (MATERIALIZED.test(path)) return context.localHost === false ? null : `${base}/image?path=${encodeURIComponent(path)}`;
+    if (within(path, context.cwd)) return `${base}/image?path=${encodeURIComponent(path)}`;
+    return relative !== null ? `${fs}/raw?cwd=${encodeURIComponent(workspace)}&path=${encodeURIComponent(relative)}` : null;
+  });
+}
+
+/**
+ * Images in a Markdown file shown in a file tab: relative sources resolve against the file's
+ * directory (`context.cwd`); workspace images load through the host's file endpoint.
+ */
+export function rewriteFileImages(markdown: string, context: FileLinkContext & { rawBase: string }): string {
+  const workspace = context.workspace;
+  return rewriteLocalImages(markdown, context, (_path, relative) =>
+    relative !== null ? `${context.rawBase}/raw?cwd=${encodeURIComponent(workspace)}&path=${encodeURIComponent(relative)}` : null);
+}
+
+/** What a clicked link rendered by `rewriteFileLinks` asks for, or null for any other link. */
+export function parseFileLink(href: string | null | undefined): FileLink | null {
+  if (!href) return null;
+  if (href.startsWith(COPY_PREFIX)) {
+    try {
+      return { kind: "copy", path: decodeURIComponent(href.slice(COPY_PREFIX.length)) };
+    } catch {
+      return null;
+    }
+  }
+  if (!href.startsWith("/?")) return null;
+  const params = new URLSearchParams(href.slice(2));
+  const session = params.get("session");
+  const file = params.get("file");
+  const dir = params.get("dir");
+  if (!session) return null;
+  if (file) return { kind: "open", session, path: file, ...parseLineRange(params.get("line")) };
+  return dir ? { kind: "reveal", session, path: dir } : null;
 }

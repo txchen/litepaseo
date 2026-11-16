@@ -29,7 +29,7 @@ const row = (seq) => ({
     : seq % 2
     ? { type: "user_message", text: `question ${seq}`, messageId: `msg-${seq}`, ...(seq === TOTAL - 1 ? { imageUrls: ["/fixture-image.png"] } : {}) }
     : { type: "assistant_message", text: seq === TOTAL
-      ? "Final answer\n\n```ts\nconst answer: number = 42; // the answer\n```\n\n![Agent diagram](/fixture-image.png)"
+      ? "Final answer\n\n```ts\nconst answer: number = 42; // the answer\n```\n\n![Agent diagram](/code/app/docs/diagram.png) ![Flow](docs/flow.svg) ![Lost](/tmp/lost.png)\n\nSee [the report](/code/app/docs/report.md), [the handler](src/server.ts#L120-L122), [the report source](docs/report.md:3), [the docs folder](docs/) and [the spec](/tmp/spec.md)."
       : `answer ${seq}\n\nA second paragraph so that rows have some height.` },
 });
 const sse = (...events) => ({
@@ -48,7 +48,7 @@ try {
 
   let status = "running", seq = 1, diffFailure = false, provider = "claude", rejectNextSend = false;
   const queue = [];
-  const messages = [], pages = [], rewinds = [];
+  const messages = [], pages = [], rewinds = [], fileReads = [];
   const agent = () => ({
     key: "alpha:a1", hostId: "alpha", id: "a1", workspaceId: "w1", title: "Long conversation",
     status, turnActive: status === "running", provider, deliveryModes: provider === "claude" ? ["queue", "steer", "interrupt"] : ["queue", "interrupt"], model: "claude-opus-5-5", rewind: ["conversation", "files", "both"],
@@ -109,6 +109,20 @@ try {
       }
       return route.fulfill({ json: { ok: true } });
     }
+    if (p.endsWith("/fs/list")) {
+      const dir = url.searchParams.get("path");
+      const entries = dir === "." ? [{ name: "docs", path: "docs", kind: "directory", size: 0 }, { name: "src", path: "src", kind: "directory", size: 0 }]
+        : dir === "docs" ? [{ name: "report.md", path: "docs/report.md", kind: "file", size: 9 }] : [];
+      return route.fulfill({ json: { path: dir, entries } });
+    }
+    if (p.endsWith("/fs/read")) {
+      fileReads.push(url.searchParams.get("path"));
+      if (url.searchParams.get("path").endsWith(".ts")) {
+        const text = Array.from({ length: 300 }, (_, i) => `const line${i + 1} = ${i + 1};`).join("\n");
+        return route.fulfill({ json: { path: url.searchParams.get("path"), kind: "text", mime: "text/typescript", size: text.length, text } });
+      }
+      return route.fulfill({ json: { path: url.searchParams.get("path"), kind: "text", mime: "text/markdown", size: 9, text: "# Report\n\nSee [the notes](notes/a.md#intro) and [the parent](../../shared.md).\n\n![Chart](img/chart.png)\n" } });
+    }
     if (p.endsWith("/changes") && diffFailure) return route.fulfill({ status: 409, json: {error: "Host unavailable"} });
     if (p.endsWith("/changes")) return route.fulfill({ json: { files: [{ path: "src/example.ts", additions: 1, deletions: 0, hunks: [{ oldStart: 1, oldCount: 0, newStart: 1, newCount: 1, lines: [{ type: "add", content: "const changed = true;" }] }] }] } });
     if (p.endsWith("/search") && url.searchParams.get("q") === "merged") return route.fulfill({json: {epoch: "e1", locations: [{seq: 401, role: "assistant"}], nextCursor: null}});
@@ -127,12 +141,26 @@ try {
     return route.fulfill({ json: {} });
   });
 
+  await page.route("**/api/hosts/alpha/fs/raw?**", route => route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="100%" height="100%" fill="#408080"/></svg>'}));
   await page.route("**/api/hosts/alpha/agents/a1/image?**", route => route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1600"><rect width="100%" height="100%" fill="#408080"/></svg>'}));
   await page.route("**/fixture-image.png*", route => {
     const shape = new URL(route.request().url()).searchParams.get('shape');
     const [width,height] = shape === 'tall' ? [600,2400] : shape === 'wide' ? [2400,400] : [1600,1600];
     return route.fulfill({contentType:'image/svg+xml',body:`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#408080"/><text x="20" y="40">Top</text><text x="20" y="${height-20}">Bottom</text></svg>`});
   });
+  /** The marked lines start at `line`, span `count` rows, and are scrolled into view. */
+  const expectLineMark = async (line, count) => {
+    const mark = page.locator(".file-view .line-mark");
+    await mark.waitFor();
+    const box = await mark.evaluate((el) => {
+      const gutter = el.parentElement.querySelector(".code-gutter");
+      const lineHeight = parseFloat(getComputedStyle(gutter).lineHeight);
+      const body = el.closest(".file-body").getBoundingClientRect(), rect = el.getBoundingClientRect();
+      return { row: (el.offsetTop - parseFloat(getComputedStyle(gutter).paddingTop)) / lineHeight + 1, rows: el.offsetHeight / lineHeight,
+        visible: rect.top >= body.top && rect.bottom <= body.bottom };
+    });
+    assert.deepEqual(box, { row: line, rows: count, visible: true });
+  };
   const presenceReports = [];
   await page.route("**/api/presence", async route => {
     presenceReports.push(route.request().postDataJSON());
@@ -178,6 +206,69 @@ try {
   await agentImage.click();
   await page.getByRole('dialog',{name:'Image',exact:true}).waitFor();
   await page.keyboard.press('Escape');
+
+  // Local file links never point at a missing page: workspace files open in a tab (new tabs use
+  // the same deep link), paths outside the workspace are copied instead.
+  const reportLink = page.locator(".prose a", { hasText: /^the report$/ });
+  assert.equal(await reportLink.getAttribute("href"), "/?session=alpha%3Aa1&file=docs%2Freport.md");
+  await reportLink.click();
+  await page.locator(".file-view .file-bar-path", { hasText: "docs/report.md" }).waitFor();
+  assert.deepEqual(fileReads, ["docs/report.md"]);
+  // Relative links in an open Markdown file resolve against its own directory.
+  const notesLink = page.locator(".file-markdown a", { hasText: "the notes" });
+  assert.equal(await notesLink.getAttribute("href"), "/?session=alpha%3Aa1&file=docs%2Fnotes%2Fa.md");
+  const chart = page.locator('.file-markdown img[alt="Chart"]');
+  await chart.waitFor();
+  assert.equal(await chart.getAttribute("src"), "/api/hosts/alpha/fs/raw?cwd=%2Fcode%2Fapp&path=docs%2Fimg%2Fchart.png");
+  await page.waitForFunction(() => document.querySelector('.file-markdown img[alt="Chart"]')?.naturalWidth > 0);
+  await page.locator(".file-markdown a", { hasText: "the parent" }).click();
+  await page.locator(".file-link-notice", { hasText: "/shared.md" }).waitFor();
+  await notesLink.click();
+  await page.locator(".file-view .file-bar-path", { hasText: "docs/notes/a.md" }).waitFor();
+  assert.deepEqual(fileReads, ["docs/report.md", "docs/notes/a.md"]);
+  assert.equal(new URL(page.url()).pathname, "/");
+  await page.getByRole("button", { name: "Close docs/notes/a.md", exact: true }).click();
+  await page.getByRole("button", { name: "Close docs/report.md", exact: true }).click();
+  // A link to lines opens the file scrolled to them, with the lines marked.
+  const handlerLink = page.locator(".prose a", { hasText: "the handler" });
+  assert.equal(await handlerLink.getAttribute("href"), "/?session=alpha%3Aa1&file=src%2Fserver.ts&line=120-122");
+  await handlerLink.click();
+  await expectLineMark(120, 3);
+  // Back on the tab later: where the reader left it, not the jump again.
+  const fileBody = page.locator(".file-view .file-body");
+  await fileBody.evaluate((el) => (el.scrollTop = 1000));
+  const conversationTab = page.locator(".agent-tabs button", { hasText: "Long conversation" });
+  await conversationTab.click();
+  await page.locator(".agent-tabs .file-tab", { hasText: "server.ts" }).click();
+  await page.locator(".file-view .line-mark").waitFor();
+  await page.waitForTimeout(50);
+  assert.equal(await fileBody.evaluate((el) => el.scrollTop), 1000);
+  // Markdown opened at a line shows its source once; the reader's switch back to rendered stays.
+  await conversationTab.click();
+  await page.locator(".prose a", { hasText: "the report source" }).click();
+  await expectLineMark(3, 1);
+  await page.getByRole("button", { name: "Show rendered" }).click();
+  await page.locator(".file-markdown").waitFor();
+  await page.locator(".agent-tabs .file-tab", { hasText: "server.ts" }).click();
+  await page.locator(".agent-tabs .file-tab", { hasText: "report.md" }).click();
+  await page.locator(".file-markdown").waitFor();
+  assert.equal(await page.locator(".file-view .code-gutter").count(), 0);
+  await page.getByRole("button", { name: "Close docs/report.md", exact: true }).click();
+  await page.getByRole("button", { name: "Close src/server.ts", exact: true }).click();
+  // A directory link shows the directory in the Files panel.
+  await page.locator(".prose a", { hasText: "the docs folder" }).click();
+  await page.locator('.tree-row.chosen[data-path="docs"]').waitFor();
+  await page.locator('.tree-row[data-path="docs/report.md"]').waitFor();
+  await page.locator('.head-tool[aria-label="Files"]').click();
+  await page.locator(".prose a", { hasText: "the spec" }).click();
+  await page.locator(".composer-notice", { hasText: "/tmp/spec.md" }).waitFor();
+  assert.equal(new URL(page.url()).pathname, "/");
+
+  assert.equal(await agentImage.getAttribute("src"), "/api/hosts/alpha/agents/a1/image?path=%2Fcode%2Fapp%2Fdocs%2Fdiagram.png");
+  // Images the host cannot show as one never render broken: SVG opens in a tab, others copy.
+  assert.equal(await page.locator(".prose a", { hasText: "Flow" }).getAttribute("href"), "/?session=alpha%3Aa1&file=docs%2Fflow.svg");
+  assert.match(await page.locator(".prose a", { hasText: "Lost" }).getAttribute("href"), /^#litepaseo-copy-path=/);
+  assert.equal(await page.locator(".prose img").count(), 1);
 
   const attachedImage = page.locator(".user-images img");
   await attachedImage.scrollIntoViewIfNeeded();
@@ -484,8 +575,24 @@ try {
   await page.getByRole('button', {name: 'Close panel', exact: true}).click();
   await page.locator('.timeline [data-seq-start="400"]').waitFor();
   assert.equal(await page.locator('.timeline [data-seq-start="401"]').count(), 0, 'search hit within merged reply opens the containing row');
+  // A file link opened in a new tab loads the app, selects the session and opens the file.
+  await page.goto(`http://127.0.0.1:${port}/?session=alpha%3Aa1&file=src%2Fserver.ts&line=250`);
+  await page.locator(".file-view .file-bar-path", { hasText: "src/server.ts" }).waitFor();
+  await expectLineMark(250, 1);
+  // Lines in a Markdown file show in its numbered source view.
+  await page.goto(`http://127.0.0.1:${port}/?session=alpha%3Aa1&file=docs%2Freport.md&line=3`);
+  await expectLineMark(3, 1);
+  assert.equal(await page.locator(".file-markdown").count(), 0);
+  // A directory deep link reveals it in the Files panel, on a phone too.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`http://127.0.0.1:${port}/?session=alpha%3Aa1&dir=docs`);
+  await page.locator('.tree-row.chosen[data-path="docs"]').waitFor();
+  assert.ok(await page.locator('.tree-row[data-path="docs/report.md"]').isVisible());
+  await page.locator('.tree-row[data-path="docs/report.md"]').click();
+  await page.locator(".file-view .file-bar-path", { hasText: "docs/report.md" }).waitFor();
+  assert.equal(new URL(page.url()).search, "");
   assert.deepEqual(errors, []);
-  console.log("PASS browser conversation: highlighted code, queued messages (remove/edit/interrupt/auto-send), auto-paging history both ways, turn footer, rewind, outline rail preview + jump; no page errors");
+  console.log("PASS browser conversation: highlighted code, queued messages (remove/edit/interrupt/auto-send), auto-paging history both ways, turn footer, rewind, outline rail preview + jump, local file links; no page errors");
 } finally {
   await browser?.close();
   run("stop"); // returns once the instance has exited

@@ -121,6 +121,8 @@ export interface HostState {
   diagnostic?: HostDiagnostic;
   /** The daemon accepts custom project icons (Paseo 0.2+). */
   customIcons?: boolean;
+  /** The daemon runs on this server's machine, so images Paseo saved outside the workspace load. */
+  local?: boolean;
 }
 
 export interface Change<T> {

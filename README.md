@@ -52,6 +52,7 @@ package, with no separate database service to deploy.
   interrupt; rewind a conversation (and, where the provider supports it, its files)
   to an earlier message.
 - Review workspace uncommitted changes in a read-only diff panel, including file paths and addition/deletion counts.
+- Click file links in agent messages to open the file in a tab, scrolled to the linked lines; directory links open the Files panel. Paths LitePaseo cannot open are copied instead of leading to a missing page.
 - Search user and agent messages across the full conversation history and jump to matches.
 - Pause, resume and reorder queued messages; check uncertain delivery without resending. Sidebar queue indicators stay synchronized across devices.
 - Read long conversations without clicking through pages: history loads as you

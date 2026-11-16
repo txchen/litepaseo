@@ -17,6 +17,8 @@ function safeUrl(url: string) {
   const trimmed = url.trim();
   return /^(https?:|mailto:)/i.test(trimmed) ? trimmed : null;
 }
+/** This app's own file links (see rewriteFileLinks): handled in-page, not opened in a new tab. */
+const appLink = (url: string) => /^(\/\?session=|#litepaseo-copy-path=)/.test(url);
 
 function inline(text: string): string {
   // Split out code spans first so their content is never formatted.
@@ -32,10 +34,13 @@ function inline(text: string): string {
     // Only images served by this app (rewritten local references); remote images stay links.
     s = s.replace(/!\[([^\]]*)\]\((\/api\/hosts\/[^)\s]+)\)/g, (_m, alt: string, src: string) =>
       `<img src="${src}" alt="${alt}" loading="lazy" decoding="async">`);
-    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (match, label: string, href: string) => {
-      const url = safeUrl(href.replace(/&amp;/g, "&"));
+    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+&quot;((?:(?!&quot;).)*)&quot;)?\)/g, (match, label: string, href: string, title?: string) => {
+      const raw = href.replace(/&amp;/g, "&");
+      const titled = title ? ` title="${title}"` : "";
+      if (appLink(raw)) return `<a href="${escape(raw)}"${titled}>${label}</a>`;
+      const url = safeUrl(raw);
       return url
-        ? `<a href="${escape(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`
+        ? `<a href="${escape(url)}"${titled} target="_blank" rel="noopener noreferrer">${label}</a>`
         : match;
     });
     s = s.replace(

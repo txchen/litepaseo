@@ -3,7 +3,7 @@ import { computed, inject, ref, type ShallowRef } from "vue";
 import type { TimelineRow } from "../shared/wire.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { loadMarkstream, markstream } from "./markstream-loader.ts";
-import { TIMELINE_CONTEXT, editDiff, formatMessageTimestamp, reasoningHeadline, rewriteImageSources, toolDisplay, toolOutput } from "./timeline-display.ts";
+import { TIMELINE_CONTEXT, editDiff, formatMessageTimestamp, reasoningHeadline, rewriteFileLinks, rewriteImageSources, rewriteMessageImages, toolDisplay, toolOutput } from "./timeline-display.ts";
 import Icon from "./Icon.vue";
 import PluginRow from "./PluginRow.vue";
 import RewindMenu from "./RewindMenu.vue";
@@ -21,7 +21,11 @@ const MAX_DIFF_LINES = 600;
 
 const assistantText = computed(() => {
   const text = String(item.value.text ?? "");
-  return context?.value ? rewriteImageSources(text, context.value.base) : text;
+  const ctx = context?.value;
+  if (!ctx) return text;
+  if (!ctx.session) return rewriteImageSources(text, ctx.base);
+  const links = { session: ctx.session, cwd: ctx.cwd, workspace: ctx.workspace ?? ctx.cwd, localHost: ctx.localHost };
+  return rewriteFileLinks(rewriteMessageImages(text, ctx.base, links), links);
 });
 // Markstream arrives asynchronously; until then the built-in renderer (escapes all input,
 // only http(s)/mailto links and this app's own images) shows the same message.

@@ -324,6 +324,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
       state: hosts.state(h.id),
       diagnostic: hosts.diagnostic(h.id),
       ...(customIcons(h.id) ? { customIcons: true } : {}),
+      ...(isLocalConnection(h.connection) ? { local: true } : {}),
     }));
   app.get("/api/hosts", (c) => c.json(hostStates()));
 

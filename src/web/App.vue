@@ -44,7 +44,7 @@ const FilesPanel = defineAsyncComponent(() => import("./FilesPanel.vue"));
 const FileViewer = defineAsyncComponent(() => import("./FileViewer.vue"));
 const TerminalPanel = defineAsyncComponent(() => import("./TerminalPanel.vue"));
 import DictationButton from "./DictationButton.vue";
-import { TIMELINE_CONTEXT, turnFooters, type TimelineContext } from "./timeline-display.ts";
+import { TIMELINE_CONTEXT, parseFileLink, turnFooters, type FileLink, type FileViewState, type LineRange, type TimelineContext } from "./timeline-display.ts";
 
 type Card = BoardCard;
 type Tab = "chat" | "board" | "hosts" | "settings" | "schedules";
@@ -69,7 +69,7 @@ function showConversation() {
   activeFile.value = null;
 }
 // Files opened as tabs, per thread (kept while the page lives; at most a dozen per thread).
-const fileTabs = reactive(new Map<string, { paths: string[]; active: string | null }>());
+const fileTabs = reactive(new Map<string, { paths: string[]; active: string | null; jump?: FileJump }>());
 const tabOwner = computed(() => selectedThread.value ?? selectedKey.value ?? "");
 const openFiles = computed(() => fileTabs.get(tabOwner.value)?.paths ?? []);
 const activeFile = computed({
@@ -80,19 +80,47 @@ const activeFile = computed({
     if (path && terminalTabs.has(tabOwner.value)) terminalTabs.set(tabOwner.value, false);
   },
 });
-function openFile(path: string) {
+/** A line to show in a file tab; `seq` makes a second click on the same line scroll again. */
+type FileJump = LineRange & { path: string; seq: number };
+let jumpSeq = 0;
+const activeJump = computed(() => {
+  const entry = fileTabs.get(tabOwner.value);
+  return entry?.jump && entry.jump.path === entry.active ? entry.jump : undefined;
+});
+function openFile(path: string, range?: Partial<LineRange>) {
   const owner = tabOwner.value;
   if (!owner) return;
   const entry = fileTabs.get(owner) ?? { paths: [], active: null };
   if (!entry.paths.includes(path)) entry.paths = [...entry.paths, path].slice(-12);
   entry.active = path;
+  entry.jump = range?.line ? { path, line: range.line, end: range.end, seq: ++jumpSeq } : undefined;
   if (terminalTabs.has(owner)) terminalTabs.set(owner, false);
   fileTabs.set(owner, entry);
   if (compact.matches) panel.value = null; // phones: show the file, not the tree on top of it
 }
+/** Each open tab's scroll position and view, per thread; closing the tab forgets it. */
+const fileViews = new Map<string, FileViewState>();
+const fileViewKey = (owner: string, path: string) => `${owner}\n${path}`;
+/** Sent as a tab is left; a tab that was closed (not just switched away from) stays forgotten. */
+function saveFileView(key: string, state: FileViewState) {
+  const split = key.indexOf("\n");
+  if (fileTabs.get(key.slice(0, split))?.paths.includes(key.slice(split + 1))) fileViews.set(key, state);
+}
+/** A directory a link pointed at, shown in the Files panel (per thread; `seq` reveals again). */
+const reveal = ref<{ owner: string; path: string; seq: number } | null>(null);
+function revealDirectory(path: string) {
+  reveal.value = { owner: tabOwner.value, path, seq: ++jumpSeq };
+  panel.value = "files";
+}
+/** Follows a local link rewritten by rewriteFileLinks (never a copy link). */
+function openLocalLink(link: Exclude<FileLink, { kind: "copy" }>) {
+  if (link.kind === "reveal") revealDirectory(link.path);
+  else openFile(link.path, link);
+}
 function closeFile(path: string) {
   const entry = fileTabs.get(tabOwner.value);
   if (!entry) return;
+  fileViews.delete(fileViewKey(tabOwner.value, path));
   const index = entry.paths.indexOf(path);
   entry.paths = entry.paths.filter((p) => p !== path);
   if (entry.active === path) entry.active = entry.paths[Math.min(index, entry.paths.length - 1)] ?? null;
@@ -413,6 +441,13 @@ const hostCounts = computed(() => {
 });
 /** The open thread's working directory: the workspace checkout, else the agent's cwd. */
 const workspaceCwd = computed(() => activeThread.value?.directory || active.value?.cwd || "");
+/** A deep-linked file or directory (`/?session=…&file=…`), opened once its thread is known. */
+const pendingLink = ref<Exclude<FileLink, { kind: "copy" }> | null>(null);
+watch([pendingLink, active, selectedThread], ([pending, a, thread]) => {
+  if (!pending || a?.key !== pending.session || (a.workspaceId && !thread)) return;
+  pendingLink.value = null;
+  openLocalLink(pending);
+});
 const activeProject = computed(() => {
   const cwd = active.value?.cwd ?? "";
   return cwd.replace(/\/+$/, "").split("/").pop() || cwd;
@@ -506,19 +541,43 @@ async function rewindTo(messageId: string, text: string, mode: RewindMode) {
   }
 }
 const timelineContext = shallowRef<TimelineContext>({ base: "", cwd: "" });
-watch(active, (a) => {
+/** Undefined until the host list arrives; meanwhile images Paseo saved are assumed readable. */
+const activeHostLocal = computed(() => {
+  const host = hosts.value.find((h) => h.id === active.value?.hostId);
+  return host ? !!host.local : undefined;
+});
+watch([active, workspaceCwd, activeHostLocal], ([a, workspace, localHost]) => {
   const base = a ? "/api" + path(a) : "";
   const modes = a?.rewind ?? [];
   const current = timelineContext.value;
-  if (base !== current.base || (a?.cwd ?? "") !== current.cwd || modes.join() !== (current.rewindModes ?? []).join())
-    timelineContext.value = { base, cwd: a?.cwd ?? "", rewindModes: modes, rewinding, rewind: (id, text, mode) => void rewindTo(id, text, mode) };
+  if (base !== current.base || (a?.cwd ?? "") !== current.cwd || workspace !== current.workspace || localHost !== current.localHost || modes.join() !== (current.rewindModes ?? []).join())
+    timelineContext.value = {
+      base, cwd: a?.cwd ?? "", session: a?.key, workspace, localHost,
+      rewindModes: modes, rewinding, rewind: (id, text, mode) => void rewindTo(id, text, mode),
+    };
 }, { immediate: true });
 provide(TIMELINE_CONTEXT, timelineContext);
 /** Clicking an image in a message opens it full size. */
 const lightbox = ref<string | null>(null);
 function onTimelineClick(event: MouseEvent) {
   const target = event.target as HTMLElement | null;
-  if (target instanceof HTMLImageElement && target.closest(".prose, .user-images")) { event.preventDefault(); lightbox.value = target.currentSrc || target.src; }
+  if (target instanceof HTMLImageElement && target.closest(".prose, .user-images")) { event.preventDefault(); lightbox.value = target.currentSrc || target.src; return; }
+  // Local links (rewritten by rewriteFileLinks): open a file tab, show a directory in the Files
+  // panel, or copy a path this app cannot open. Modified clicks open the deep link in a new tab.
+  const link = target?.closest?.(".prose a");
+  const file = parseFileLink(link?.getAttribute("href"));
+  if (!file) return;
+  if (file.kind === "copy") {
+    event.preventDefault();
+    const fallback = () => showComposerNotice(`Can't open this here. Path: ${file.path}`);
+    if (navigator.clipboard) navigator.clipboard.writeText(file.path).then(() => showComposerNotice(`Copied path: ${file.path}`), fallback);
+    else fallback();
+    return;
+  }
+  if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  if (file.session !== selectedKey.value) select(file.session);
+  openLocalLink(file);
 }
 const lastTimelineSeq = computed(() => {
   const store = timeline.value;
@@ -628,9 +687,12 @@ async function enter() {
   clearInterval(usageTimer);
   usageTimer = setInterval(() => void loadUsage(), 5 * 60_000);
   // A notification tap opens /?session=<key>; select it once and clean the address.
+  // A file link opened in a new tab adds &file= (or &dir=): open it once the session is shown.
   const wanted = new URLSearchParams(location.search).get("session");
   if (wanted) {
+    const linked = parseFileLink("/" + location.search);
     history.replaceState(history.state, "", "/");
+    pendingLink.value = linked && linked.kind !== "copy" ? linked : null;
     select(wanted);
   }
 }
@@ -2143,6 +2205,13 @@ onUnmounted(() => {
           :cwd="workspaceCwd"
           :path="activeFile"
           :api="api"
+          :session="active.key"
+          :jump="activeJump"
+          :view="fileViews.get(fileViewKey(tabOwner, activeFile))"
+          :view-key="fileViewKey(tabOwner, activeFile)"
+          @view="saveFileView"
+          @open="openFile"
+          @reveal="revealDirectory"
         />
 
         <div v-show="!activeFile && !terminalActive" class="timeline-wrap">
@@ -2360,6 +2429,7 @@ onUnmounted(() => {
               :cwd="workspaceCwd"
               :api="api"
               :active-path="activeFile"
+              :reveal="reveal?.owner === tabOwner ? reveal : null"
               @open="openFile"
             />
           </KeepAlive>

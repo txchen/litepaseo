@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, ref, shallowRef, watch } from "vue";
 import Icon from "./Icon.vue";
 
 /** The workspace file tree. Directories load on expand; a file opens as a main-area tab. */
-const props = defineProps<{ hostId: string; cwd: string; api: (path: string) => Promise<any>; activePath?: string | null }>();
+const props = defineProps<{
+  hostId: string; cwd: string; api: (path: string) => Promise<any>; activePath?: string | null;
+  /** A directory to expand to, select and scroll into view (a link pointed at it). */
+  reveal?: { path: string; seq: number } | null;
+}>();
 const emit = defineEmits<{ open: [path: string] }>();
 
 interface Entry { name: string; path: string; kind: "file" | "directory" | string; size: number }
@@ -14,8 +18,16 @@ const error = ref("");
 const base = computed(() => `/hosts/${encodeURIComponent(props.hostId)}/fs`);
 const q = (path: string) => `cwd=${encodeURIComponent(props.cwd)}&path=${encodeURIComponent(path)}`;
 
-async function load(path: string) {
-  if (loading.value.has(path)) return;
+const inflight = new Map<string, Promise<void>>();
+/** Loads a directory's entries; a second call while one is in flight waits for it. */
+function load(path: string): Promise<void> {
+  const running = inflight.get(path);
+  if (running) return running;
+  const done = fetchEntries(path).finally(() => inflight.delete(path));
+  inflight.set(path, done);
+  return done;
+}
+async function fetchEntries(path: string) {
   loading.value = new Set(loading.value).add(path);
   try {
     const result = await props.api(`${base.value}/list?${q(path)}`);
@@ -59,6 +71,27 @@ const rows = computed(() => {
   return out;
 });
 
+const tree = ref<HTMLElement | null>(null);
+const revealed = ref<string | null>(null);
+// The revealed directory stays selected until a file is chosen.
+watch(() => props.activePath, () => (revealed.value = null));
+watch(() => props.reveal?.seq, async () => {
+  const target = props.reveal?.path;
+  if (!target) return;
+  const parts = target === "." ? [] : target.split("/").filter(Boolean);
+  await load(".");
+  for (let i = 1; i <= parts.length; i++) {
+    const dir = parts.slice(0, i).join("/");
+    if (!children.value.has(dir)) await load(dir);
+    expanded.value = new Set(expanded.value).add(dir);
+  }
+  revealed.value = parts.join("/") || null;
+  await nextTick();
+  const row = Array.from(tree.value?.querySelectorAll<HTMLElement>(".tree-row") ?? []).find((el) => el.dataset.path === revealed.value);
+  row?.scrollIntoView({ block: "center" });
+  row?.focus({ preventScroll: true });
+}, { immediate: true });
+
 </script>
 
 <template>
@@ -70,12 +103,13 @@ const rows = computed(() => {
       </button>
     </div>
     <p v-if="error" class="files-error"><Icon name="alert" :size="13" />{{ error }}</p>
-    <div class="tree" role="tree">
+    <div ref="tree" class="tree" role="tree">
       <button
         v-for="r in rows"
         :key="r.entry.path"
         class="tree-row"
-        :class="{ chosen: r.entry.path === activePath }"
+        :class="{ chosen: r.entry.path === activePath || r.entry.path === revealed }"
+        :data-path="r.entry.path"
         role="treeitem"
         :aria-expanded="r.entry.kind === 'directory' ? expanded.has(r.entry.path) : undefined"
         :style="{ paddingLeft: 8 + r.depth * 14 + 'px' }"

@@ -7,8 +7,16 @@ export type NotificationKind = "attention" | "turn-done" | "turn-failed";
 export interface PushMessage {
   title: string;
   body: string;
-  /** Replaces an earlier notification for the same session on the device. */
+  /** One notification per project on the device: the service worker merges into it. */
   tag: string;
+  /** The conversation this event is about, so merged notifications keep one line per session. */
+  session?: string;
+  /** Project name and conversation title, for the merged notification's title and lines. */
+  project?: string;
+  conversation?: string;
+  /** The event text without the project prefix, for a merged notification's line. */
+  detail?: string;
+  host?: string;
   url: string;
   kind: NotificationKind | "test";
   /** Sessions currently waiting for the user, for the app icon badge. */
@@ -156,7 +164,12 @@ export class Notifier {
     const message: PushMessage = {
       title,
       body: `${body} — ${this.hostLabel(agent.hostId)}`.slice(0, 240),
-      tag: agent.key,
+      tag: `project:${agent.hostId}:${agent.projectKey ?? agent.project}`,
+      session: agent.key,
+      project: agent.project,
+      conversation: agent.title || undefined,
+      detail: body.slice(0, 200),
+      host: this.hostLabel(agent.hostId),
       url: `/?session=${encodeURIComponent(agent.key)}`,
       kind,
       badge: this.waiting.size,

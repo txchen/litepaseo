@@ -84,6 +84,11 @@ test("needs-input and turn-end transitions notify; first sight and idle changes 
       { title: t.sent[0].message.title, body: t.sent[0].message.body, url: t.sent[0].message.url, badge: t.sent[0].message.badge },
       { title: "repo · needs your input", body: "The agent wants to run npm test — MacBook", url: "/?session=h%3Aa", badge: 1 },
     );
+    assert.deepEqual(
+      { tag: t.sent[0].message.tag, session: t.sent[0].message.session, detail: t.sent[0].message.detail, host: t.sent[0].message.host },
+      { tag: "project:h:repo", session: "h:a", detail: "The agent wants to run npm test", host: "MacBook" },
+      "one notification per project; the service worker merges conversations into it",
+    );
     assert.equal(t.notifier.waitingCount, 1);
 
     t.sent.length = 0;

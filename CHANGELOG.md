@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.9
+
+- Merge push notifications per project: one notification per project lists the latest event of each conversation (for example "repo · 3 conversations, 1 needs input"), instead of one notification per conversation.
+- Alert only for a project's first event or a conversation that needs your input; later finished turns in the same project update the notification silently. Tapping it opens the conversation waiting for you, else the newest one.
+
 ## 0.6.8
 
 - Offer a reload when the server runs a different LitePaseo version than the open page, so long-lived tabs and installed apps pick up upgrades.

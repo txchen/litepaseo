@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.8
+
+- Offer a reload when the server runs a different LitePaseo version than the open page, so long-lived tabs and installed apps pick up upgrades.
+- Say what a conversation still loading after 3 seconds is waiting for: the connection to LitePaseo, or the host loading it.
+- Add page age and recent background time to slow-open reports, to identify stale connections after sleep or network changes.
+
 ## 0.6.7
 
 - Send a conversation's first rows as soon as the daemon returns them, instead of after the 500 ms live-update batch.

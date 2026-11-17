@@ -31,6 +31,7 @@ import type { AgentSummary, BoardCard, CardPatch, PromptIndex, PromptMarker, Rew
 import TaskDialog from "./TaskDialog.vue";
 import { registerServiceWorker, setBadge, setFavicon } from "./pwa.ts";
 import { preloadMarkstream } from "./markstream-loader.ts";
+import { version as WEB_VERSION } from "../../package.json";
 import { formatElapsed } from "./elapsed.ts";
 import AgentControls from "./AgentControls.vue";
 import ProviderIcon from "./ProviderIcon.vue";
@@ -719,7 +720,11 @@ function openDirectory() {
     onMessage: (data) => {
       const message = data as DirectoryMessage;
       if (message.type === "project-pins") applyProjectPins(message.pins);
-      else if (message.type === "hosts") { hosts.value = message.hosts; if (message.instanceName !== undefined) instanceName.value = message.instanceName; }
+      else if (message.type === "hosts") {
+        hosts.value = message.hosts;
+        if (message.instanceName !== undefined) instanceName.value = message.instanceName;
+        if (message.version) serverVersion.value = message.version;
+      }
       else if (message.type === "workspaces-snapshot")
         directory.applyCollection({ type: "snapshot", generation: message.generation, seq: message.seq, items: message.workspaces });
       else if (message.type === "workspaces-changes")
@@ -1230,14 +1235,44 @@ watch(
  */
 const SLOW_OPEN_MS = 3000;
 let timelineOpening: ReturnType<typeof trackTimelineOpen> | null = null;
+/**
+ * What a conversation that is still loading after SLOW_OPEN_MS waits for, shown in place of
+ * the plain spinner: the LitePaseo server (no stream response yet) or the host's daemon.
+ */
+const timelineWait = ref<"server" | "host" | null>(null);
+/** The server's version, from the directory stream; this page was built as WEB_VERSION. */
+const serverVersion = ref("");
+const reloadPage = () => location.reload();
+/** Page lifetime and the last time it was in the background, for slow-open reports. */
+const pageStarted = performance.now();
+let lastHidden: { at: number; ms: number } | null = null;
+let hiddenSince: number | null = document.hidden ? performance.now() : null;
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) hiddenSince = performance.now();
+  else if (hiddenSince !== null) {
+    lastHidden = { at: performance.now(), ms: Math.round(performance.now() - hiddenSince) };
+    hiddenSince = null;
+  }
+});
 function trackTimelineOpen(agent: AgentSummary) {
   const started = performance.now();
   const since = () => Math.round(performance.now() - started);
   let connectedMs: number | null = null, rowsMs: number | null = null, attempts = 0, hidden = document.hidden, done = false;
+  // Background time just before this open: a long one can leave a dead connection behind.
+  const background = lastHidden && started - lastHidden.at < 60_000
+    ? { backgroundMs: lastHidden.ms, visibleForMs: Math.round(started - lastHidden.at) }
+    : { backgroundMs: null, visibleForMs: null };
+  const pageAgeMs = Math.round(started - pageStarted);
   const onVisibility = () => (hidden ||= document.hidden);
   document.addEventListener("visibilitychange", onVisibility);
+  timelineWait.value = null;
+  const slow = setTimeout(() => {
+    if (!done) timelineWait.value = connectedMs === null ? "server" : "host";
+  }, SLOW_OPEN_MS);
   const finish = () => {
     done = true;
+    clearTimeout(slow);
+    timelineWait.value = null;
     document.removeEventListener("visibilitychange", onVisibility);
   };
   const report = (totalMs: number) => {
@@ -1245,6 +1280,7 @@ function trackTimelineOpen(agent: AgentSummary) {
     void api("/diagnostics/timeline-slow", "POST", {
       hostId: agent.hostId, agentId: agent.id, totalMs, connectedMs, rowsMs,
       renderMs: rowsMs === null ? null : totalMs - rowsMs, attempts, hidden,
+      pageAgeMs, ...background, version: WEB_VERSION,
     }).catch(() => {});
   };
   return {
@@ -1257,7 +1293,10 @@ function trackTimelineOpen(agent: AgentSummary) {
     state(state: StreamState) {
       if (done) return;
       if (state === "connecting") attempts++;
-      if (state === "live") connectedMs ??= since();
+      if (state === "live") {
+        connectedMs ??= since();
+        if (timelineWait.value === "server") timelineWait.value = "host";
+      }
       if (state === "closed" || state === "unauthorized") finish();
     },
     message(message: TimelineMessage) {
@@ -1964,6 +2003,10 @@ onUnmounted(() => {
     </aside>
 
     <main class="main">
+      <div v-if="serverVersion && serverVersion !== WEB_VERSION" class="toast update-toast" role="status">
+        <Icon name="refresh" :size="15" /><span>LitePaseo {{ serverVersion }} is installed. Reload to use it.</span
+        ><button class="btn btn-sm" @click="reloadPage">Reload</button>
+      </div>
       <div v-if="error" class="toast" role="alert">
         <Icon name="alert" :size="15" /><span>{{ error }}</span
         ><button class="icon-btn" aria-label="Dismiss" @click="error = ''">
@@ -2314,7 +2357,7 @@ onUnmounted(() => {
             </div>
             <div v-if="!visibleRows.length" class="timeline-empty">
               <span v-if="!timeline.ready" class="spinner"></span>
-              {{ timeline.ready ? "No messages yet." : "Loading conversation…" }}
+              {{ timeline.ready ? "No messages yet." : timelineWait === "server" ? "Still connecting to LitePaseo…" : timelineWait === "host" ? `Waiting for ${hostLabels.get(active?.hostId ?? "") ?? "the host"} to load this conversation…` : "Loading conversation…" }}
             </div>
           </div>
         </div>

@@ -376,7 +376,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     if (disposed || hostFlush || !directoryStreams.size) return;
     hostFlush = setTimeout(() => {
       hostFlush = undefined;
-      const message: DirectoryMessage = { type: "hosts", hosts: hostStates(), instanceName: instanceName() };
+      const message: DirectoryMessage = { type: "hosts", hosts: hostStates(), instanceName: instanceName(), version: VERSION };
       for (const stream of directoryStreams) stream.send(message);
     }, HOST_FLUSH_MS);
   });
@@ -415,10 +415,14 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
    */
   app.post("/api/diagnostics/timeline-slow", async c => {
     const ms = z.number().int().nonnegative().max(3_600_000).nullable();
+    const long = z.number().int().nonnegative().max(90 * 86_400_000).nullable();
     const input = z.object({
       hostId: z.string().min(1).max(200), agentId: z.string().min(1).max(200),
       totalMs: ms, connectedMs: ms, rowsMs: ms, renderMs: ms,
       attempts: z.number().int().nonnegative().max(1000), hidden: z.boolean(),
+      // A page, and its time in the background, can last days.
+      pageAgeMs: long.optional(), backgroundMs: long.optional(), visibleForMs: ms.optional(),
+      version: z.string().max(40).optional(),
     }).strict().parse(await c.req.json());
     console.warn(JSON.stringify({ event: "timeline_slow_client", ...input }));
     return c.json({ ok: true });
@@ -428,7 +432,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     const input = z.object({ name: z.string().trim().max(64).refine(name => !/[\u0000-\u001f\u007f]/.test(name), "Use a single-line name") }).strict().safeParse(await c.req.json());
     if (!input.success) return c.json({ error: "Use an instance name of up to 64 characters on a single line." }, 400);
     store.setSetting("instance-name", input.data.name || null);
-    const message: DirectoryMessage = { type: "hosts", hosts: hostStates(), instanceName: instanceName() };
+    const message: DirectoryMessage = { type: "hosts", hosts: hostStates(), instanceName: instanceName(), version: VERSION };
     for (const stream of directoryStreams) stream.send(message);
     return c.json({ name: instanceName() });
   });
@@ -441,7 +445,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
       c.req.query("wgeneration") === hosts.workspaces.generation && Number.isInteger(wsince);
     return eventStream(c.req.raw.signal, (send) => {
       const stream: DirectoryStream = { last: resumable ? since : -1, lastWorkspaces: wresumable ? wsince : -1, send };
-      send({ type: "hosts", hosts: hostStates(), instanceName: instanceName() });
+      send({ type: "hosts", hosts: hostStates(), instanceName: instanceName(), version: VERSION });
       send({ type: "project-pins", pins: projectPins() });
       deliverAgents(stream);
       directoryStreams.add(stream);

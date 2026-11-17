@@ -136,7 +136,8 @@ export type DirectoryMessage =
   | { type: "changes"; generation: string; seq: number; changes: Change<AgentSummary>[] }
   | { type: "workspaces-snapshot"; generation: string; seq: number; workspaces: WorkspaceSummary[] }
   | { type: "workspaces-changes"; generation: string; seq: number; changes: Change<WorkspaceSummary>[] }
-  | { type: "hosts"; hosts: HostState[]; instanceName?: string };
+  /** `version`: the server's LitePaseo version; a page built for another one offers a reload. */
+  | { type: "hosts"; hosts: HostState[]; instanceName?: string; version?: string };
 
 export interface TimelineCursor {
   epoch: string;

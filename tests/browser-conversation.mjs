@@ -46,7 +46,7 @@ try {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
 
-  let status = "running", seq = 1, diffFailure = false, provider = "claude", rejectNextSend = false, timelineDelay = 0;
+  let status = "running", seq = 1, diffFailure = false, provider = "claude", rejectNextSend = false, timelineDelay = 0, serverVersion = null;
   const queue = [];
   const messages = [], pages = [], rewinds = [], fileReads = [];
   const agent = () => ({
@@ -61,7 +61,7 @@ try {
     pinnedAt: 0, activityAt: 1, state: "running", attention: false, unread: false };
   // Every reconnect answers with a fresh snapshot of the current agent state.
   await page.route("**/api/stream**", (route) => route.fulfill(sse(
-    { type: "hosts", hosts: [{ id: "alpha", label: "Alpha", state: "connected" }] },
+    { type: "hosts", hosts: [{ id: "alpha", label: "Alpha", state: "connected" }], ...(serverVersion ? { version: serverVersion } : {}) },
     { type: "workspaces-snapshot", generation: "wgen", seq: 1, workspaces: [workspace] },
     { type: "snapshot", generation: "gen", seq: ++seq, agents: [agent()] },
   )));
@@ -585,15 +585,28 @@ try {
   await expectLineMark(3, 1);
   assert.equal(await page.locator(".file-markdown").count(), 0);
   // A slow open is reported with the browser's side of the timing.
-  timelineDelay = 3200;
+  timelineDelay = 5000;
   const slowReport = page.waitForRequest((r) => r.url().endsWith("/api/diagnostics/timeline-slow"));
   await page.goto(`http://127.0.0.1:${port}/?session=alpha%3Aa1`);
+  // Past 3 s the spinner says what it waits for: here the stream has not even connected.
+  await page.locator(".timeline-empty", { hasText: "Still connecting to LitePaseo" }).waitFor();
   const report = (await slowReport).postDataJSON();
   timelineDelay = 0;
+  assert.equal(typeof report.pageAgeMs, "number");
+  assert.match(report.version, /^\d+\.\d+\.\d+/);
   assert.equal(report.hostId, "alpha");
   assert.equal(report.agentId, "a1");
   assert.ok(report.totalMs >= 3000 && report.connectedMs >= 3000 && report.rowsMs >= report.connectedMs, JSON.stringify(report));
   assert.equal(report.attempts, 1);
+  // A page built for another version than the server offers a reload.
+  assert.equal(await page.locator(".update-toast").count(), 0);
+  serverVersion = "99.0.0";
+  await page.goto(`http://127.0.0.1:${port}/?session=alpha%3Aa1`);
+  await page.locator(".update-toast", { hasText: "LitePaseo 99.0.0 is installed. Reload to use it." }).waitFor();
+  serverVersion = null;
+  await Promise.all([page.waitForEvent("load"), page.locator(".update-toast").getByRole("button", { name: "Reload" }).click()]);
+  await page.locator(".side-section").waitFor();
+  assert.equal(await page.locator(".update-toast").count(), 0);
   // A directory deep link reveals it in the Files panel, on a phone too.
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`http://127.0.0.1:${port}/?session=alpha%3Aa1&dir=docs`);

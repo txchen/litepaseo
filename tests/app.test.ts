@@ -337,7 +337,10 @@ test("browsers report slow conversation opens to the server log, validated and c
       headers: { authorization: "Bearer test-token", "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    const report = { hostId: "h1", agentId: "a1", totalMs: 18500, connectedMs: 120, rowsMs: 18200, renderMs: 300, attempts: 1, hidden: false };
+    const report = {
+      hostId: "h1", agentId: "a1", totalMs: 18500, connectedMs: 18100, rowsMs: 18200, renderMs: 300, attempts: 1, hidden: false,
+      pageAgeMs: 7_200_000, backgroundMs: 3_000_000, visibleForMs: 800, version: "0.6.8",
+    };
     assert.equal((await post(report)).status, 200);
     assert.deepEqual(JSON.parse(logged.at(-1)!), { event: "timeline_slow_client", ...report });
     // Unknown fields (say, message text) and nonsense values are refused, not logged.

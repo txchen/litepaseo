@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Notifier, type PushMessage } from "../src/server/notifier.ts";
+import { Notifier, PROJECT_COOLDOWN_MS, type PushMessage } from "../src/server/notifier.ts";
 import { Store } from "../src/server/store.ts";
 import type { AgentSummary } from "../src/shared/wire.ts";
 
@@ -34,6 +34,7 @@ function setup(replyPreview?: (agent: AgentSummary, previous: AgentSummary) => P
   const sent: { endpoint: string; message: PushMessage }[] = [];
   const failing = new Set<string>();
   let now = 1000;
+  let timers: { at: number; run: () => void }[] = [];
   let viewing = false;
   const notifier = new Notifier({
     store,
@@ -47,6 +48,11 @@ function setup(replyPreview?: (agent: AgentSummary, previous: AgentSummary) => P
     isViewing: () => viewing,
     hostLabel: () => "MacBook",
     now: () => now,
+    schedule: (run, ms) => {
+      const timer = { at: now + ms, run };
+      timers.push(timer);
+      return () => { timers = timers.filter((t) => t !== timer); };
+    },
   });
   const subscribe = (endpoint: string, prefs = { attention: true, turns: true }) =>
     store.savePushSubscription({ endpoint, sessionId: "s1", p256dh: "k", auth: "a", prefs, created: 0 });
@@ -58,7 +64,12 @@ function setup(replyPreview?: (agent: AgentSummary, previous: AgentSummary) => P
     failing,
     subscribe,
     settle,
-    tick: (ms: number) => (now += ms),
+    tick: (ms: number) => {
+      now += ms;
+      const due = timers.filter((t) => t.at <= now);
+      timers = timers.filter((t) => t.at > now);
+      for (const timer of due) timer.run();
+    },
     view: (on: boolean) => (viewing = on),
     cleanup: () => {
       store.close();
@@ -84,17 +95,15 @@ test("needs-input and turn-end transitions notify; first sight and idle changes 
       { title: t.sent[0].message.title, body: t.sent[0].message.body, url: t.sent[0].message.url, badge: t.sent[0].message.badge },
       { title: "repo · needs your input", body: "The agent wants to run npm test — MacBook", url: "/?session=h%3Aa", badge: 1 },
     );
-    assert.deepEqual(
-      { tag: t.sent[0].message.tag, session: t.sent[0].message.session, detail: t.sent[0].message.detail, host: t.sent[0].message.host },
-      { tag: "project:h:repo", session: "h:a", detail: "The agent wants to run npm test", host: "MacBook" },
-      "one notification per project; the service worker merges conversations into it",
-    );
+    assert.equal(t.sent[0].message.tag, "project:h:repo", "one notification per project");
     assert.equal(t.notifier.waitingCount, 1);
 
     t.sent.length = 0;
     t.notifier.transition(summary({ status: "running", attention: true, pendingPermissions: [permission] }), summary({ status: "running" }));
     t.notifier.transition(summary({ status: "running" }), summary({ status: "idle", activityAt: 1000 }));
     await t.settle();
+    assert.equal(t.sent.length, 0, "a turn end right after a push for the project waits for the cooldown");
+    t.tick(PROJECT_COOLDOWN_MS);
     assert.deepEqual(t.sent.map((s) => [s.endpoint, s.message.title]), [["https://push.example/1", "repo · turn finished"]]);
     assert.equal(t.notifier.waitingCount, 0);
 
@@ -122,6 +131,7 @@ test("failed turns, dedupe, stale ends, viewing suppression and dead subscriptio
     t.notifier.transition(summary({ status: "running" }), summary({ status: "idle" }));
     t.notifier.transition(summary({ status: "running" }), summary({ status: "idle" }));
     await t.settle();
+    t.tick(PROJECT_COOLDOWN_MS);
     assert.equal(t.sent.length, 1, "a repeat within the dedupe window is dropped");
 
     t.tick(20 * 60_000);
@@ -210,5 +220,83 @@ test("viewing is rechecked after preparing the reply preview", async () => {
     finish("Finished");
     await t.settle();
     assert.equal(t.sent.length, 0);
+  } finally { t.cleanup(); }
+});
+
+const agent = (id: string, title: string, extra: Partial<AgentSummary> = {}) =>
+  summary({ key: `h:${id}`, id, title, ...extra });
+const finish = (t: ReturnType<typeof setup>, id: string, title: string) =>
+  t.notifier.transition(agent(id, title, { status: "running", unread: false }), agent(id, title, { unread: true }));
+
+test("a project's finished turns merge into one push per cooldown; needing input is never held", async () => {
+  const t = setup();
+  try {
+    t.subscribe("https://push.example/phone");
+    finish(t, "a", "Fix tests");
+    await t.settle();
+    assert.deepEqual(t.sent.map((s) => s.message.title), ["repo · turn finished"], "a quiet project's first event goes out at once");
+
+    t.sent.length = 0;
+    finish(t, "b", "Docs");
+    finish(t, "c", "Refactor");
+    t.notifier.transition(agent("x", "Other", { status: "running", project: "other", projectKey: "other" }), agent("x", "Other", { project: "other", projectKey: "other" }));
+    await t.settle();
+    assert.deepEqual(t.sent.map((s) => s.message.title), ["other · turn finished"], "projects are throttled separately");
+
+    t.sent.length = 0;
+    t.tick(PROJECT_COOLDOWN_MS);
+    assert.equal(t.sent.length, 1, "one push for the held turns");
+    assert.deepEqual(
+      { title: t.sent[0].message.title, body: t.sent[0].message.body, tag: t.sent[0].message.tag, url: t.sent[0].message.url },
+      {
+        title: "repo · 3 finished",
+        body: "Done · Refactor: The agent finished this turn.\nDone · Docs: The agent finished this turn.\nDone · Fix tests: The agent finished this turn.\n— MacBook",
+        tag: "project:h:repo",
+        url: "/?session=h%3Ac",
+      },
+      "the push lists everything still unseen in the project, newest first",
+    );
+
+    t.sent.length = 0;
+    t.notifier.transition(agent("a", "Fix tests", { unread: true }), agent("a", "Fix tests")); // opened
+    t.notifier.transition(agent("b", "Docs", { unread: true }), agent("b", "Docs", { status: "running" })); // replied
+    t.notifier.transition(agent("d", "Deploy", { status: "running" }), agent("d", "Deploy", { status: "running", attention: true }));
+    await t.settle();
+    assert.deepEqual(
+      { title: t.sent[0].message.title, body: t.sent[0].message.body, url: t.sent[0].message.url },
+      {
+        title: "repo · 1 needs input, 1 finished",
+        body: "Needs input · Deploy: The agent is waiting for your input.\nDone · Refactor: The agent finished this turn.\n— MacBook",
+        url: "/?session=h%3Ad",
+      },
+      "input goes out within the cooldown; seen or resumed conversations drop out",
+    );
+
+    t.sent.length = 0;
+    t.tick(PROJECT_COOLDOWN_MS);
+    assert.equal(t.sent.length, 0, "nothing new: no push");
+  } finally { t.cleanup(); }
+});
+
+test("held turns are dropped when seen before the cooldown ends; long digests are capped", async () => {
+  const t = setup();
+  try {
+    t.subscribe("https://push.example/phone");
+    finish(t, "a", "A");
+    await t.settle();
+    finish(t, "b", "B");
+    t.notifier.transition(agent("b", "B", { unread: true }), agent("b", "B"));
+    t.sent.length = 0;
+    t.tick(PROJECT_COOLDOWN_MS);
+    assert.equal(t.sent.length, 0);
+
+    for (const id of ["c", "d", "e", "f", "g"]) finish(t, id, id.toUpperCase());
+    await t.settle();
+    assert.equal(t.sent.length, 1, "the cooldown had ended: c goes out at once, the rest wait");
+    t.sent.length = 0;
+    t.tick(PROJECT_COOLDOWN_MS);
+    assert.equal(t.sent.length, 1);
+    assert.equal(t.sent[0].message.title, "repo · 6 finished");
+    assert.match(t.sent[0].message.body, /^Done · G: .*\n.*\n.*\nDone · D: .*\n\+2 more\n— MacBook$/);
   } finally { t.cleanup(); }
 });

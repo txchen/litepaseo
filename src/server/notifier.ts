@@ -7,16 +7,8 @@ export type NotificationKind = "attention" | "turn-done" | "turn-failed";
 export interface PushMessage {
   title: string;
   body: string;
-  /** One notification per project on the device: the service worker merges into it. */
+  /** One notification per project: a newer push replaces the project's earlier one where supported. */
   tag: string;
-  /** The conversation this event is about, so merged notifications keep one line per session. */
-  session?: string;
-  /** Project name and conversation title, for the merged notification's title and lines. */
-  project?: string;
-  conversation?: string;
-  /** The event text without the project prefix, for a merged notification's line. */
-  detail?: string;
-  host?: string;
   url: string;
   kind: NotificationKind | "test";
   /** Sessions currently waiting for the user, for the app icon badge. */
@@ -31,6 +23,30 @@ export interface PushSender {
 const DEDUPE_MS = 15_000;
 /** Turn ends older than this (seen late, e.g. after a reconnect) are not announced. */
 const STALE_MS = 10 * 60_000;
+/**
+ * At most one push per project in this window for finished turns; later ones wait and go out
+ * together when it ends. Input requests and failed turns are never held back.
+ */
+export const PROJECT_COOLDOWN_MS = 2 * 60_000;
+/** A project digest forgets events this old, even if the user never opened them. */
+const DIGEST_TTL_MS = 60 * 60_000;
+/** Lines in a merged notification; phones show about four. */
+const MAX_LINES = 4;
+
+interface DigestEntry {
+  kind: NotificationKind;
+  agent: AgentSummary;
+  detail: string;
+  at: number;
+  sent: boolean;
+}
+
+/** What a project's devices have not looked at yet; each push shows all of it. */
+interface ProjectDigest {
+  entries: Map<string, DigestEntry>;
+  lastSent: number;
+  cancel?: () => void;
+}
 
 export function vapidKeys(store: Store) {
   const saved = store.setting("vapid");
@@ -58,10 +74,16 @@ export function webPushSender(store: Store, subject: string): PushSender {
   };
 }
 
+const projectTag = (agent: AgentSummary) => `project:${agent.hostId}:${agent.projectKey ?? agent.project}`;
+const prefFor = (kind: NotificationKind): keyof PushPrefs => (kind === "attention" ? "attention" : "turns");
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
 /**
  * Turns directory transitions into push notifications: a session starting to need the user
- * (a permission or question appears) and a turn finishing or failing. Detection is per
- * transition, O(1); delivery fans out to the (few) subscribed devices.
+ * (a permission or question appears) and a turn finishing or failing. Events are merged per
+ * project on the server, so the phone gets one push per project per cooldown however many
+ * conversations finish; this does not depend on the phone merging notifications by tag (iOS
+ * does not). Detection is per transition, O(1); delivery fans out to the (few) subscribed devices.
  */
 export class Notifier {
   private readonly store: Store;
@@ -70,7 +92,9 @@ export class Notifier {
   private readonly hostLabel: (hostId: string) => string;
   private readonly waiting = new Set<string>();
   private readonly recent = new Map<string, number>();
+  private readonly digests = new Map<string, ProjectDigest>();
   private readonly now: () => number;
+  private readonly schedule: (run: () => void, ms: number) => () => void;
   private readonly replyPreview?: (agent: AgentSummary, previous: AgentSummary) => Promise<string | null>;
 
   constructor(options: {
@@ -79,6 +103,8 @@ export class Notifier {
     isViewing: (key: string) => boolean;
     hostLabel: (hostId: string) => string;
     now?: () => number;
+    /** Runs `run` after `ms`; returns a cancel function. Tests drive time by hand. */
+    schedule?: (run: () => void, ms: number) => () => void;
     replyPreview?: (agent: AgentSummary, previous: AgentSummary) => Promise<string | null>;
   }) {
     this.store = options.store;
@@ -86,6 +112,13 @@ export class Notifier {
     this.isViewing = options.isViewing;
     this.hostLabel = options.hostLabel;
     this.now = options.now ?? Date.now;
+    this.schedule =
+      options.schedule ??
+      ((run, ms) => {
+        const timer = setTimeout(run, ms);
+        timer.unref();
+        return () => clearTimeout(timer);
+      });
     this.replyPreview = options.replyPreview;
   }
 
@@ -99,7 +132,11 @@ export class Notifier {
     if (next?.attention) this.waiting.add(key);
     else this.waiting.delete(key);
     // First sight is a baseline, not an event: nothing changed while we were watching.
-    if (!previous || !next) return;
+    if (!previous || !next) {
+      if (!next) this.forget(previous!);
+      return;
+    }
+    this.settle(previous, next);
     const newPermission = next.pendingPermissions.some(
       (p) => !previous.pendingPermissions.some((q) => q.id === p.id),
     );
@@ -110,14 +147,13 @@ export class Notifier {
           ? `asks: ${permission.title || permission.name}`
           : `wants to ${midSentence(permission.title || permission.name)}`
         : "is waiting for you";
-      void this.emit("attention", next, `${next.project} · needs your input`, permission ? `The agent ${what}` : "The agent is waiting for your input.", permission ? undefined : previous);
+      void this.emit("attention", next, permission ? `The agent ${what}` : "The agent is waiting for your input.", permission ? undefined : previous);
     } else if (previous.status === "running" && next.status !== "running") {
       if (this.now() - next.activityAt > STALE_MS) return;
       const failed = next.status === "error";
       void this.emit(
         failed ? "turn-failed" : "turn-done",
         next,
-        `${next.project} · ${failed ? "turn failed" : "turn finished"}`,
         failed ? next.lastError || "The agent could not finish this turn." : "The agent finished this turn.",
         failed ? undefined : previous,
       );
@@ -141,15 +177,29 @@ export class Notifier {
     return subs.length;
   }
 
-  private async emit(kind: NotificationKind, agent: AgentSummary, title: string, body: string, previous?: AgentSummary) {
+  /** The user dealt with a conversation (opened it, answered, or started a new turn): drop its news. */
+  private settle(previous: AgentSummary, next: AgentSummary) {
+    const digest = this.digests.get(projectTag(next));
+    const entry = digest?.entries.get(next.key);
+    if (!digest || !entry) return;
+    const seen = previous.unread && !next.unread;
+    const resumed = previous.status !== "running" && next.status === "running";
+    const answered = entry.kind === "attention" && previous.attention && !next.attention;
+    if (seen || resumed || answered) digest.entries.delete(next.key);
+  }
+
+  private forget(agent: AgentSummary) {
+    this.digests.get(projectTag(agent))?.entries.delete(agent.key);
+  }
+
+  private async emit(kind: NotificationKind, agent: AgentSummary, body: string, previous?: AgentSummary) {
     const dedupeKey = `${kind}:${agent.key}`;
     const now = this.now();
     if (now - (this.recent.get(dedupeKey) ?? -Infinity) < DEDUPE_MS) return;
     this.recent.set(dedupeKey, now);
     if (this.recent.size > 5000) this.recent.clear();
-    const pref: keyof PushPrefs = kind === "attention" ? "attention" : "turns";
-    const subscriptions = this.store.pushSubscriptions().filter(s => s.prefs[pref] && !this.isViewing(agent.key));
-    if (!subscriptions.length) return;
+    const pref = prefFor(kind);
+    if (this.isViewing(agent.key) || !this.store.pushSubscriptions().some((s) => s.prefs[pref])) return;
     if (previous && this.replyPreview) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -161,22 +211,70 @@ export class Notifier {
       } catch { /* A missing timeline must not suppress the notification. */ }
       finally { clearTimeout(timer); }
     }
-    const message: PushMessage = {
-      title,
-      body: `${body} — ${this.hostLabel(agent.hostId)}`.slice(0, 240),
-      tag: `project:${agent.hostId}:${agent.projectKey ?? agent.project}`,
-      session: agent.key,
-      project: agent.project,
-      conversation: agent.title || undefined,
-      detail: body.slice(0, 200),
-      host: this.hostLabel(agent.hostId),
-      url: `/?session=${encodeURIComponent(agent.key)}`,
-      kind,
-      badge: this.waiting.size,
-    };
-    for (const subscription of subscriptions)
-      if (!this.isViewing(agent.key))
-        void this.deliver(subscription, message);
+    if (this.isViewing(agent.key)) return;
+    const tag = projectTag(agent);
+    let digest = this.digests.get(tag);
+    if (!digest) this.digests.set(tag, (digest = { entries: new Map(), lastSent: -Infinity }));
+    // Re-insert so the map stays oldest → newest.
+    digest.entries.delete(agent.key);
+    digest.entries.set(agent.key, { kind, agent, detail: body, at: this.now(), sent: false });
+    const wait = digest.lastSent + PROJECT_COOLDOWN_MS - this.now();
+    // Input requests and failures need the user; only plain turn ends are held back.
+    if (kind !== "turn-done" || wait <= 0) this.flush(tag);
+    else digest.cancel ??= this.schedule(() => this.flush(tag), wait);
+  }
+
+  private flush(tag: string) {
+    const digest = this.digests.get(tag);
+    if (!digest) return;
+    digest.cancel?.();
+    digest.cancel = undefined;
+    const now = this.now();
+    for (const [key, entry] of digest.entries)
+      if (now - entry.at > DIGEST_TTL_MS || this.isViewing(key)) digest.entries.delete(key);
+    const entries = [...digest.entries.values()].reverse();
+    if (!entries.some((e) => !e.sent)) {
+      if (!digest.entries.size) this.digests.delete(tag);
+      return;
+    }
+    digest.lastSent = now;
+    const messages = new Map<string, PushMessage | null>();
+    for (const subscription of this.store.pushSubscriptions()) {
+      const prefs = `${subscription.prefs.attention}:${subscription.prefs.turns}`;
+      if (!messages.has(prefs)) {
+        const shown = entries.filter((e) => subscription.prefs[prefFor(e.kind)]);
+        messages.set(prefs, shown.some((e) => !e.sent) ? this.compose(tag, shown) : null);
+      }
+      const message = messages.get(prefs);
+      if (message) void this.deliver(subscription, message);
+    }
+    for (const entry of entries) entry.sent = true;
+  }
+
+  /** One notification for a project's unseen events, newest first. */
+  private compose(tag: string, entries: DigestEntry[]): PushMessage {
+    const newest = entries[0];
+    const { project, hostId } = newest.agent;
+    const host = this.hostLabel(hostId);
+    const target = entries.find((e) => e.kind === "attention") ?? newest;
+    const base = { tag, url: `/?session=${encodeURIComponent(target.agent.key)}`, kind: target.kind, badge: this.waiting.size };
+    if (entries.length === 1) {
+      const what = newest.kind === "attention" ? "needs your input" : newest.kind === "turn-failed" ? "turn failed" : "turn finished";
+      return { ...base, title: `${project} · ${what}`, body: `${newest.detail} — ${host}`.slice(0, 240) };
+    }
+    const count = (kind: NotificationKind) => entries.filter((e) => e.kind === kind).length;
+    const waiting = count("attention"), failed = count("turn-failed"), done = count("turn-done");
+    const parts = [
+      waiting && `${waiting} need${waiting === 1 ? "s" : ""} input`,
+      failed && `${failed} failed`,
+      done && `${done} finished`,
+    ].filter(Boolean);
+    const label = { attention: "Needs input", "turn-failed": "Failed", "turn-done": "Done" } as const;
+    const lines = entries
+      .slice(0, MAX_LINES)
+      .map((e) => clip(`${label[e.kind]} · ${e.agent.title ? `${e.agent.title}: ` : ""}${e.detail}`, 100));
+    if (entries.length > MAX_LINES) lines.push(`+${entries.length - MAX_LINES} more`);
+    return { ...base, title: `${project} · ${parts.join(", ")}`, body: `${lines.join("\n")}\n— ${host}` };
   }
 
   private async deliver(subscription: PushSubscriptionRecord, message: PushMessage) {

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.10
+
+- Merge push notifications per project on the server, so iPhones benefit too: 0.6.9 merged them in the service worker, which iOS does not support. Finished turns send at most one push per project every 2 minutes; turns finishing during that time go out together when it ends (for example "repo · 3 finished", newest first). Input requests and failed turns still notify immediately, listing the project's other unseen updates too.
+- Leave conversations out of later pushes once you have opened them, replied, or answered their question.
+
 ## 0.6.9
 
 - Merge push notifications per project: one notification per project lists the latest event of each conversation (for example "repo · 3 conversations, 1 needs input"), instead of one notification per conversation.

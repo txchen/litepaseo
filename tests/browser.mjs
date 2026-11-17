@@ -301,7 +301,13 @@ try {
     return route.fulfill({json: pinnedProjects});
   });
   await page.getByRole('button', {name: 'View options', exact: true}).click();
-  await page.getByRole('radiogroup', {name: 'Filter by host'}).getByRole('radio', {name: /Alpha/}).click();
+  // The sidebar count and the host chips count the same thing: workspaces.
+  const listCount = () => page.locator('.side-section .list-summary').textContent();
+  const hostChips = page.getByRole('radiogroup', {name: 'Filter by host'});
+  assert.equal(await listCount(), await hostChips.getByRole('radio', {name: /^All/}).locator('.chip-count').textContent());
+  assert.match(await page.locator('.side-section .list-summary').getAttribute('title'), /^\d+ workspaces? in \d+ projects?$/);
+  await hostChips.getByRole('radio', {name: /Alpha/}).click();
+  assert.equal(await listCount(), await hostChips.getByRole('radio', {name: /Alpha/}).locator('.chip-count').textContent());
   await page.getByRole('button', {name: 'View options', exact: true}).click();
   const activeHostFilter = page.getByRole('group', {name: 'Active host filter', exact: true});
   assert.match(await activeHostFilter.textContent(), /Host: Alpha/);

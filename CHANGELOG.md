@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.6
+
+- Make the sidebar count under Workspaces/Recent always the number of workspaces listed, matching the host filter chips; it previously showed the number of projects under a Workspaces label. Hovering the count shows both, e.g. "45 workspaces in 23 projects".
+
 ## 0.6.5
 
 - Publish releases to npm automatically from GitHub Releases through npm Trusted Publishing, with provenance. No application changes.

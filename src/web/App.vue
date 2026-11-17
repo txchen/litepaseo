@@ -417,6 +417,9 @@ const projectCount = computed(() => {
   directory.version.value;
   return directory.projectCount;
 });
+const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+/** The sidebar count spelled out, e.g. "45 workspaces in 23 projects". */
+const listSummary = computed(() => `${plural(viewSize.value, "workspace")} in ${plural(projectCount.value, "project")}`);
 watch(listMode, (mode) => localStorage.setItem("litepaseo-list-mode", mode));
 
 // Host scope for the sidebar. Each host keeps its own incrementally maintained view.
@@ -1813,7 +1816,8 @@ onUnmounted(() => {
       </nav>
       <div class="side-section">
         <span class="side-label">{{ listMode === "projects" ? "Workspaces" : "Recent" }}</span>
-        <span class="list-summary">{{ listMode === "projects" ? projectCount : viewSize }}</span>
+        <!-- Always the number of workspaces listed: the same unit as the host chips. -->
+        <span class="list-summary" :title="listSummary" :aria-label="listSummary">{{ viewSize }}</span>
         <button
           class="icon-btn side-tool"
           :class="{ chosen: viewMenu || hostFilter !== null || listMode !== 'projects' }"
@@ -1841,7 +1845,7 @@ onUnmounted(() => {
         </div>
         <div v-if="hosts.length > 1" class="host-filter" role="radiogroup" aria-label="Filter by host">
           <button role="radio" :aria-checked="hostFilter === null" :class="{ chosen: hostFilter === null }" @click="hostFilter = null">
-            All<span class="chip-count">{{ sessionCount }}</span>
+            All<span class="chip-count" :title="plural(sessionCount, 'workspace')">{{ sessionCount }}</span>
           </button>
           <button
             v-for="h in hosts"
@@ -1853,7 +1857,7 @@ onUnmounted(() => {
             @click="hostFilter = h.id"
           >
             <span class="status-dot" :class="h.state === 'connected' ? 'is-idle-ok' : 'is-offline'"></span
-            >{{ h.label }}<span class="chip-count">{{ hostCounts.get(h.id) }}</span>
+            >{{ h.label }}<span class="chip-count" :title="plural(hostCounts.get(h.id) ?? 0, 'workspace')">{{ hostCounts.get(h.id) }}</span>
           </button>
         </div>
       </div>

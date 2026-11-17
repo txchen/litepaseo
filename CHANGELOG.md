@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.7
+
+- Send a conversation's first rows as soon as the daemon returns them, instead of after the 500 ms live-update batch.
+- Log slow conversation opens (over 3 seconds) with a per-layer breakdown and no conversation content: `timeline_slow` from the server (daemon subscription, history read, retries) and `timeline_slow_client` from the browser (stream connected, rows arrived, rendering, or left before rows arrived).
+
 ## 0.6.6
 
 - Make the sidebar count under Workspaces/Recent always the number of workspaces listed, matching the host filter chips; it previously showed the number of projects under a Workspaces label. Hovering the count shows both, e.g. "45 workspaces in 23 projects".

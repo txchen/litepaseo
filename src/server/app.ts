@@ -409,6 +409,20 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     presence.update(session.id, input.tab, input.seq, input.key);
     return c.json({ ok: true });
   });
+  /**
+   * A browser's account of a slow conversation open (see timeline_slow for the server's):
+   * together they show whether the time went to the server, the network or the browser.
+   */
+  app.post("/api/diagnostics/timeline-slow", async c => {
+    const ms = z.number().int().nonnegative().max(3_600_000).nullable();
+    const input = z.object({
+      hostId: z.string().min(1).max(200), agentId: z.string().min(1).max(200),
+      totalMs: ms, connectedMs: ms, rowsMs: ms, renderMs: ms,
+      attempts: z.number().int().nonnegative().max(1000), hidden: z.boolean(),
+    }).strict().parse(await c.req.json());
+    console.warn(JSON.stringify({ event: "timeline_slow_client", ...input }));
+    return c.json({ ok: true });
+  });
   app.get("/api/instance", c => c.json({ name: instanceName() }));
   app.put("/api/instance", async c => {
     const input = z.object({ name: z.string().trim().max(64).refine(name => !/[\u0000-\u001f\u007f]/.test(name), "Use a single-line name") }).strict().safeParse(await c.req.json());

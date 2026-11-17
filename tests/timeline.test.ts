@@ -280,3 +280,49 @@ test("randomized: dropped events and reconnects converge to the daemon projectio
     h.view.dispose();
   }
 });
+
+test("a conversation's first rows go out at once, and slow opens report which layer waited", async () => {
+  let clock = 0;
+  const restore = mock.method(performance, "now", () => clock);
+  const daemon = new ReferenceDaemon();
+  daemon.append({ type: "user_message", text: "hi" }, "t1");
+  let failSubscribe = true;
+  const driver: TimelineDriver = {
+    subscribeAgentTimeline: () => {
+      const ready = failSubscribe
+        ? new Promise<void>((_, reject) => setTimeout(() => { clock += 4000; reject(new Error("host offline")); }, 10))
+        : new Promise<void>((resolve) => setTimeout(() => { clock += 300; resolve(); }, 10));
+      failSubscribe = false;
+      return Object.assign(() => {}, { ready, release: async () => {} });
+    },
+    fetchAgentTimeline: async (_id, options) => {
+      await new Promise((r) => setTimeout(r, 10));
+      clock += 1200;
+      return daemon.fetch(options);
+    },
+  };
+  const reports: unknown[] = [];
+  const view = new TimelineView(driver, "agent", (report) => reports.push(report));
+  const first: TimelineOp[][] = [], second: TimelineOp[][] = [];
+  view.watch((ops) => first.push(ops));
+  view.start();
+  await sleep(10); // subscription fails after 4 s of host time
+  view.watch((ops) => second.push(ops)); // a second viewer joins while it retries
+  await sleep(2000); // retry
+  await sleep(10); // subscribed
+  await sleep(10); // tail read
+  // The failed attempt says it is retrying; the rows follow the read without a batch delay.
+  assert.deepEqual(first.map((ops) => ops.map((op) => op.type)), [["error"], ["reset"]]);
+  assert.deepEqual(second.map((ops) => ops.map((op) => op.type)), [["reset"]]);
+  assert.deepEqual(reports, [
+    { kind: "view", totalMs: 5500, subscribeMs: 300, fetchMs: 1200, attempts: 2, failures: 1 },
+    { kind: "join", totalMs: 1500, subscribeMs: 300, fetchMs: 1200, attempts: 2, failures: 1 },
+  ]);
+  // Viewers of a loaded view get rows from memory, and there is nothing to report.
+  const third: TimelineOp[][] = [];
+  view.watch((ops) => third.push(ops));
+  assert.equal(third[0][0].type, "reset");
+  assert.equal(reports.length, 2);
+  view.dispose();
+  restore.mock.restore();
+});

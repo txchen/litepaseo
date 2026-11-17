@@ -46,7 +46,7 @@ try {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
 
-  let status = "running", seq = 1, diffFailure = false, provider = "claude", rejectNextSend = false;
+  let status = "running", seq = 1, diffFailure = false, provider = "claude", rejectNextSend = false, timelineDelay = 0;
   const queue = [];
   const messages = [], pages = [], rewinds = [], fileReads = [];
   const agent = () => ({
@@ -70,6 +70,7 @@ try {
     const url = new URL(route.request().url());
     const p = url.pathname;
     if (p.endsWith("/timeline/stream")) {
+      if (timelineDelay) await new Promise((r) => setTimeout(r, timelineDelay));
       const rows = [];
       for (let s = TOTAL - LIVE + 1; s <= TOTAL; s++) rows.push(row(s));
       return route.fulfill(sse({ type: "ops", ops: [{ type: "reset", epoch: "e1", hasOlder: true,
@@ -583,6 +584,16 @@ try {
   await page.goto(`http://127.0.0.1:${port}/?session=alpha%3Aa1&file=docs%2Freport.md&line=3`);
   await expectLineMark(3, 1);
   assert.equal(await page.locator(".file-markdown").count(), 0);
+  // A slow open is reported with the browser's side of the timing.
+  timelineDelay = 3200;
+  const slowReport = page.waitForRequest((r) => r.url().endsWith("/api/diagnostics/timeline-slow"));
+  await page.goto(`http://127.0.0.1:${port}/?session=alpha%3Aa1`);
+  const report = (await slowReport).postDataJSON();
+  timelineDelay = 0;
+  assert.equal(report.hostId, "alpha");
+  assert.equal(report.agentId, "a1");
+  assert.ok(report.totalMs >= 3000 && report.connectedMs >= 3000 && report.rowsMs >= report.connectedMs, JSON.stringify(report));
+  assert.equal(report.attempts, 1);
   // A directory deep link reveals it in the Files panel, on a phone too.
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`http://127.0.0.1:${port}/?session=alpha%3Aa1&dir=docs`);

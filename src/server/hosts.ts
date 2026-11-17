@@ -25,6 +25,8 @@ interface Client {
 
 /** Idle grace before an unwatched timeline releases its daemon subscription. */
 const TIMELINE_GRACE_MS = 30_000;
+/** Conversation opens slower than this are logged with a per-layer breakdown. */
+const SLOW_TIMELINE_MS = 3000;
 
 export class Hosts {
   readonly agents = new VersionedCollection<AgentSummary>();
@@ -170,7 +172,12 @@ export class Hosts {
     const key = `${hostId}:${agentId}`;
     let entry = this.timelines.get(key);
     if (!entry) {
-      const view = new TimelineView(client.driver as unknown as TimelineDriver, agentId);
+      const connection = client.driver.getConnectionState().status;
+      const view = new TimelineView(client.driver as unknown as TimelineDriver, agentId, (report) => {
+        if (report.totalMs < SLOW_TIMELINE_MS) return;
+        // Which layer a slow open spent its time in; no conversation content.
+        console.warn(JSON.stringify({ event: "timeline_slow", hostId, agentId, connectionAtStart: connection ?? null, ...report }));
+      });
       entry = { view, hostId };
       this.timelines.set(key, entry);
       view.start();

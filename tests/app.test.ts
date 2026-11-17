@@ -323,3 +323,29 @@ test("two-host routing, permissions, uncertain sends, authentication and board p
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("browsers report slow conversation opens to the server log, validated and content-free", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "litepaseo-test-"));
+  const store = new Store(directory);
+  const app = createApp(store, new Hosts(), "test-token", directory);
+  const logged: string[] = [];
+  const original = console.warn;
+  console.warn = (line: string) => void logged.push(line);
+  try {
+    const post = (body: unknown) => app.request("/api/diagnostics/timeline-slow", {
+      method: "POST",
+      headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const report = { hostId: "h1", agentId: "a1", totalMs: 18500, connectedMs: 120, rowsMs: 18200, renderMs: 300, attempts: 1, hidden: false };
+    assert.equal((await post(report)).status, 200);
+    assert.deepEqual(JSON.parse(logged.at(-1)!), { event: "timeline_slow_client", ...report });
+    // Unknown fields (say, message text) and nonsense values are refused, not logged.
+    assert.equal((await post({ ...report, text: "secret" })).status, 400);
+    assert.equal((await post({ ...report, totalMs: -1 })).status, 400);
+    assert.equal(logged.filter((l) => l.includes("timeline_slow_client")).length, 1);
+  } finally {
+    console.warn = original;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

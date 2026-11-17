@@ -1184,6 +1184,8 @@ watch(selectedKey, () => {
 watch(
   () => active.value?.key ?? null,
   (key) => {
+  timelineOpening?.abandon();
+  timelineOpening = null;
   timelineStream?.close();
   timelineStream = null;
   pagingIntent = null; programmaticTop = null; pagingQuietUntil = 0; followLatest = true;
@@ -1194,13 +1196,16 @@ watch(
   timelineNotice.value = "";
   const agent = agentDirectory.get(key);
   if (!agent) return;
+  const opening = (timelineOpening = trackTimelineOpen(agent));
   timelineStream = openStream({
     url: () => "/api" + path(agent) + "/timeline/stream",
     onState: (state) => {
       if (state === "unauthorized") signOut("ended");
+      opening.state(state);
     },
     onMessage: (data) => {
       if (timeline.value !== store) return;
+      opening.message(data as TimelineMessage);
       const stick = !historyRows.value && (nearBottom() || !store.ready);
       const ops = (data as TimelineMessage).ops;
       const failure = ops.find((op) => op.type === "error");
@@ -1218,6 +1223,52 @@ watch(
   });
   },
 );
+/**
+ * Times one conversation open in this browser: connected (stream headers), first rows, and
+ * rows on screen. Opens slower than SLOW_OPEN_MS are reported to the server log, so a stall
+ * can be placed: the server logs its own side as timeline_slow.
+ */
+const SLOW_OPEN_MS = 3000;
+let timelineOpening: ReturnType<typeof trackTimelineOpen> | null = null;
+function trackTimelineOpen(agent: AgentSummary) {
+  const started = performance.now();
+  const since = () => Math.round(performance.now() - started);
+  let connectedMs: number | null = null, rowsMs: number | null = null, attempts = 0, hidden = document.hidden, done = false;
+  const onVisibility = () => (hidden ||= document.hidden);
+  document.addEventListener("visibilitychange", onVisibility);
+  const finish = () => {
+    done = true;
+    document.removeEventListener("visibilitychange", onVisibility);
+  };
+  const report = (totalMs: number) => {
+    if (totalMs < SLOW_OPEN_MS) return;
+    void api("/diagnostics/timeline-slow", "POST", {
+      hostId: agent.hostId, agentId: agent.id, totalMs, connectedMs, rowsMs,
+      renderMs: rowsMs === null ? null : totalMs - rowsMs, attempts, hidden,
+    }).catch(() => {});
+  };
+  return {
+    /** Left before any rows arrived: reported with rowsMs null. */
+    abandon() {
+      if (done) return;
+      finish();
+      report(since());
+    },
+    state(state: StreamState) {
+      if (done) return;
+      if (state === "connecting") attempts++;
+      if (state === "live") connectedMs ??= since();
+      if (state === "closed" || state === "unauthorized") finish();
+    },
+    message(message: TimelineMessage) {
+      if (done || !message.ops.some((op) => op.type === "reset")) return;
+      rowsMs = since();
+      finish();
+      // On screen: after Vue renders the rows and the browser paints them.
+      void nextTick(() => requestAnimationFrame(() => report(since())));
+    },
+  };
+}
 function showLatest() {
   historyRows.value = null;
   historyNewer.value = [];

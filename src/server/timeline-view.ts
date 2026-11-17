@@ -50,6 +50,28 @@ const RETRY_MS = 2000;
 
 type Watcher = (ops: TimelineOp[]) => void;
 
+/**
+ * How long one conversation took to reach its first rows, by layer. Reported when slow, so an
+ * intermittent stall can be attributed: the daemon subscription, the daemon's history read
+ * (a closed agent is resumed from disk first), retries after failures, or a viewer waiting on
+ * a view that was already loading.
+ */
+export interface TimelineLoadReport {
+  /** From the view starting (or the viewer joining) to rows being sent. */
+  totalMs: number;
+  /** Until the daemon acknowledged the timeline subscription (last attempt). */
+  subscribeMs: number | null;
+  /** The daemon's tail read (last attempt). */
+  fetchMs: number | null;
+  /** Subscribe/read attempts, counting retries after failures. */
+  attempts: number;
+  failures: number;
+  /** "view": the first viewer of a fresh view; "join": a viewer of a view already loading. */
+  kind: "view" | "join";
+}
+export type TimelineLoadReporter = (report: TimelineLoadReport) => void;
+const now = () => performance.now();
+
 /** Same fold the daemon's TimelineProjection applies when a tool call reports again. */
 export function mergeToolCallItems(existing: TimelineItem, incoming: TimelineItem): TimelineItem {
   const a = existing.detail as { type?: string } | undefined,
@@ -103,13 +125,19 @@ export class TimelineView {
   private subscription: { release(): Promise<void> } | null = null;
   private token = 0;
   private loads = 0;
+  /** Timings of the load in progress, until the first rows go out. */
+  private timing: { startedAt: number; attemptAt: number; subscribeMs: number | null; fetchMs: number | null; attempts: number; failures: number } | null = null;
+  /** Viewers that joined while the view was loading, waiting for its first rows. */
+  private joiners: number[] = [];
 
   private readonly driver: TimelineDriver;
   private readonly agentId: string;
+  private readonly report?: TimelineLoadReporter;
 
-  constructor(driver: TimelineDriver, agentId: string) {
+  constructor(driver: TimelineDriver, agentId: string, report?: TimelineLoadReporter) {
     this.driver = driver;
     this.agentId = agentId;
+    this.report = report;
   }
 
   get watcherCount() {
@@ -119,12 +147,21 @@ export class TimelineView {
   start() {
     const token = ++this.token;
     this.state = "loading";
+    const attemptAt = now();
+    if (this.timing) {
+      this.timing.attempts++;
+      this.timing.attemptAt = attemptAt;
+    } else this.timing = { startedAt: attemptAt, attemptAt, subscribeMs: null, fetchMs: null, attempts: 1, failures: 0 };
     const subscription = this.driver.subscribeAgentTimeline(this.agentId, (message) => {
       if (token === this.token) this.onMessage(message);
     });
     this.subscription = subscription;
     subscription.ready.then(
-      () => (token === this.token ? this.reload() : undefined),
+      () => {
+        if (token !== this.token) return;
+        if (this.timing) this.timing.subscribeMs = Math.round(now() - this.timing.attemptAt);
+        return this.reload();
+      },
       () => this.fail(token),
     );
   }
@@ -145,7 +182,7 @@ export class TimelineView {
       // Deliver what existing watchers are owed first; the newcomer starts from the reset.
       this.flush();
       watcher([this.resetOp()]);
-    }
+    } else if (this.watchers.size) this.joiners.push(now());
     this.watchers.add(watcher);
     return () => this.watchers.delete(watcher);
   }
@@ -246,6 +283,7 @@ export class TimelineView {
     const token = this.token;
     const load = ++this.loads;
     this.state = "loading";
+    const fetchAt = now();
     try {
       const page = await this.driver.fetchAgentTimeline(this.agentId, {
         direction: "tail",
@@ -255,7 +293,10 @@ export class TimelineView {
         wholeTurns: false,
       });
       if (token !== this.token || load !== this.loads) return;
+      if (this.timing) this.timing.fetchMs = Math.round(now() - fetchAt);
       this.replaceWith(page);
+      // A (re)load's rows go out at once; only live updates wait for the batch interval.
+      this.flush();
       this.settle();
     } catch {
       this.fail(token);
@@ -313,6 +354,7 @@ export class TimelineView {
   private fail(token: number) {
     if (token !== this.token || this.state === "disposed") return;
     this.state = "failed";
+    if (this.timing) this.timing.failures++;
     this.broadcast([{ type: "error", message: "Timeline sync interrupted; retrying" }]);
     clearTimeout(this.retryTimer);
     this.retryTimer = setTimeout(() => {
@@ -426,7 +468,8 @@ export class TimelineView {
     if (this.pendingReset) {
       this.pendingReset = false;
       this.pending.clear();
-      return this.broadcast([this.resetOp()]);
+      this.broadcast([this.resetOp()]);
+      return this.loaded();
     }
     if (!this.pending.size) return;
     const ops: TimelineOp[] = [];
@@ -453,6 +496,18 @@ export class TimelineView {
       hasOlder: this.hasOlder || start > 0,
       startCursor: start > 0 ? { epoch: this.epoch, seq: rows[0].seqStart } : this.startCursor,
     };
+  }
+
+  /** The first rows went out: report how long the view, and anyone who joined it, waited. */
+  private loaded() {
+    const timing = this.timing;
+    if (!timing || !this.watchers.size) return;
+    this.timing = null;
+    const done = now();
+    const base = { subscribeMs: timing.subscribeMs, fetchMs: timing.fetchMs, attempts: timing.attempts, failures: timing.failures };
+    this.report?.({ ...base, totalMs: Math.round(done - timing.startedAt), kind: "view" });
+    for (const joined of this.joiners) this.report?.({ ...base, totalMs: Math.round(done - joined), kind: "join" });
+    this.joiners = [];
   }
 
   private broadcast(ops: TimelineOp[]) {

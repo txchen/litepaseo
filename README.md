@@ -269,6 +269,15 @@ must not exist. Keep backups private because they include credentials. Use
 Upgrade with `npm install --global litepaseo`, then run `litepaseo restart`
 (or `litepaseo service restart` for an OS-managed installation).
 
+### Slow conversations
+
+A conversation that takes more than 3 seconds to show is logged, without its content.
+`timeline_slow` is the server's side: the daemon subscription (`subscribeMs`), the
+daemon's history read (`fetchMs`; a closed agent is resumed from disk first), and retries
+(`attempts`, `failures`). `timeline_slow_client` is the browser's side: when the stream
+connected (`connectedMs`), when rows arrived (`rowsMs`; `null` if you left first) and
+rendering (`renderMs`). Find them with `litepaseo logs -n 2000 | grep timeline_slow`.
+
 ## How it fits together
 
 ```text

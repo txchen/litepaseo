@@ -118,6 +118,8 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     store,
     sender: options.pushSender ?? webPushSender(store, options.pushSubject ?? "mailto:litepaseo@example.com"),
     isViewing: key => presence.isViewing(key),
+    deviceActive: () => presence.anyActive(),
+    viewedSince: (key, at) => presence.viewedSince(key, at),
     replyPreview: (agent, previous) => notificationPreview(hosts.get(agent.hostId).driver, agent.id, previous.turnStartedAt, agent.attention ? undefined : agent.activityAt),
     hostLabel: (id) => hosts.label(id) || store.hosts().find((h) => h.id === id)?.label || "",
   });
@@ -405,8 +407,8 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
   app.put("/api/presence", async c => {
     const session = c.get("session");
     if (!session) return c.json({ error: "Browser sign-in required" }, 403);
-    const input = z.object({ tab: z.string().uuid(), seq: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), key: z.string().min(1).max(1024).nullable() }).strict().parse(await c.req.json());
-    presence.update(session.id, input.tab, input.seq, input.key);
+    const input = z.object({ tab: z.string().uuid(), seq: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), key: z.string().min(1).max(1024).nullable(), active: z.boolean().optional() }).strict().parse(await c.req.json());
+    presence.update(session.id, input.tab, input.seq, input.key, input.active);
     return c.json({ ok: true });
   });
   /**

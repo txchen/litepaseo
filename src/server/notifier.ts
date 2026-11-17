@@ -28,6 +28,12 @@ const STALE_MS = 10 * 60_000;
  * together when it ends. Input requests and failed turns are never held back.
  */
 export const PROJECT_COOLDOWN_MS = 2 * 60_000;
+/**
+ * While someone is using LitePaseo on any device, pushes wait this long first: a conversation
+ * opened in the meantime is not pushed to the other devices. Finished turns wait longer than
+ * input requests and failures, which hold an agent up.
+ */
+export const ACTIVE_GRACE_MS = { "turn-done": 45_000, attention: 20_000, "turn-failed": 20_000 } as const;
 /** A project digest forgets events this old, even if the user never opened them. */
 const DIGEST_TTL_MS = 60 * 60_000;
 /** Lines in a merged notification; phones show about four. */
@@ -38,6 +44,8 @@ interface DigestEntry {
   agent: AgentSummary;
   detail: string;
   at: number;
+  /** Not sent before this (the active-device grace); 0 when nobody was using a device. */
+  due: number;
   sent: boolean;
 }
 
@@ -89,6 +97,8 @@ export class Notifier {
   private readonly store: Store;
   private readonly sender: PushSender;
   private readonly isViewing: (key: string) => boolean;
+  private readonly deviceActive: () => boolean;
+  private readonly viewedSince: (key: string, at: number) => boolean;
   private readonly hostLabel: (hostId: string) => string;
   private readonly waiting = new Set<string>();
   private readonly recent = new Map<string, number>();
@@ -101,6 +111,10 @@ export class Notifier {
     store: Store;
     sender: PushSender;
     isViewing: (key: string) => boolean;
+    /** Someone is using LitePaseo on some device: pushes wait ACTIVE_GRACE_MS first. */
+    deviceActive?: () => boolean;
+    /** The conversation was on a foreground screen at or after `at`. */
+    viewedSince?: (key: string, at: number) => boolean;
     hostLabel: (hostId: string) => string;
     now?: () => number;
     /** Runs `run` after `ms`; returns a cancel function. Tests drive time by hand. */
@@ -110,6 +124,8 @@ export class Notifier {
     this.store = options.store;
     this.sender = options.sender;
     this.isViewing = options.isViewing;
+    this.deviceActive = options.deviceActive ?? (() => false);
+    this.viewedSince = options.viewedSince ?? ((key) => options.isViewing(key));
     this.hostLabel = options.hostLabel;
     this.now = options.now ?? Date.now;
     this.schedule =
@@ -215,15 +231,19 @@ export class Notifier {
     const tag = projectTag(agent);
     let digest = this.digests.get(tag);
     if (!digest) this.digests.set(tag, (digest = { entries: new Map(), lastSent: -Infinity }));
+    const at = this.now();
     // Re-insert so the map stays oldest → newest.
     digest.entries.delete(agent.key);
-    digest.entries.set(agent.key, { kind, agent, detail: body, at: this.now(), sent: false });
-    const wait = digest.lastSent + PROJECT_COOLDOWN_MS - this.now();
-    // Input requests and failures need the user; only plain turn ends are held back.
-    if (kind !== "turn-done" || wait <= 0) this.flush(tag);
-    else digest.cancel ??= this.schedule(() => this.flush(tag), wait);
+    digest.entries.set(agent.key, { kind, agent, detail: body, at, due: this.deviceActive() ? at + ACTIVE_GRACE_MS[kind] : 0, sent: false });
+    this.flush(tag);
   }
 
+  /** When an unsent entry may go out: after its grace and, for plain turn ends, the project cooldown. */
+  private releaseAt(digest: ProjectDigest, entry: DigestEntry) {
+    return entry.kind === "turn-done" ? Math.max(entry.due, digest.lastSent + PROJECT_COOLDOWN_MS) : entry.due;
+  }
+
+  /** Sends what is due in a project, then waits for the next unsent entry. */
   private flush(tag: string) {
     const digest = this.digests.get(tag);
     if (!digest) return;
@@ -231,24 +251,30 @@ export class Notifier {
     digest.cancel = undefined;
     const now = this.now();
     for (const [key, entry] of digest.entries)
-      if (now - entry.at > DIGEST_TTL_MS || this.isViewing(key)) digest.entries.delete(key);
+      if (now - entry.at > DIGEST_TTL_MS || this.viewedSince(key, entry.at)) digest.entries.delete(key);
     const entries = [...digest.entries.values()].reverse();
-    if (!entries.some((e) => !e.sent)) {
-      if (!digest.entries.size) this.digests.delete(tag);
-      return;
-    }
-    digest.lastSent = now;
-    const messages = new Map<string, PushMessage | null>();
-    for (const subscription of this.store.pushSubscriptions()) {
-      const prefs = `${subscription.prefs.attention}:${subscription.prefs.turns}`;
-      if (!messages.has(prefs)) {
-        const shown = entries.filter((e) => subscription.prefs[prefFor(e.kind)]);
-        messages.set(prefs, shown.some((e) => !e.sent) ? this.compose(tag, shown) : null);
+    const released = new Set(entries.filter((e) => !e.sent && this.releaseAt(digest, e) <= now));
+    if (released.size) {
+      // Entries still in their grace stay out: they may yet be seen on the device in use.
+      const shown = entries.filter((e) => e.sent || released.has(e));
+      digest.lastSent = now;
+      const messages = new Map<string, PushMessage | null>();
+      for (const subscription of this.store.pushSubscriptions()) {
+        const prefs = `${subscription.prefs.attention}:${subscription.prefs.turns}`;
+        if (!messages.has(prefs)) {
+          const mine = shown.filter((e) => subscription.prefs[prefFor(e.kind)]);
+          messages.set(prefs, mine.some((e) => released.has(e)) ? this.compose(tag, mine) : null);
+        }
+        const message = messages.get(prefs);
+        if (message) void this.deliver(subscription, message);
       }
-      const message = messages.get(prefs);
-      if (message) void this.deliver(subscription, message);
+      for (const entry of released) entry.sent = true;
     }
-    for (const entry of entries) entry.sent = true;
+    const pending = entries.filter((e) => !e.sent);
+    if (pending.length) {
+      const next = Math.min(...pending.map((e) => this.releaseAt(digest, e)));
+      digest.cancel = this.schedule(() => this.flush(tag), Math.max(0, next - now));
+    } else if (!digest.entries.size) this.digests.delete(tag);
   }
 
   /** One notification for a project's unseen events, newest first. */

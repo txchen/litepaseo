@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Notifier, PROJECT_COOLDOWN_MS, type PushMessage } from "../src/server/notifier.ts";
+import { ACTIVE_GRACE_MS, Notifier, PROJECT_COOLDOWN_MS, type PushMessage } from "../src/server/notifier.ts";
 import { Store } from "../src/server/store.ts";
 import type { AgentSummary } from "../src/shared/wire.ts";
 
@@ -36,6 +36,8 @@ function setup(replyPreview?: (agent: AgentSummary, previous: AgentSummary) => P
   let now = 1000;
   let timers: { at: number; run: () => void }[] = [];
   let viewing = false;
+  let active = false;
+  const viewedAt = new Map<string, number>();
   const notifier = new Notifier({
     store,
     replyPreview,
@@ -46,6 +48,8 @@ function setup(replyPreview?: (agent: AgentSummary, previous: AgentSummary) => P
       },
     },
     isViewing: () => viewing,
+    deviceActive: () => active,
+    viewedSince: (key, at) => viewing || (viewedAt.get(key) ?? -Infinity) >= at,
     hostLabel: () => "MacBook",
     now: () => now,
     schedule: (run, ms) => {
@@ -71,6 +75,8 @@ function setup(replyPreview?: (agent: AgentSummary, previous: AgentSummary) => P
       for (const timer of due) timer.run();
     },
     view: (on: boolean) => (viewing = on),
+    activeDevice: (on: boolean) => (active = on),
+    glance: (key: string) => viewedAt.set(key, now),
     cleanup: () => {
       store.close();
       rmSync(directory, { recursive: true, force: true });
@@ -298,5 +304,39 @@ test("held turns are dropped when seen before the cooldown ends; long digests ar
     assert.equal(t.sent.length, 1);
     assert.equal(t.sent[0].message.title, "repo · 6 finished");
     assert.match(t.sent[0].message.body, /^Done · G: .*\n.*\n.*\nDone · D: .*\n\+2 more\n— MacBook$/);
+  } finally { t.cleanup(); }
+});
+
+test("while a device is in use, pushes wait; a conversation opened meanwhile is not pushed", async () => {
+  const t = setup();
+  try {
+    t.subscribe("https://push.example/phone");
+    t.activeDevice(true);
+    finish(t, "a", "Fix tests");
+    finish(t, "b", "Docs");
+    await t.settle();
+    assert.equal(t.sent.length, 0, "the device in use gets the first look");
+    t.tick(5_000);
+    t.glance("h:a"); // clicked over a few seconds later, then moved on
+    t.tick(ACTIVE_GRACE_MS["turn-done"]);
+    assert.deepEqual(
+      t.sent.map((s) => [s.message.title, s.message.url]),
+      [["repo · turn finished", "/?session=h%3Ab"]],
+      "only the conversation still unseen after the grace goes out",
+    );
+
+    t.sent.length = 0;
+    t.notifier.transition(agent("c", "Deploy", { status: "running" }), agent("c", "Deploy", { status: "running", attention: true }));
+    await t.settle();
+    assert.equal(t.sent.length, 0);
+    t.tick(ACTIVE_GRACE_MS.attention);
+    assert.deepEqual(t.sent.map((s) => s.message.title), ["repo · 1 needs input, 1 finished"], "input waits less, and lists the earlier unseen turn");
+
+    t.sent.length = 0;
+    t.activeDevice(false);
+    t.tick(PROJECT_COOLDOWN_MS);
+    t.notifier.transition(agent("d", "Lint", { status: "running" }), agent("d", "Lint", { status: "error" }));
+    await t.settle();
+    assert.equal(t.sent.length, 1, "nobody at a device: no wait");
   } finally { t.cleanup(); }
 });

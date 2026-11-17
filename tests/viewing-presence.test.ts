@@ -32,3 +32,26 @@ test("late heartbeats cannot undo leaving; expired and revoked viewers stop supp
   valid.clear();
   assert.equal(presence.isViewing("h:a"), false);
 });
+
+test("an active device counts without a conversation open; last views outlive the lease", () => {
+  let now = 1000;
+  const presence = new ViewingPresence(() => true, () => now);
+  assert.equal(presence.anyActive(), false);
+  presence.update("desktop", "tab", 1, null, true);
+  assert.equal(presence.anyActive(), true, "using the sidebar is activity");
+  presence.update("desktop", "tab", 2, "h:a");
+  now = 5000;
+  presence.update("desktop", "tab", 3, null, true);
+  assert.equal(presence.isViewing("h:a"), false);
+  assert.equal(presence.viewedSince("h:a", 1000), true, "opened briefly after the event");
+  assert.equal(presence.viewedSince("h:a", 1001), false);
+  presence.update("desktop", "tab", 4, null, false);
+  assert.equal(presence.anyActive(), false, "idle pages stop counting");
+  presence.update("desktop", "tab", 5, null, true);
+  now += 45_000;
+  assert.equal(presence.anyActive(), false, "and so do silent ones");
+  assert.equal(presence.viewedSince("h:a", 1000), true);
+  now += 60 * 60_000;
+  presence.update("phone", "tab", 1, null);
+  assert.equal(presence.viewedSince("h:a", 1000), false, "old views are forgotten");
+});

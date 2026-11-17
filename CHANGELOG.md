@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.11
+
+- Hold pushes briefly while you are using LitePaseo on another device: a finished turn waits 45 seconds, an input request or failure 20 seconds, and a conversation you open in that time is not pushed to your other devices. A browser counts as in use while it is in the foreground with keyboard, pointer or touch input in the last 2 minutes; with nobody at a device, pushes go out at once as before.
+- A conversation opened only briefly, then left, also counts as seen for later pushes.
+
 ## 0.6.10
 
 - Merge push notifications per project on the server, so iPhones benefit too: 0.6.9 merged them in the service worker, which iOS does not support. Finished turns send at most one push per project every 2 minutes; turns finishing during that time go out together when it ends (for example "repo · 3 finished", newest first). Input requests and failed turns still notify immediately, listing the project's other unseen updates too.

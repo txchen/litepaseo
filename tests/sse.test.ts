@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { eventStream } from "../src/server/sse.ts";
+import { createBrotliDecompress, createGunzip } from "node:zlib";
+import { eventStream, streamEncoding } from "../src/server/sse.ts";
 
 /** Reads a stream response chunk by chunk, with the time each chunk arrived. */
 function recorder(response: Response) {
@@ -62,3 +63,49 @@ test("a cancelled stream releases what it opened", async () => {
   await response.body!.cancel();
   assert.equal(released, 1);
 });
+
+test("streamEncoding picks brotli, then gzip, from what the browser accepts", () => {
+  assert.equal(streamEncoding("gzip, deflate, br", true), "br");
+  assert.equal(streamEncoding("gzip, deflate", true), "gzip");
+  assert.equal(streamEncoding("br;q=0, gzip;q=0.5", true), "gzip", "q=0 refuses an encoding");
+  assert.equal(streamEncoding("identity", true), null);
+  assert.equal(streamEncoding(undefined, true), null);
+  assert.equal(streamEncoding("gzip, br", false), null, "compression off");
+});
+
+for (const encoding of ["br", "gzip"] as const) {
+  test(`a ${encoding} stream flushes every write: each event decompresses as soon as it is sent`, async () => {
+    const controller = new AbortController();
+    let send!: (data: unknown) => void;
+    const response = eventStream(controller.signal, (s) => ((send = s), () => {}), () => true, encoding);
+    assert.equal(response.headers.get("content-encoding"), encoding);
+    assert.equal(response.headers.get("vary"), "Accept-Encoding");
+    const inflate = encoding === "br" ? createBrotliDecompress() : createGunzip();
+    let text = "";
+    inflate.on("data", (chunk: Buffer) => (text += chunk.toString()));
+    const reader = response.body!.getReader();
+    void (async () => {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) return;
+        inflate.write(value);
+      }
+    })();
+    const arrives = async (needle: string) => {
+      for (let i = 0; i < 40 && !text.includes(needle); i++) await wait(10);
+      return text.includes(needle);
+    };
+    try {
+      assert.ok(await arrives(": open\n\n"), "the opening comment is not held back");
+      const big = { rows: "x".repeat(200_000) };
+      send({ n: 1 });
+      assert.ok(await arrives('data: {"n":1}\n\n'), "a small event is not held back");
+      send(big);
+      assert.ok(await arrives('"}\n\n'), "a large event arrives whole");
+    } finally {
+      controller.abort();
+      await reader.cancel().catch(() => {});
+      inflate.destroy();
+    }
+  });
+}

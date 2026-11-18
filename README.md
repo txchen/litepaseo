@@ -247,6 +247,7 @@ litepaseo restart                                        # apply (or: litepaseo 
 | `port` | `8787` | HTTP port | `LITEPASEO_PORT` |
 | `bind` | `127.0.0.1` | Listening address | `LITEPASEO_BIND` |
 | `push-subject` | `mailto:litepaseo@example.com` | Contact for push services (see below) | `LITEPASEO_PUSH_SUBJECT` |
+| `compression` | `on` | Compress API responses and live streams (`on` or `off`) | `LITEPASEO_COMPRESSION` |
 
 An environment variable, when set, wins over the saved value for that run.
 `LITEPASEO_HOME` (default `~/.litepaseo`) chooses the data directory itself, so it
@@ -284,16 +285,26 @@ page had just been in the background (`backgroundMs`, `visibleForMs`). A late
 `connectedMs` with no matching `timeline_slow` means the request took that long to reach
 the server, typically a connection the browser reused after sleep or a network change. A
 late `firstByteMs` after an early `connectedMs` means something in between, such as a
-proxy or tunnel, held the data. Find them with
+proxy or tunnel, held the data. Browser reports also name the kind of browser (`engine`,
+`os`, `standalone` for an installed web app; never the user agent string), the connection
+(`protocol`, such as `h2` or `h3`, and `encoding`), and how the stream's body arrived:
+`chunks` and `characters` up to the rows, `arrivals` (time and size of the first 10
+pieces), `lastChunkMs`, and the longest silence between pieces (`maxGapMs`, ending at
+`maxGapEndMs`). A long gap ending just before the rows means the data was held back on
+the way rather than slow to send. Find them with
 `litepaseo logs -n 2000 | grep timeline_slow`.
 
 While a conversation is still loading after 3 seconds, the page says whether it is still
 connecting to LitePaseo, waiting for the network to deliver data, or waiting for the host.
+After an upgrade, open pages offer a reload so they run the installed version.
 
-Some proxies hold a stream's latest bytes until more arrive. LitePaseo follows each burst
-of live updates with a few bytes of padding, so they get through without waiting for the
-next heartbeat. After an upgrade, open pages offer a
-reload so they run the installed version.
+Live streams and larger API responses (1 KB and up) are compressed with brotli or gzip
+for browsers that accept it: a conversation's first rows usually shrink 3-6 times. Each
+stream event is flushed as it is written, so compression never delays it. If a proxy
+between you and LitePaseo mishandles compressed streams, run
+`litepaseo config set compression off` and restart. Some proxies also hold a stream's
+latest bytes until more arrive, so each burst of live updates is followed by a few bytes
+of padding.
 
 ## How it fits together
 

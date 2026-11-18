@@ -31,6 +31,12 @@ export const CONFIG_KEYS = {
       return "Use mailto:you@example.com or an https:// address you control.";
     },
   },
+  compression: {
+    env: "LITEPASEO_COMPRESSION",
+    fallback: "on",
+    summary: "Compress API responses and live streams (on or off)",
+    check: (value: string) => (value === "on" || value === "off" ? null : "Use on or off."),
+  },
 } as const;
 export type ConfigKey = keyof typeof CONFIG_KEYS;
 export const configKeys = Object.keys(CONFIG_KEYS) as ConfigKey[];

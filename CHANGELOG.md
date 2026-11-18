@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.1
+
+- Compress live streams and larger API responses (1 KB and up) with brotli or gzip, as the browser accepts. A conversation's first rows usually shrink 3-6 times, for example 157 KB to 27 KB, which saves mobile data. Every stream event is flushed as it is written, so compression never holds one back. Turn it off with `litepaseo config set compression off` if a proxy in between mishandles compressed streams.
+- Diagnose slow conversation opens on phones: browser reports now say which kind of browser it was (engine, system, installed web app; never the user agent string), the connection protocol and compression, and how the stream's body arrived (pieces, sizes, arrival times, the longest silence). The 20-second waits still seen on an iPhone web app behind a Cloudflare Tunnel delivered first bytes within about 200 ms but the rows only with the next heartbeat; these reports should show where they were held.
+
 ## 0.9.0
 
 - Switch back to a conversation you opened recently and it shows at once, where you left it: the last 5 conversations (3 on phones) stay rendered. Out of view they do nothing: no connection, no timers, no rendering. Coming back, only messages that changed meanwhile render again. In a test switching between real conversations at 4x CPU slowdown (an approximation of a phone), rows were on screen in 162-196 ms instead of 340-384 ms, using less than half the CPU.

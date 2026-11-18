@@ -9,7 +9,9 @@ export interface StreamOptions {
    * pass headers on and still hold the data. `onResponse` reports the headers.
    */
   onState?: (state: StreamState) => void;
-  onResponse?: () => void;
+  onResponse?: (response: Response) => void;
+  /** Each piece of the body as it arrives (decoded characters), for slow-open diagnostics. */
+  onChunk?: (characters: number) => void;
 }
 
 const MIN_RETRY_MS = 1000;
@@ -45,7 +47,7 @@ export function openStream(options: StreamOptions) {
         return;
       }
       if (!response.ok || !response.body) throw new Error("Stream unavailable");
-      options.onResponse?.();
+      options.onResponse?.(response);
       const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
       let buffer = "",
         live = false;
@@ -56,6 +58,7 @@ export function openStream(options: StreamOptions) {
           live = true;
           setState("live");
         }
+        if (value) options.onChunk?.(value.length);
         buffer += value;
         let boundary: number;
         while ((boundary = buffer.indexOf("\n\n")) >= 0) {

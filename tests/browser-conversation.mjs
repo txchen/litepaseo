@@ -599,6 +599,11 @@ try {
   assert.equal(report.agentId, "a1");
   assert.ok(report.totalMs >= 3000 && report.connectedMs >= 3000 && report.firstByteMs >= report.connectedMs && report.rowsMs >= report.firstByteMs, JSON.stringify(report));
   assert.equal(report.attempts, 1);
+  // The kind of browser and how the body arrived, for telling held-back responses apart.
+  assert.deepEqual([report.engine, report.os, report.standalone], ["blink", "linux", false]);
+  assert.ok(report.chunks >= 1 && report.characters > 1000 && report.arrivals.length >= 1, JSON.stringify(report));
+  assert.ok(report.lastChunkMs >= report.firstByteMs && report.lastChunkMs <= report.rowsMs, JSON.stringify(report));
+  assert.ok(!("userAgent" in report));
   // A page built for another version than the server offers a reload.
   assert.equal(await page.locator(".update-toast").count(), 0);
   serverVersion = "99.0.0";

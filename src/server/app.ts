@@ -5,7 +5,8 @@ import { saveMessageImages, messageImage, withMessageImages } from "./message-im
 import { importProjectIcon, MAX_ICON_BYTES } from "./project-icon-import.ts";
 import { ServerSendQueue } from "./send-queue.ts";
 import { VERSION } from "./version.ts";
-import { eventStream } from "./sse.ts";
+import { eventStream, streamEncoding } from "./sse.ts";
+import { compressJson } from "./compression.ts";
 import { logEvent } from "./log-event.ts";
 import { registerWorkspaceRoutes } from "./workspace-routes.ts";
 import { Attachments, MAX_FILE_BYTES } from "./attachments.ts";
@@ -94,6 +95,8 @@ export interface AppOptions {
   pushSubject?: string;
   /** Outbound requests to the transcription service; replaced in tests. */
   fetch?: typeof fetch;
+  /** Compress API responses and live streams for browsers that accept it (default on). */
+  compression?: boolean;
 }
 
 /** `session` for a browser, or `bearer` (the accepted token) for a script on a direct connection. */
@@ -141,6 +144,10 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'",
     );
   });
+  const compression = options.compression !== false;
+  /** How a live stream to this request is compressed. */
+  const encodingOf = (c: { req: { header: (name: string) => string | undefined } }) => streamEncoding(c.req.header("Accept-Encoding"), compression);
+  app.use("/api/*", compressJson(compression));
   app.use("/api/*", (c, next) => bodyLimit({
     maxSize: c.req.method !== "POST" ? 1024 * 1024
       : c.req.path.endsWith("/attachments") ? MAX_FILE_BYTES
@@ -425,6 +432,19 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
       totalMs: ms, connectedMs: ms, rowsMs: ms, renderMs: ms,
       // Pages before 0.8.1 do not report first bytes.
       firstByteMs: ms.optional(),
+      // From 0.9.1: the kind of browser (never its user agent), the connection, and how the
+      // stream's body arrived, to tell a held-back response from one that trickled in.
+      engine: z.enum(["webkit", "blink", "gecko", "other"]).optional(),
+      os: z.enum(["ios", "android", "macos", "windows", "linux", "other"]).optional(),
+      standalone: z.boolean().optional(),
+      protocol: z.string().max(20).nullable().optional(),
+      encoding: z.string().max(10).nullable().optional(),
+      chunks: z.number().int().nonnegative().max(1_000_000).optional(),
+      characters: z.number().int().nonnegative().max(1_000_000_000).optional(),
+      lastChunkMs: ms.optional(),
+      maxGapMs: z.number().int().nonnegative().max(3_600_000).optional(),
+      maxGapEndMs: ms.optional(),
+      arrivals: z.array(z.tuple([z.number().int().nonnegative().max(3_600_000), z.number().int().nonnegative().max(1_000_000_000)])).max(10).optional(),
       attempts: z.number().int().nonnegative().max(1000), hidden: z.boolean(),
       // A page, and its time in the background, can last days.
       pageAgeMs: long.optional(), backgroundMs: long.optional(), visibleForMs: ms.optional(),
@@ -456,7 +476,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
       deliverAgents(stream);
       directoryStreams.add(stream);
       return () => directoryStreams.delete(stream);
-    }, streamValidity(c));
+    }, streamValidity(c), encodingOf(c));
   });
   app.post("/api/hosts", async (c) => {
     const input = z
@@ -610,14 +630,14 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
         stop();
         stopSubagents();
       };
-    }, streamValidity(c));
+    }, streamValidity(c), encodingOf(c));
   });
   /** One provider subagent's conversation, read-only, live like an agent's. */
   app.get("/api/hosts/:host/agents/:agent/subagents/:subagent/timeline/stream", (c) => {
     hosts.get(c.req.param("host"));
     return eventStream(c.req.raw.signal, (send) =>
       hosts.watchTimeline(c.req.param("host"), c.req.param("agent"), (ops) => send({ type: "ops", ops } satisfies TimelineMessage), c.req.param("subagent")),
-    streamValidity(c));
+    streamValidity(c), encodingOf(c));
   });
   app.get("/api/hosts/:host/agents/:agent/subagents/:subagent/timeline", async (c) => {
     const cursor = z
@@ -886,11 +906,11 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     const publish = () => send(sendQueue.summary());
     const stop = sendQueue.onChange(publish), stopHosts = hosts.onAgentsChanged(publish);
     publish(); return () => { stop(); stopHosts(); };
-  }, streamValidity(c)));
+  }, streamValidity(c), encodingOf(c)));
   app.get("/api/hosts/:host/agents/:agent/queue/stream", c => eventStream(c.req.raw.signal, send => {
     const publish = () => send(sendQueue.list(c.req.param("host"), c.req.param("agent")));
     const stop = sendQueue.onChange(publish); publish(); return stop;
-  }, streamValidity(c)));
+  }, streamValidity(c), encodingOf(c)));
   app.post("/api/hosts/:host/agents/:agent/queue/:id/control", async c => {
     const { action } = z.object({ action: z.enum(["pause", "resume", "up", "check"]) }).parse(await c.req.json());
     try { await sendQueue.control(c.req.param("host"), c.req.param("agent"), c.req.param("id"), action); }
@@ -1181,7 +1201,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
 
   // ---- Usage across hosts ------------------------------------------------------------------------
   registerHostSettings(app, hosts);
-  registerWorkspaceRoutes(app, hosts, store, (c) => streamValidity(c));
+  registerWorkspaceRoutes(app, hosts, store, (c) => streamValidity(c), encodingOf);
   app.get("/api/usage", async (c) => c.json(await usage.report(c.req.query("refresh") === "1")));
 
   app.get("/api/board", (c) => c.json(store.board()));

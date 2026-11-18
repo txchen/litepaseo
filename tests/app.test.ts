@@ -339,7 +339,10 @@ test("browsers report slow conversation opens to the server log, validated and c
     });
     const report = {
       hostId: "h1", agentId: "a1", totalMs: 18500, connectedMs: 18100, firstByteMs: 18150, rowsMs: 18200, renderMs: 300, attempts: 1, hidden: false,
-      pageAgeMs: 7_200_000, backgroundMs: 3_000_000, visibleForMs: 800, version: "0.6.8",
+      pageAgeMs: 7_200_000, backgroundMs: 3_000_000, visibleForMs: 800, version: "0.9.1",
+      engine: "webkit", os: "ios", standalone: true, protocol: "h3", encoding: "br",
+      chunks: 3, characters: 150_000, lastChunkMs: 18_190, maxGapMs: 18_000, maxGapEndMs: 18_190,
+      arrivals: [[18_150, 8], [18_160, 3], [18_190, 149_989]],
     };
     assert.equal((await post(report)).status, 200);
     const { time, ...line } = JSON.parse(logged.at(-1)!);
@@ -348,8 +351,10 @@ test("browsers report slow conversation opens to the server log, validated and c
     // Unknown fields (say, message text) and nonsense values are refused, not logged.
     assert.equal((await post({ ...report, text: "secret" })).status, 400);
     assert.equal((await post({ ...report, totalMs: -1 })).status, 400);
-    // Pages before 0.8.1 report no first bytes.
-    const { firstByteMs, ...older } = report;
+    assert.equal((await post({ ...report, engine: "Mozilla/5.0 (iPhone)" })).status, 400, "never a user agent string");
+    assert.equal((await post({ ...report, arrivals: Array(11).fill([1, 1]) })).status, 400);
+    // Pages before 0.8.1 report no first bytes, before 0.9.1 nothing about the browser or stream.
+    const { firstByteMs, engine, os, standalone, protocol, encoding, chunks, characters, lastChunkMs, maxGapMs, maxGapEndMs, arrivals, ...older } = report;
     assert.equal((await post(older)).status, 200);
     assert.equal(logged.filter((l) => l.includes("timeline_slow_client")).length, 2);
   } finally {

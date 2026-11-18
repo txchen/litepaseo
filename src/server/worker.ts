@@ -17,7 +17,7 @@ export async function runWorker(directory: string, webRoot: string) {
   }
   const config = effectiveConfig(store, process.env);
   const port = Number(config.port.value), hostname = config.bind.value;
-  const app = createApp(store, hosts, tokenFile(tokenPath), webRoot, { pushSubject: config["push-subject"].value });
+  const app = createApp(store, hosts, tokenFile(tokenPath), webRoot, { pushSubject: config["push-subject"].value, compression: config.compression.value !== "off" });
   const server = serve({ fetch: app.fetch, port, hostname });
   app.dictationStreams.attach(server as import("node:http").Server);
   let stopping = false;

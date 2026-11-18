@@ -2,7 +2,7 @@ import type { Hono } from "hono";
 import { z } from "zod";
 import type { Hosts } from "./hosts.ts";
 import type { Store } from "./store.ts";
-import { eventStream } from "./sse.ts";
+import { eventStream, type StreamEncoding } from "./sse.ts";
 import { imageMime, MAX_IMAGE_BYTES } from "./media.ts";
 
 /** Text files larger than this open truncated: the viewer is for reading, not for dumps. */
@@ -19,7 +19,7 @@ const path = z.string().min(1).max(4096).refine((p) => !p.includes("\0"));
  * keeps state beyond an open terminal stream.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function registerWorkspaceRoutes(app: Hono<any>, hosts: Hosts, store: Store, valid: (c: any) => () => boolean) {
+export function registerWorkspaceRoutes(app: Hono<any>, hosts: Hosts, store: Store, valid: (c: any) => () => boolean, encodingOf: (c: any) => StreamEncoding = () => null) {
   app.get("/api/hosts/:host/changes", async c => {
     const cwd = path.parse(c.req.query("cwd"));
     const result = await hosts.get(c.req.param("host")).driver.getCheckoutDiff(cwd, { mode: "uncommitted" });
@@ -149,7 +149,7 @@ export function registerWorkspaceRoutes(app: Hono<any>, hosts: Hosts, store: Sto
         stop();
         void subscription.release().catch(() => {});
       };
-    }, valid(c));
+    }, valid(c), encodingOf(c));
   });
 
   // ---- Schedules ---------------------------------------------------------------------------

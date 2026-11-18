@@ -21,10 +21,11 @@ test("over real HTTP, stream events arrive immediately and a disconnect releases
     const controller = new AbortController();
     const started = performance.now();
     const response = await fetch(`http://127.0.0.1:${port}/api/stream`, {
-      headers: { authorization: "Bearer t" },
+      headers: { authorization: "Bearer t", "accept-encoding": "gzip, deflate, br" },
       signal: controller.signal,
     });
     assert.equal(response.headers.get("content-type"), "text/event-stream");
+    assert.equal(response.headers.get("content-encoding"), "br", "compressed, and still not buffered (below)");
     const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
     let text = "";
     while (!text.includes('"type":"snapshot"')) text += (await reader.read()).value ?? "";

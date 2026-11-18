@@ -24,6 +24,26 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
+/** Which kind of browser this is, without its user agent string: slow opens may be one kind's. */
+function clientKind() {
+  const ua = navigator.userAgent;
+  const ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  // Every browser on iOS is WebKit, whatever it is called.
+  const engine = /Firefox\//.test(ua) && !ios ? "gecko" : /Chrome\/|Chromium\//.test(ua) && !ios ? "blink" : /AppleWebKit\//.test(ua) ? "webkit" : "other";
+  const os = ios ? "ios" : /Android/.test(ua) ? "android" : /Macintosh|Mac OS X/.test(ua) ? "macos" : /Windows/.test(ua) ? "windows" : /Linux/.test(ua) ? "linux" : "other";
+  const standalone = matchMedia("(display-mode: standalone)").matches || (navigator as { standalone?: boolean }).standalone === true;
+  return { engine, os, standalone };
+}
+/** The protocol (h2, h3) of the latest finished API request, which a stream to the same server shares. */
+function apiProtocol() {
+  const entries = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
+  for (let i = entries.length - 1; i >= 0; i--)
+    if (entries[i].name.includes("/api/") && entries[i].nextHopProtocol) return entries[i].nextHopProtocol.slice(0, 20);
+  return null;
+}
+/** Chunks of a stream whose arrival times are reported; the last one and the longest gap always are. */
+const REPORTED_CHUNKS = 10;
+
 /**
  * Times one conversation open in this browser: connected (stream headers), first bytes (the
  * server's opening comment), first rows, and rows on screen. Slow opens are reported so a
@@ -38,6 +58,10 @@ export function trackTimelineOpen(
   const since = () => Math.round(performance.now() - started);
   let connectedMs: number | null = null, firstByteMs: number | null = null, rowsMs: number | null = null;
   let attempts = 0, hidden = document.hidden, done = false, wait: OpenWait = null;
+  // How the body arrived: in pieces as sent, or held somewhere and delivered late in one go.
+  let encoding: string | null = null, chunks = 0, characters = 0, lastChunkMs: number | null = null;
+  let maxGapMs = 0, maxGapEndMs: number | null = null;
+  const arrivals: [number, number][] = [];
   const setWait = (next: OpenWait) => {
     wait = next;
     onWait(next);
@@ -65,6 +89,7 @@ export function trackTimelineOpen(
       hostId: agent.hostId, agentId: agent.id, totalMs, connectedMs, firstByteMs, rowsMs,
       renderMs: rowsMs === null ? null : totalMs - rowsMs, attempts, hidden,
       pageAgeMs, ...background, version: WEB_VERSION,
+      ...clientKind(), protocol: apiProtocol(), encoding, chunks, characters, lastChunkMs, maxGapMs, maxGapEndMs, arrivals,
     });
   };
   return {
@@ -75,10 +100,24 @@ export function trackTimelineOpen(
       report(since());
     },
     /** Stream headers arrived. */
-    response() {
+    response(response?: Response) {
       if (done) return;
       connectedMs ??= since();
+      encoding = response?.headers.get("content-encoding")?.slice(0, 10) ?? null;
       if (wait === "server") setWait("network");
+    },
+    /** A piece of the body arrived (until the first rows). */
+    chunk(size: number) {
+      if (done) return;
+      const at = since();
+      if (lastChunkMs !== null && at - lastChunkMs > maxGapMs) {
+        maxGapMs = at - lastChunkMs;
+        maxGapEndMs = at;
+      }
+      lastChunkMs = at;
+      chunks++;
+      characters += size;
+      if (arrivals.length < REPORTED_CHUNKS) arrivals.push([at, size]);
     },
     state(state: StreamState) {
       if (done) return;

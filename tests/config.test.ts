@@ -21,7 +21,7 @@ test("saved settings apply unless an environment variable overrides them", () =>
   withStore((store) => {
     assert.deepEqual(
       Object.values(effectiveConfig(store, {})).map((e) => [e.key, e.value, e.source]),
-      [["port", "8787", "default"], ["bind", "127.0.0.1", "default"], ["push-subject", "mailto:litepaseo@example.com", "default"]],
+      [["port", "8787", "default"], ["bind", "127.0.0.1", "default"], ["push-subject", "mailto:litepaseo@example.com", "default"], ["compression", "on", "default"]],
     );
     setConfig(store, "push-subject", "mailto:me@example.org");
     setConfig(store, "port", "9001");
@@ -39,6 +39,7 @@ test("settings are validated before they are saved", () => {
   withStore((store) => {
     for (const port of ["0", "65536", "80a", ""]) assert.throws(() => setConfig(store, "port", port), /1 to 65535/);
     assert.throws(() => setConfig(store, "bind", "0.0.0.0 x"), /IP address or host name/);
+    for (const value of ["yes", "true", "", "OFF"]) assert.throws(() => setConfig(store, "compression", value), /on or off/);
     for (const subject of ["me@example.org", "mailto:me", "http://example.org", "https//x"])
       assert.throws(() => setConfig(store, "push-subject", subject), /mailto:/, subject);
     setConfig(store, "push-subject", "https://litepaseo.example.org");

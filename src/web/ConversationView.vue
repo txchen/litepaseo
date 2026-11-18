@@ -168,7 +168,8 @@ function connect() {
     const query = at ? `?epoch=${encodeURIComponent(at.epoch)}&seq=${at.seq}&from=${at.from}` : "";
     return "/api" + base() + "/timeline/stream" + query;
   },
-  onResponse: () => opening.response(),
+  onResponse: (response) => opening.response(response),
+  onChunk: (size) => opening.chunk(size),
   onState: (state) => {
     if (state === "unauthorized") emit("unauthorized");
     opening.state(state);

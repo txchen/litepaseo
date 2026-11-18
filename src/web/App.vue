@@ -1,20 +1,17 @@
 <script setup lang="ts">
 import { trackViewingPresence } from "./viewing-presence.ts";
 import { computed, nextTick, onUnmounted, provide, reactive, ref, shallowRef, watch } from "vue";
-import type { DirectoryMessage, HostState, Permission, ProviderSubagent, TimelineMessage, TimelinePage, TimelineStreamMessage, WorkspaceSummary, MessageDeliveryMode } from "../shared/wire.ts";
+import type { DirectoryMessage, HostState, Permission, ProviderSubagent, WorkspaceSummary, MessageDeliveryMode } from "../shared/wire.ts";
 import { DirectoryStore, comparePinnedFirst } from "./directory-store.ts";
 import ThreadMenu from "./ThreadMenu.vue";
 import RenameThread from "./RenameThread.vue";
 import ProjectMenu from "./ProjectMenu.vue";
 import ProjectSettings from "./ProjectSettings.vue";
 import { ComposerStore } from "./composer-store.ts";
-import { TimelineStore, type RowRef } from "./timeline-store.ts";
-import { PAGE_STEP, pageHistory, RENDER_WINDOW } from "./timeline-window.ts";
-import ChatOutline from "./ChatOutline.vue";
 import ImagePreview from "./ImagePreview.vue";
 import { openStream, type StreamState } from "./event-stream.ts";
 import SessionList from "./SessionList.vue";
-import TimelineRowView from "./TimelineRowView.vue";
+import ConversationView from "./ConversationView.vue";
 import NewSession from "./NewSession.vue";
 import type { ProjectGroup } from "./directory-store.ts";
 import AttachmentPanel from "./AttachmentPanel.vue";
@@ -27,14 +24,12 @@ import Settings from "./Settings.vue";
 import AgentBoard from "./AgentBoard.vue";
 import UsagePanel, { type UsageReport } from "./UsagePanel.vue";
 import { SUGGESTIONS } from "./suggestions.ts";
-import type { AgentSummary, BoardCard, CardPatch, PromptIndex, PromptMarker, RewindMode, TimelineRow } from "../shared/wire.ts";
+import type { AgentSummary, BoardCard, CardPatch, RewindMode } from "../shared/wire.ts";
 import TaskDialog from "./TaskDialog.vue";
 import { registerServiceWorker, setBadge, setFavicon } from "./pwa.ts";
 import { preloadMarkstream } from "./markstream-loader.ts";
 import { version as WEB_VERSION } from "../../package.json";
-import { formatElapsed } from "./elapsed.ts";
 import AgentControls from "./AgentControls.vue";
-import ProviderIcon from "./ProviderIcon.vue";
 import SchedulesPage from "./SchedulesPage.vue";
 import { defineAsyncComponent } from "vue";
 // The side panel loads on first use: the file viewer and xterm.js stay out of the first page.
@@ -46,7 +41,7 @@ const FileViewer = defineAsyncComponent(() => import("./FileViewer.vue"));
 const TerminalPanel = defineAsyncComponent(() => import("./TerminalPanel.vue"));
 const SubagentsPanel = defineAsyncComponent(() => import("./SubagentsPanel.vue"));
 import DictationButton from "./DictationButton.vue";
-import { TIMELINE_CONTEXT, parseFileLink, turnFooters, type FileLink, type FileViewState, type LineRange, type TimelineContext } from "./timeline-display.ts";
+import { TIMELINE_CONTEXT, parseFileLink, type FileLink, type FileViewState, type LineRange, type TimelineContext } from "./timeline-display.ts";
 
 type Card = BoardCard;
 type Tab = "chat" | "board" | "hosts" | "settings" | "schedules";
@@ -233,14 +228,10 @@ const hosts = shallowRef<HostState[]>([]),
   ),
   directoryState = ref<StreamState>("closed"),
   selectedKey = ref<string | null>(null),
-  timeline = shallowRef(new TimelineStore()),
-  timelineNotice = ref(""),
-  historyRows = shallowRef<RowRef[] | null>(null),
-  historyHasOlder = ref(false),
-  historyNewer = ref<number[]>([]),
-  /** A history page being fetched while the reader scrolls; paging never blocks the composer. */
-  paging = ref<"before" | "after" | null>(null),
-  timelineElement = ref<HTMLElement | null>(null),
+  /** The open conversation; it owns its timeline, history paging and scrolling. */
+  conversation = ref<InstanceType<typeof ConversationView> | null>(null),
+  /** The conversation whose first rows arrived (read marking waits for them). */
+  readyKey = ref<string | null>(null),
   composerElement = ref<HTMLTextAreaElement | null>(null),
   query = ref(""),
   /** Compact layouts show either the list or the detail pane. */
@@ -291,11 +282,18 @@ async function controlQueue(m: QueuedMessage, command: string) {
   await action(async () => { await api(path(a) + '/queue/' + m.id + '/control', 'POST', { action: command }); await refreshQueue(); });
 }
 async function jumpSearch(seq: number, epoch: string) {
-  if (timeline.value.epoch !== epoch) { error.value = 'Conversation changed. Search again.'; return; }
+  const view = conversation.value;
+  if (!view || view.epoch() !== epoch) { error.value = 'Conversation changed. Search again.'; return; }
   showConversation();
   if (compact.matches) panel.value = null;
-  await jumpToPrompt(seq, true);
+  await view.jumpToPrompt(seq, true);
 }
+// A different conversation starts without the previous one's subagents.
+watch(() => active.value?.key ?? null, () => {
+  providerSubagents.value = [];
+  openedSubagent.value = null;
+  if (panel.value === "subagents") panel.value = null;
+});
 const attachmentPanel = ref<InstanceType<typeof AttachmentPanel> | null>(null);
 const agentControls = ref<InstanceType<typeof AgentControls> | null>(null);
 /** Model name for turn footers: the open agent's current model, as the composer chip names it. */
@@ -500,66 +498,9 @@ const deliveryMode = computed(() => deliveryModes.value.includes(behavior.value)
 watch([() => active.value?.key, () => deliveryModes.value.includes("steer")], ([, canSteer]) => {
   behavior.value = canSteer ? "steer" : "queue";
 }, { immediate: true });
-/** Live-tail working indicator above the composer, like Paseo's in-chat spinner. */
-const working = computed(() => !historyRows.value && active.value?.state === "running");
-// A 1 s clock runs only while the open agent works and the page is visible.
-const clockNow = ref(Date.now());
-const turnStartedAt = computed(() => (working.value ? active.value?.turnStartedAt ?? null : null));
-const elapsed = computed(() => (turnStartedAt.value ? formatElapsed(clockNow.value - turnStartedAt.value) : ""));
-/** Whole seconds into the turn: the timer text and the spinner's quarter turns move together. */
-const turnSeconds = computed(() => (turnStartedAt.value ? Math.max(0, Math.floor((clockNow.value - turnStartedAt.value) / 1000)) : 0));
-let elapsedTimer: ReturnType<typeof setTimeout> | undefined;
-function syncElapsedClock() {
-  clearTimeout(elapsedTimer);
-  elapsedTimer = undefined;
-  const start = turnStartedAt.value;
-  if (!start || document.hidden) return;
-  // Tick just after each whole second of the turn, so every tick changes the display once.
-  const tick = () => {
-    clockNow.value = Date.now();
-    const into = (clockNow.value - start) % 1000;
-    elapsedTimer = setTimeout(tick, (into < 0 ? -into : 1000 - into) + 10);
-  };
-  tick();
-}
-watch(turnStartedAt, syncElapsedClock, { immediate: true });
-document.addEventListener("visibilitychange", syncElapsedClock);
-const visibleRows = computed(() => {
-  if (historyRows.value) return historyRows.value;
-  const store = timeline.value;
-  store.membership.value;
-  return store.rows.slice(-RENDER_WINDOW);
-});
 const markdownSettled = computed(() => directoryState.value === "live"
   && hostStates.value.get(active.value?.hostId ?? "") === "connected"
   && active.value?.turnActive === false);
-// Finished turns get a footer (copy, completion time, duration), as in Paseo. Recomputed per
-// timeline flush over the rendered window only (≤ RENDER_WINDOW rows).
-const turnMeta = computed(() => {
-  const rows = visibleRows.value.map((r) => r.row.value);
-  const a = active.value;
-  const lastFinished = (!!historyRows.value && historyNewer.value.length > 0) || (!!a && !(a.turnActive ?? a.state === "running"));
-  return turnFooters(rows, lastFinished);
-});
-const copiedTurn = ref<number | null>(null);
-let copiedTimer: ReturnType<typeof setTimeout> | undefined;
-async function copyTurn(seqStart: number, messages: number[]) {
-  const wanted = new Set(messages);
-  const text = visibleRows.value
-    .filter((r) => wanted.has(r.seqStart))
-    .map((r) => String(r.row.value.item.text ?? "").trim())
-    .filter(Boolean)
-    .join("\n\n");
-  if (!text) return;
-  try {
-    await navigator.clipboard.writeText(text);
-    copiedTurn.value = seqStart;
-    clearTimeout(copiedTimer);
-    copiedTimer = setTimeout(() => (copiedTurn.value = null), 1500);
-  } catch {
-    /* clipboard denied (insecure origin): nothing to do */
-  }
-}
 /** A rewind in flight (one at a time); the timeline is replaced when it lands. */
 const rewinding = ref(false);
 async function rewindTo(messageId: string, text: string, mode: RewindMode) {
@@ -622,17 +563,6 @@ function onTimelineClick(event: MouseEvent) {
   if (file.session !== selectedKey.value) select(file.session);
   openLocalLink(file);
 }
-const lastTimelineSeq = computed(() => {
-  const store = timeline.value;
-  store.membership.value;
-  return store.rows.at(-1)?.seqStart;
-});
-const canShowOlder = computed(() => {
-  if (historyRows.value) return historyHasOlder.value;
-  const store = timeline.value;
-  store.membership.value;
-  return store.rows.length > RENDER_WINDOW || store.hasOlder;
-});
 const cardsByColumn = computed(() => {
   const map = new Map<string, Card[]>(COLUMNS.map((c) => [c, []]));
   for (const card of board.value.cards) map.get(card.column)?.push(card);
@@ -797,145 +727,6 @@ watch(query, (text) => {
   }, 120);
 });
 
-// Async Markdown nodes can acquire height after the SSE update's nextTick.
-// Follow that layout only while the reader remains at the live tail.
-let followLatest = true;
-watch(timelineElement, (element, _previous, cleanup) => {
-  const inner = element?.querySelector(".timeline-inner");
-  if (!element || !inner) return;
-  // Only the reader scrolling up leaves the tail. A programmatic scroll can land short of the
-  // bottom when content grows before its scroll event is dispatched; that must not unfollow.
-  let lastTop = element.scrollTop;
-  const onScroll = () => {
-    const top = element.scrollTop;
-    if (nearBottom()) followLatest = true;
-    else if (top < lastTop - 1) followLatest = false;
-    // Pages load ahead of the reader in the direction they scroll; our own anchor
-    // corrections after a page swap are not reader intent.
-    scheduleActivePrompt();
-    // The scroll event of our own correction lands where we put it: not reader intent.
-    const ours = programmaticTop !== null && Math.abs(top - programmaticTop) < 2;
-    if (ours) programmaticTop = null;
-    if (!ours && performance.now() >= pagingQuietUntil) {
-      if (top < lastTop - 1) pagingIntent = "up";
-      else if (top > lastTop + 1) pagingIntent = "down";
-      autoPage();
-    }
-    lastTop = top;
-  };
-  const observer = new ResizeObserver(() => {
-    if (!historyRows.value && followLatest) scrollToBottom();
-  });
-  // At either end of a window there is nothing left to scroll, so no scroll event: the wheel
-  // still says which way the reader wants to go.
-  const onWheel = (event: WheelEvent) => {
-    if (performance.now() < pagingQuietUntil || !event.deltaY) return;
-    pagingIntent = event.deltaY < 0 ? "up" : "down";
-    autoPage();
-  };
-  // Touch browsers do not emit wheel events when a swipe reaches the scroll boundary.
-  let touchY: number | null = null;
-  let touchRetry: ReturnType<typeof setTimeout> | undefined;
-  const onTouchStart = (event: TouchEvent) => { touchY = event.touches.length === 1 ? event.touches[0].clientY : null; };
-  const onTouchMove = (event: TouchEvent) => {
-    if (event.touches.length !== 1) { touchY = null; return; }
-    const y = event.touches[0].clientY;
-    if (touchY !== null && Math.abs(y - touchY) > 2) {
-      pagingIntent = y > touchY ? "up" : "down";
-      if (pagingIntent === "up") followLatest = false;
-      if (performance.now() >= pagingQuietUntil) autoPage();
-      else { clearTimeout(touchRetry); touchRetry = setTimeout(autoPage, 50); }
-    }
-    touchY = y;
-  };
-  const onTouchEnd = () => { touchY = null; };
-  element.addEventListener("touchstart", onTouchStart, { passive: true });
-  element.addEventListener("touchmove", onTouchMove, { passive: true });
-  element.addEventListener("touchend", onTouchEnd, { passive: true });
-  element.addEventListener("touchcancel", onTouchEnd, { passive: true });
-  element.addEventListener("scroll", onScroll, { passive: true });
-  element.addEventListener("wheel", onWheel, { passive: true });
-  observer.observe(inner);
-  // The viewport shrinks when the composer grows (attachments, multi-line drafts): keep the tail in view.
-  observer.observe(element);
-  cleanup(() => {
-    clearTimeout(touchRetry);
-    element.removeEventListener("touchstart", onTouchStart);
-    element.removeEventListener("touchmove", onTouchMove);
-    element.removeEventListener("touchend", onTouchEnd);
-    element.removeEventListener("touchcancel", onTouchEnd);
-    observer.disconnect();
-    element.removeEventListener("scroll", onScroll);
-    element.removeEventListener("wheel", onWheel);
-  });
-}, { flush: "post" });
-
-/**
- * Infinite history in both directions. Scrolling up near the top fetches the previous page;
- * scrolling down near the bottom of a history window fetches the next one, and past the newest
- * page returns to the live tail. The window stays at RENDER_WINDOW rows: pages that scroll far
- * out of view are dropped, so a long read does not accumulate rows in memory.
- */
-let pagingIntent: "up" | "down" | null = null,
-  pagingQuietUntil = 0,
-  /** Where our last own scroll correction put the timeline; its scroll event is skipped. */
-  programmaticTop: number | null = null;
-/** Moves the timeline ourselves. A brief quiet window covers browsers that settle a pixel off. */
-function setScrollTop(el: HTMLElement, top: number) {
-  el.scrollTop = top;
-  programmaticTop = el.scrollTop;
-  pagingQuietUntil = performance.now() + 40;
-}
-function autoPage() {
-  const el = timelineElement.value;
-  if (!el || paging.value || !pagingIntent || el.offsetParent === null) return;
-  const ahead = Math.max(600, el.clientHeight);
-  if (pagingIntent === "up" && el.scrollTop < ahead && canShowOlder.value) void moveHistory("before");
-  else if (pagingIntent === "down" && historyRows.value && el.scrollHeight - el.scrollTop - el.clientHeight < ahead) {
-    void moveHistory("after"); // continues from the server or the live store; returns to live at the tail
-  }
-}
-/** The row at the top (or bottom) edge of the viewport, to hold in place across a window swap. */
-function screenAnchor(edge: "first" | "last") {
-  const el = timelineElement.value;
-  if (!el) return null;
-  const rect = el.getBoundingClientRect();
-  const onScreen = Array.from(el.querySelectorAll<HTMLElement>("[data-seq-start]")).filter((row) => {
-    const r = row.getBoundingClientRect();
-    return r.bottom > rect.top && r.top < rect.bottom;
-  });
-  const row = edge === "first" ? onScreen[0] : onScreen.at(-1);
-  return row ? { seq: row.dataset.seqStart!, top: row.getBoundingClientRect().top } : null;
-}
-/** After the DOM updates: puts the anchor row back where it was. False when it is gone. */
-function restoreAnchor(anchor: { seq: string; top: number } | null) {
-  const el = timelineElement.value;
-  const retained = anchor && el?.querySelector<HTMLElement>(`[data-seq-start="${anchor.seq}"]`);
-  if (!el || !retained) return false;
-  setScrollTop(el, el.scrollTop + retained.getBoundingClientRect().top - anchor!.top);
-  return true;
-}
-/** Leaves a history window that reached the newest page, keeping the reader's position. */
-async function returnToLive() {
-  const anchor = screenAnchor("last");
-  historyRows.value = null;
-  historyNewer.value = [];
-  await nextTick();
-  if (!restoreAnchor(anchor)) scrollToBottom();
-  else if (nearBottom()) followLatest = true;
-}
-
-function nearBottom() {
-  const el = timelineElement.value;
-  return !el || el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-}
-function scrollToBottom() {
-  followLatest = true;
-  void nextTick(() => {
-    const el = timelineElement.value;
-    if (el) el.scrollTop = el.scrollHeight;
-  });
-}
 /** Opens an agent (board, notification, a new session) and the thread it belongs to. */
 function select(key: string) {
   tab.value = "chat";
@@ -1134,7 +925,7 @@ async function removeProject(project: ProjectTarget) {
 // Viewing an unread thread marks it read (the agent-level read happens below).
 let threadReadSent = "";
 watch(
-  () => (activeThread.value?.unread && timeline.value.membership.value >= 0 && timeline.value.ready ? activeThread.value : null),
+  () => (activeThread.value?.unread && !!selectedKey.value && readyKey.value === selectedKey.value ? activeThread.value : null),
   (w) => {
     if (!w || document.hidden) return;
     const marker = `${w.key}@${w.activityAt}`;
@@ -1161,7 +952,7 @@ async function archiveAgent(a: AgentSummary) {
 // Opening a finished-but-unseen conversation marks it read, as the official app does.
 let readSent = "";
 watch(
-  () => (active.value && active.value.unread && timeline.value.membership.value >= 0 && timeline.value.ready ? active.value : null),
+  () => (active.value && active.value.unread && readyKey.value === active.value.key ? active.value : null),
   (a) => {
     if (!a || document.hidden) return;
     const marker = `${a.key}@${a.activityAt}`;
@@ -1223,415 +1014,9 @@ async function loadUsage(refresh = false) {
 watch(selectedKey, () => {
   suggestion.value = null;
 });
-// The timeline stream follows the selected agent while it exists in the directory, so a
-// just-created session opens when it arrives and an archived one releases its subscription.
-watch(
-  () => active.value?.key ?? null,
-  (key) => {
-  timelineOpening?.abandon();
-  timelineOpening = null;
-  timelineStream?.close();
-  timelineStream = null;
-  pagingIntent = null; programmaticTop = null; pagingQuietUntil = 0; followLatest = true;
-  const store = new TimelineStore();
-  timeline.value = store;
-  historyRows.value = null;
-  historyNewer.value = [];
-  timelineNotice.value = "";
-  providerSubagents.value = [];
-  openedSubagent.value = null;
-  if (panel.value === "subagents") panel.value = null;
-  const agent = agentDirectory.get(key);
-  if (!agent) return;
-  const opening = (timelineOpening = trackTimelineOpen(agent));
-  timelineStream = openStream({
-    url: () => "/api" + path(agent) + "/timeline/stream",
-    onResponse: () => opening.response(),
-    onState: (state) => {
-      if (state === "unauthorized") signOut("ended");
-      opening.state(state);
-    },
-    onMessage: (data) => {
-      if (timeline.value !== store) return;
-      const message = data as TimelineStreamMessage;
-      if (message.type === "subagents") {
-        providerSubagents.value = message.subagents;
-        return;
-      }
-      opening.message(message);
-      const stick = !historyRows.value && (nearBottom() || !store.ready);
-      const ops = (data as TimelineMessage).ops;
-      const failure = ops.find((op) => op.type === "error");
-      timelineNotice.value = failure?.type === "error" ? failure.message : "";
-      const epoch = store.epoch;
-      store.apply(ops);
-      if (store.epoch && store.epoch !== promptEpoch) void loadPrompts(agent, store);
-      if (epoch && epoch !== store.epoch) {
-        historyRows.value = null;
-        historyNewer.value = [];
-        scrollToBottom();
-      }
-      if (stick) scrollToBottom();
-    },
-  });
-  },
-);
-/**
- * Times one conversation open in this browser: connected (stream headers), first bytes (the
- * server's opening comment), first rows, and rows on screen. Opens slower than SLOW_OPEN_MS
- * are reported to the server log, so a stall can be placed: the server logs its own side as
- * timeline_slow.
- */
-const SLOW_OPEN_MS = 3000;
-let timelineOpening: ReturnType<typeof trackTimelineOpen> | null = null;
-/**
- * What a conversation that is still loading after SLOW_OPEN_MS waits for, shown in place of
- * the plain spinner: the LitePaseo server (no stream response yet), the network (headers but
- * no bytes: a proxy holding data) or the host's daemon (the stream is flowing, rows are not).
- */
-const timelineWait = ref<"server" | "network" | "host" | null>(null);
 /** The server's version, from the directory stream; this page was built as WEB_VERSION. */
 const serverVersion = ref("");
 const reloadPage = () => location.reload();
-/** Page lifetime and the last time it was in the background, for slow-open reports. */
-const pageStarted = performance.now();
-let lastHidden: { at: number; ms: number } | null = null;
-let hiddenSince: number | null = document.hidden ? performance.now() : null;
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) hiddenSince = performance.now();
-  else if (hiddenSince !== null) {
-    lastHidden = { at: performance.now(), ms: Math.round(performance.now() - hiddenSince) };
-    hiddenSince = null;
-  }
-});
-function trackTimelineOpen(agent: AgentSummary) {
-  const started = performance.now();
-  const since = () => Math.round(performance.now() - started);
-  let connectedMs: number | null = null, firstByteMs: number | null = null, rowsMs: number | null = null;
-  let attempts = 0, hidden = document.hidden, done = false;
-  // Background time just before this open: a long one can leave a dead connection behind.
-  const background = lastHidden && started - lastHidden.at < 60_000
-    ? { backgroundMs: lastHidden.ms, visibleForMs: Math.round(started - lastHidden.at) }
-    : { backgroundMs: null, visibleForMs: null };
-  const pageAgeMs = Math.round(started - pageStarted);
-  const onVisibility = () => (hidden ||= document.hidden);
-  document.addEventListener("visibilitychange", onVisibility);
-  timelineWait.value = null;
-  const slow = setTimeout(() => {
-    if (!done) timelineWait.value = connectedMs === null ? "server" : firstByteMs === null ? "network" : "host";
-  }, SLOW_OPEN_MS);
-  const finish = () => {
-    done = true;
-    clearTimeout(slow);
-    timelineWait.value = null;
-    document.removeEventListener("visibilitychange", onVisibility);
-  };
-  const report = (totalMs: number) => {
-    if (totalMs < SLOW_OPEN_MS) return;
-    void api("/diagnostics/timeline-slow", "POST", {
-      hostId: agent.hostId, agentId: agent.id, totalMs, connectedMs, firstByteMs, rowsMs,
-      renderMs: rowsMs === null ? null : totalMs - rowsMs, attempts, hidden,
-      pageAgeMs, ...background, version: WEB_VERSION,
-    }).catch(() => {});
-  };
-  return {
-    /** Left before any rows arrived: reported with rowsMs null. */
-    abandon() {
-      if (done) return;
-      finish();
-      report(since());
-    },
-    /** Stream headers arrived. */
-    response() {
-      if (done) return;
-      connectedMs ??= since();
-      if (timelineWait.value === "server") timelineWait.value = "network";
-    },
-    state(state: StreamState) {
-      if (done) return;
-      if (state === "connecting") attempts++;
-      if (state === "live") {
-        connectedMs ??= since();
-        firstByteMs ??= since();
-        if (timelineWait.value) timelineWait.value = "host";
-      }
-      if (state === "closed" || state === "unauthorized") finish();
-    },
-    message(message: TimelineMessage) {
-      if (done || !message.ops.some((op) => op.type === "reset")) return;
-      rowsMs = since();
-      finish();
-      // On screen: after Vue renders the rows and the browser paints them.
-      void nextTick(() => requestAnimationFrame(() => report(since())));
-    },
-  };
-}
-function showLatest() {
-  historyRows.value = null;
-  historyNewer.value = [];
-  scrollToBottom();
-}
-function fetchHistoryPage(agent: AgentSummary, epoch: string, seq: number): Promise<TimelinePage> {
-  return api(path(agent) + "/timeline?cursor=" + encodeURIComponent(JSON.stringify({ epoch, seq })));
-}
-/**
- * Forward cursors left by paging back are exact: the page before each one starts right after
- * the window. Cursors from a jump (later prompts, the live store's start) may be more than a
- * page ahead, so their pages are checked for a gap first.
- */
-const exactCursors = new Set<number>();
-/**
- * Jump cursors are one per prompt, and short turns would cost a request each: try a cursor
- * this many prompts further first. Its page covers the turns in between when it still
- * reaches back to the window; the reach doubles on success and halves on a miss.
- */
-let skipAhead = 4;
-/**
- * Up to a page of rows after `last`, for paging forward. `historyNewer` holds "before" cursors
- * (nearest on top). With none left the live store continues the window; a gap between the
- * window and the store is filled from the server. "stale": the conversation was replaced.
- */
-async function newerRows(agent: AgentSummary, store: TimelineStore, epoch: string, last: number): Promise<RowRef[] | null | "stale"> {
-  const found: RowRef[] = [];
-  // Set once the server has nothing between the window and the live store's first row.
-  let reachedStore = false;
-  for (let request = 0; request < 8 && found.length < PAGE_STEP; ) {
-    const after = found.at(-1)?.seqStart ?? last;
-    const top = historyNewer.value.at(-1);
-    if (top === undefined) {
-      const rows = store.rows;
-      if (!rows.length) break;
-      if (rows[0].seqStart <= after || reachedStore) {
-        // Live rows keep their own refs, so a history window that reaches them stays live.
-        const i = rows.findIndex((r) => r.seqStart > after);
-        if (i >= 0) found.push(...rows.slice(i, i + PAGE_STEP - found.length));
-        break;
-      }
-      historyNewer.value.push(rows[0].seqStart);
-      continue;
-    }
-    request++;
-    const stack = historyNewer.value;
-    const reaches = (p: TimelinePage) => !p.hasOlder || p.rows.some((r) => r.seqStart <= after);
-    const reach = exactCursors.has(top) ? 0 : Math.min(skipAhead, stack.length - 1);
-    if (reach > 0) {
-      const index = stack.length - 1 - reach;
-      const far = await fetchHistoryPage(agent, epoch, stack[index]);
-      if (far.epoch !== epoch) return "stale";
-      if (reaches(far)) {
-        const cursor = stack[index], newer = far.rows.filter((r) => r.seqStart > after), room = PAGE_STEP - found.length;
-        stack.splice(index);
-        // Rows beyond this page's share stay reachable through the same cursor.
-        if (newer.length > room) stack.push(cursor);
-        found.push(...newer.slice(0, room).map((row) => ({ seqStart: row.seqStart, row: shallowRef(row) })));
-        skipAhead = Math.min(skipAhead * 2, 64);
-        continue;
-      }
-      skipAhead = reach >> 1;
-      continue;
-    }
-    let page = await fetchHistoryPage(agent, epoch, top);
-    if (page.epoch !== epoch) return "stale";
-    let newer = page.rows.filter((r) => r.seqStart > after), consumed = true;
-    // Not known to start right after the window: look below the page; anything found there
-    // comes first, and this cursor stays on the stack for the rest.
-    while (!exactCursors.has(top) && newer.length && page.hasOlder && !page.rows.some((r) => r.seqStart <= after) && request < 8) {
-      request++;
-      const near = newer[0].seqStart;
-      const probe = await fetchHistoryPage(agent, epoch, near);
-      if (probe.epoch !== epoch) return "stale";
-      const between = probe.rows.filter((r) => r.seqStart > after && r.seqStart < near);
-      if (!between.length) break;
-      page = probe;
-      newer = between;
-      consumed = false;
-    }
-    const room = PAGE_STEP - found.length;
-    if (!newer.length && top === store.rows[0]?.seqStart) reachedStore = true;
-    // The cursor is spent only when its page fits; otherwise the rest comes from it next time.
-    if (consumed && newer.length <= room) historyNewer.value.pop();
-    found.push(...newer.slice(0, room).map((row) => ({ seqStart: row.seqStart, row: shallowRef(row) })));
-    if (!consumed) break;
-  }
-  return found.length ? found : null;
-}
-async function moveHistory(direction: "before" | "after") {
-  const store = timeline.value;
-  const el = timelineElement.value;
-  const current = visibleRows.value.slice();
-  // Rows paged back into history are a snapshot; rows continued from the live store stay live.
-  if (direction === "before") current.forEach((r, i) => (current[i] = { seqStart: r.seqStart, row: shallowRef(r.row.value) }));
-  const edge = direction === "before" ? current[0] : current.at(-1);
-  const agent = active.value;
-  if (!agent || !edge || paging.value) return;
-  const epoch = store.epoch;
-  paging.value = direction;
-  try {
-    const stillHere = () => timeline.value === store && store.epoch === epoch && active.value?.key === agent.key;
-    if (direction === "before") {
-      const page = await fetchHistoryPage(agent, epoch, edge.seqStart);
-      if (!stillHere()) return;
-      if (page.epoch !== epoch) return showLatest();
-      // The reader kept scrolling while the page loaded: anchor to where they are now.
-      const anchor = screenAnchor("first");
-      const window = pageHistory(current, page, "before");
-      // Forward navigation uses this page's stable seqStart boundary. An `after` catch-up
-      // read can include old tool rows whose seqEnd changed much later.
-      if (window.added) {
-        historyNewer.value.push(current.at(-1)!.seqStart + 1);
-        exactCursors.add(current.at(-1)!.seqStart + 1);
-      }
-      historyRows.value = window.rows;
-      historyHasOlder.value = window.hasOlder;
-      await nextTick();
-      if (!restoreAnchor(anchor) && el) el.scrollTop = 0;
-    } else {
-      const added = await newerRows(agent, store, epoch, edge.seqStart);
-      if (!stillHere()) return;
-      if (added === "stale") return showLatest();
-      const tail = store.rows.at(-1)?.seqStart;
-      const combined = [...current, ...(added ?? [])].slice(-RENDER_WINDOW);
-      // Caught up with the live tail: leave history, keeping the reader's place.
-      if (!added || (tail !== undefined && combined.at(-1)!.seqStart >= tail)) {
-        historyNewer.value = [];
-        await returnToLive();
-        return;
-      }
-      const anchor = screenAnchor("last");
-      historyRows.value = combined;
-      historyHasOlder.value = true;
-      await nextTick();
-      if (!restoreAnchor(anchor) && el) el.scrollTop = el.scrollHeight;
-    }
-  } catch (e) {
-    error.value = String((e as Error).message);
-    pagingIntent = null; // no retry loop on failure; the next scroll tries again
-  } finally {
-    paging.value = null;
-  }
-  // Still near the edge (a fast fling, short rows): keep going in the same direction.
-  void nextTick(autoPage);
-}
-
-// ---- Outline rail: the conversation's prompts, with hover previews and jump-to ---------------
-const canHoverOutline = matchMedia("(hover: hover) and (pointer: fine)").matches;
-/** The daemon's prompt index for the open conversation (whole history, not just loaded rows). */
-const promptIndex = shallowRef<{ key: string; prompts: PromptMarker[] } | null>(null);
-let promptEpoch = "";
-async function loadPrompts(agent: AgentSummary, store: TimelineStore) {
-  promptEpoch = store.epoch;
-  try {
-    const index: PromptIndex = await api(path(agent) + "/timeline/prompts");
-    if (timeline.value === store && index.epoch === store.epoch) promptIndex.value = { key: agent.key, prompts: index.prompts };
-  } catch {
-    // Older daemon: the rail falls back to the prompts already loaded.
-    if (timeline.value === store) promptIndex.value = { key: agent.key, prompts: [] };
-  }
-}
-watch(() => active.value?.key, () => {
-  promptIndex.value = null;
-  promptEpoch = "";
-  exactCursors.clear();
-});
-const previewOf = (row: TimelineRow) => String(row.item.text ?? "").replace(/\s+/g, " ").trim().slice(0, 240);
-/** Indexed prompts plus any sent since the index was read (from the live store). */
-const outlinePrompts = computed<PromptMarker[]>(() => {
-  const store = timeline.value;
-  store.membership.value;
-  const index = promptIndex.value?.key === active.value?.key ? promptIndex.value?.prompts ?? [] : [];
-  const lastIndexed = index.at(-1)?.seq ?? -1;
-  const live: PromptMarker[] = [];
-  for (const r of store.rows)
-    if (r.seqStart > lastIndexed && r.row.value.item.type === "user_message") live.push({ seq: r.seqStart, preview: previewOf(r.row.value) });
-  return live.length ? [...index, ...live] : index;
-});
-/** The prompt whose turn is at the top of the viewport. */
-const activePromptSeq = ref<number | null>(null);
-let activeFrame = 0;
-function scheduleActivePrompt() {
-  if (activeFrame || outlinePrompts.value.length < 2 || !canHoverOutline) return;
-  activeFrame = requestAnimationFrame(() => {
-    activeFrame = 0;
-    const top = screenAnchor("first");
-    activePromptSeq.value = top ? Number(top.seq) : null;
-  });
-}
-watch([outlinePrompts, historyRows], () => void nextTick(scheduleActivePrompt));
-/** Brings a row to the top of the viewport (just below the edge, so it reads as the start). */
-function revealRow(seq: number) {
-  const el = timelineElement.value;
-  const row = el?.querySelector<HTMLElement>(`[data-seq-start="${seq}"]`)
-    ?? Array.from(el?.querySelectorAll<HTMLElement>("[data-seq-start]") ?? []).find((r) => Number(r.dataset.seqStart) >= seq || (r.classList.contains("row-assistant") && Number(r.dataset.seqEnd) >= seq));
-  if (!el || !row) return;
-  followLatest = false;
-  setScrollTop(el, el.scrollTop + row.getBoundingClientRect().top - el.getBoundingClientRect().top - 12);
-  scheduleActivePrompt();
-}
-/**
- * Jumps to a prompt: in place when rendered, from the live store when it holds the prompt, else
- * from the server (the prompt's turn, up to the next prompt). Later prompts become the forward
- * cursors, so scrolling down from there pages through the turns in order.
- */
-async function jumpToPrompt(seq: number, exact = false) {
-  const agent = active.value;
-  const store = timeline.value;
-  if (!agent || paging.value) return;
-  if (timelineElement.value?.querySelector(`[data-seq-start="${seq}"]`)) return revealRow(seq);
-  const rows = store.rows;
-  const local = rows.length && rows[0].seqStart <= seq ? rows.findIndex((r) => r.seqStart >= seq || (r.row.value.item.type === "assistant_message" && r.row.value.seqEnd >= seq)) : -1;
-  if (local >= 0) {
-    const start = local;
-    historyNewer.value = [];
-    if (start >= rows.length - RENDER_WINDOW) historyRows.value = null;
-    else {
-      historyRows.value = rows.slice(start, start + RENDER_WINDOW);
-      historyHasOlder.value = start > 0 || store.hasOlder;
-    }
-    await nextTick();
-    return revealRow(seq);
-  }
-  const epoch = store.epoch;
-  const later = outlinePrompts.value.map((p) => p.seq).filter((s) => s > seq && (!rows.length || s < rows[0].seqStart));
-  paging.value = "before";
-  try {
-    let cursor = exact ? seq + 1 : later[0] ?? rows[0]?.seqStart ?? Number.MAX_SAFE_INTEGER;
-    let collected: TimelineRow[] = [], hasOlder = false;
-    // A turn longer than a page: keep reading back until the prompt itself is in hand.
-    for (let request = 0; request < 8; request++) {
-      const page = await fetchHistoryPage(agent, epoch, cursor);
-      if (timeline.value !== store || active.value?.key !== agent.key) return;
-      if (page.epoch !== epoch) return showLatest();
-      collected = [...page.rows, ...collected];
-      hasOlder = page.hasOlder;
-      if (!page.rows.length || page.rows[0].seqStart <= seq || !page.hasOlder) break;
-      cursor = page.rows[0].seqStart;
-    }
-    const at = Math.max(0, collected.findIndex((r) => r.seqStart >= seq || (r.item.type === "assistant_message" && r.seqEnd >= seq)));
-    const start = at; // the prompt opens the window; earlier rows load as the reader scrolls up
-    let jumped: RowRef[] = collected.slice(start, start + RENDER_WINDOW).map((row) => ({ seqStart: row.seqStart, row: shallowRef(row) }));
-    historyNewer.value = [...later].reverse();
-    exactCursors.clear();
-    skipAhead = 4;
-    // A short turn: fill the window from the following turns, so there is something to scroll.
-    if (jumped.length && jumped.length <= RENDER_WINDOW - PAGE_STEP) {
-      const more = await newerRows(agent, store, epoch, jumped.at(-1)!.seqStart);
-      if (timeline.value !== store || active.value?.key !== agent.key) return;
-      if (more === "stale") return showLatest();
-      if (more) jumped = [...jumped, ...more];
-    }
-    historyRows.value = jumped;
-    historyHasOlder.value = hasOlder || start > 0;
-    await nextTick();
-    revealRow(seq);
-    // Read ahead: the next turns are where the reader goes from a jump.
-    pagingIntent = "down";
-    requestAnimationFrame(autoPage);
-  } catch (e) {
-    error.value = String((e as Error).message);
-  } finally {
-    paging.value = null;
-  }
-}
 
 function autosize() {
   const el = composerElement.value;
@@ -1705,7 +1090,7 @@ async function deliver(a: AgentSummary, text: string, selected: LocalAttachment[
       for (const entry of selected) attachments.remove(a.key, entry, true);
       if (selectedKey.value === a.key) suggestion.value = null;
       void nextTick(autosize);
-      if (selectedKey.value === a.key) showLatest();
+      if (selectedKey.value === a.key) conversation.value?.showLatest();
     } catch (e) {
       if (generation !== composer.generation) return;
       const notSent = (e as { delivery?: string }).delivery === "not-sent";
@@ -1884,14 +1269,11 @@ document.addEventListener("visibilitychange", () => {
 onUnmounted(() => {
   clearInterval(usageTimer);
   clearInterval(deliveryTimer);
-  clearTimeout(elapsedTimer);
-  document.removeEventListener("visibilitychange", syncElapsedClock);
   attachments.clear();
   window.removeEventListener("storage", onComposerStorage);
   window.removeEventListener("popstate", onPopState);
   window.removeEventListener("keydown", onGlobalKey);
   directoryStream?.close();
-  timelineStream?.close();
   clearTimeout(searchTimer);
 });
 </script>
@@ -2389,57 +1771,22 @@ onUnmounted(() => {
           @reveal="revealDirectory"
         />
 
-        <div v-show="!activeFile && !terminalActive" class="timeline-wrap">
-        <div ref="timelineElement" class="timeline" @click="onTimelineClick">
-          <div class="timeline-inner">
-            <div v-if="canShowOlder" class="older">
-              <span v-if="paging === 'before'" class="older-loading" role="status"><span class="spinner"></span>Loading earlier messages…</span>
-              <!-- Scrolling up loads automatically; the button covers a window too short to scroll. -->
-              <button v-else class="btn btn-ghost" @click="moveHistory('before')">Show earlier messages</button>
-            </div>
-            <p v-if="timelineNotice" class="notice"><Icon name="alert" :size="14" />{{ timelineNotice }}</p>
-            <template v-for="r in visibleRows" :key="`${active?.key}:${timeline.epoch}:${r.seqStart}`">
-              <TimelineRowView :entry="r.row" :final="r.seqStart !== lastTimelineSeq || markdownSettled" :data-seq-start="r.seqStart" />
-              <div v-if="turnMeta.get(r.seqStart)" class="turn-footer">
-                <button
-                  v-if="turnMeta.get(r.seqStart)!.messages.length"
-                  type="button"
-                  class="turn-item turn-copy"
-                  :aria-label="copiedTurn === r.seqStart ? 'Copied' : 'Copy turn'"
-                  :title="copiedTurn === r.seqStart ? 'Copied' : 'Copy turn'"
-                  @click="copyTurn(r.seqStart, turnMeta.get(r.seqStart)!.messages)"
-                >
-                  <Icon :name="copiedTurn === r.seqStart ? 'check' : 'copy'" :size="14" />{{ copiedTurn === r.seqStart ? "Copied" : "Copy" }}
-                </button>
-                <span v-if="footerModel && r.row.value.provider === active.provider" class="turn-item" :title="'Model: ' + footerModel">
-                  <ProviderIcon :provider="r.row.value.provider" />{{ footerModel }}
-                </span>
-                <span class="turn-item" :title="'Finished ' + turnMeta.get(r.seqStart)!.at"><Icon name="clock" :size="14" />{{ turnMeta.get(r.seqStart)!.at }}</span>
-                <span v-if="turnMeta.get(r.seqStart)!.took" class="turn-item" :title="'Worked for ' + turnMeta.get(r.seqStart)!.took">
-                  <Icon name="hourglass" :size="14" />{{ turnMeta.get(r.seqStart)!.took }}
-                </span>
-              </div>
-            </template>
-            <div v-if="historyRows" class="older">
-              <span v-if="paging === 'after'" class="older-loading" role="status"><span class="spinner"></span>Loading newer messages…</span>
-              <button v-else class="btn btn-ghost" @click="showLatest">Back to latest</button>
-            </div>
-            <div v-if="working" class="timeline-working" role="status" aria-label="Agent is working">
-              <span
-                class="spinner spinner-ticked"
-                :style="elapsed ? { transform: `rotate(${turnSeconds * 90}deg)` } : undefined"
-              ></span>
-              <span v-if="elapsed" class="timeline-elapsed" aria-hidden="true">{{ elapsed }}</span>
-              <span v-else>Working…</span>
-            </div>
-            <div v-if="!visibleRows.length" class="timeline-empty">
-              <span v-if="!timeline.ready" class="spinner"></span>
-              {{ timeline.ready ? "No messages yet." : timelineWait === "server" ? "Still connecting to LitePaseo…" : timelineWait === "network" ? "Connected, waiting for the network to deliver data…" : timelineWait === "host" ? `Waiting for ${hostLabels.get(active?.hostId ?? "") ?? "the host"} to load this conversation…` : "Loading conversation…" }}
-            </div>
-          </div>
-        </div>
-        <ChatOutline v-if="outlinePrompts.length >= 2 && canHoverOutline" :prompts="outlinePrompts" :active-seq="activePromptSeq" @jump="jumpToPrompt" />
-        </div>
+        <ConversationView
+          v-show="!activeFile && !terminalActive"
+          ref="conversation"
+          :key="active.key"
+          :agent="active"
+          :api="api"
+          :context="timelineContext"
+          :host-label="hostLabels.get(active.hostId) ?? ''"
+          :settled="markdownSettled"
+          :footer-model="footerModel"
+          @error="(message) => (error = message)"
+          @subagents="(list) => (providerSubagents = list)"
+          @ready="readyKey = active.key"
+          @timeline-click="onTimelineClick"
+          @unauthorized="signOut('ended')"
+        />
 
         <div v-show="!activeFile && !terminalActive" class="dock">
           <div class="dock-inner">

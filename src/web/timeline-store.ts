@@ -27,7 +27,15 @@ export class TimelineStore {
   hasOlder = false;
   startCursor: TimelineCursor | null = null;
   ready = false;
+  /** The latest change these rows include; a reconnect asks only for what came after it. */
+  lastSeq = -1;
   readonly membership = shallowRef(0);
+
+  /** How far this conversation is held, for resuming its stream; null before the first rows. */
+  resumePoint() {
+    const first = this.rows[0];
+    return this.ready && first && this.lastSeq >= 0 ? { epoch: this.epoch, seq: this.lastSeq, from: first.seqStart } : null;
+  }
 
   apply(ops: TimelineOp[]) {
     let membership = false;
@@ -49,8 +57,10 @@ export class TimelineStore {
         this.hasOlder = op.hasOlder;
         this.startCursor = op.startCursor;
         this.ready = true;
+        this.lastSeq = op.seq ?? op.rows.reduce((max, row) => Math.max(max, row.seqEnd), -1);
         membership = true;
       } else if (op.type === "upsert") {
+        this.lastSeq = Math.max(this.lastSeq, op.row.seqEnd);
         const index = this.find(op.row.seqStart);
         if (index >= 0) this.rows[index].row.value = op.row;
         else {
@@ -58,6 +68,7 @@ export class TimelineStore {
           membership = true;
         }
       } else if (op.type === "append") {
+        this.lastSeq = Math.max(this.lastSeq, op.seqEnd);
         const index = this.find(op.seqStart);
         if (index < 0) continue;
         const ref = this.rows[index].row,

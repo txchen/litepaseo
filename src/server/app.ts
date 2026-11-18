@@ -580,12 +580,18 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
 
   app.get("/api/hosts/:host/agents/:agent/timeline/stream", (c) => {
     hosts.get(c.req.param("host"));
+    // A browser that holds the conversation says how far: it gets only what changed since.
+    const since = z.object({
+      epoch: z.string().min(1).max(200),
+      seq: z.coerce.number().int().nonnegative(),
+      from: z.coerce.number().int().nonnegative(),
+    }).safeParse(c.req.query());
     return eventStream(c.req.raw.signal, (send) => {
       const stop = hosts.watchTimeline(c.req.param("host"), c.req.param("agent"), (ops) =>
         send({ type: "ops", ops: ops.map(op => {
           const enrich = (row: import("../shared/wire.ts").TimelineRow) => ({ ...row, item: withMessageImages(store, c.req.param("host"), c.req.param("agent"), row.item) });
           return op.type === "reset" ? { ...op, rows: op.rows.map(enrich) } : op.type === "upsert" ? { ...op, row: enrich(op.row) } : op;
-        }) } satisfies TimelineMessage));
+        }) } satisfies TimelineMessage), undefined, since.success ? since.data : undefined);
       // The agent's provider subagents ride the same stream: no extra connection per chat.
       // The first list always goes out, so a reconnecting browser drops subagents that are gone.
       let sent = "";

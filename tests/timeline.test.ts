@@ -120,7 +120,7 @@ function harness(daemon: ReferenceDaemon) {
   const view = new TimelineView(driver, "agent");
   const store = new TimelineStore();
   const received: TimelineOp[][] = [];
-  view.watch((ops) => {
+  const unwatch = view.watch((ops) => {
     received.push(ops);
     store.apply(structuredClone(ops));
   });
@@ -143,7 +143,7 @@ function harness(daemon: ReferenceDaemon) {
     }));
     return seq;
   };
-  return { view, store, received, emit, append, send: (m: unknown) => handler(m) };
+  return { view, store, received, emit, append, unwatch, send: (m: unknown) => handler(m) };
 }
 
 const visible = (store: TimelineStore) => store.rows.map((r) => r.row.value);
@@ -213,9 +213,89 @@ test("a late watcher gets a bounded reset; epoch replacement reloads the tail", 
   h.view.dispose();
 });
 
+test("a returning browser resumes with only the rows that changed; otherwise it gets a reset", async () => {
+  const daemon = new ReferenceDaemon();
+  const h = harness(daemon);
+  h.emit(h.append({ type: "user_message", text: "hi" }, "t1"));
+  h.emit(h.append({ type: "tool_call", callId: "c1", status: "running", detail: { type: "unknown" } } as any, "t1"));
+  h.emit(h.append({ type: "assistant_message", text: "Working", messageId: "m" }, "t1"));
+  await sleep(550);
+  // Another browser opens the conversation, then leaves (a cached view, or a hidden tab).
+  const away = new TimelineStore();
+  const leave = h.view.watch((ops) => away.apply(structuredClone(ops)));
+  assert.deepEqual(visible(away), visible(h.store));
+  const point = away.resumePoint()!;
+  assert.equal(point.seq, daemon.nextSeq - 1, "the reset says how far it reaches");
+  leave();
+  // Meanwhile: text streams on, the tool call finishes, a new turn starts.
+  h.emit(h.append({ type: "assistant_message", text: " hard" }, "t1"));
+  h.emit(h.append({ type: "tool_call", callId: "c1", status: "completed", detail: { type: "shell", command: "ls" } } as any, "t1"));
+  h.emit(h.append({ type: "user_message", text: "next" }, "t2"));
+  await sleep(550);
+  const resumed: TimelineOp[][] = [];
+  const back = h.view.watch((ops) => {
+    resumed.push(ops);
+    away.apply(structuredClone(ops));
+  }, point);
+  assert.equal(resumed.length, 1);
+  assert.deepEqual(resumed[0].map((op) => op.type), ["upsert", "upsert", "upsert"], "only the changed rows");
+  assert.deepEqual(resumed[0].map((op) => (op as any).row.seqStart), [2, 3, 6]);
+  assert.deepEqual(visible(away), visible(h.store), "the returning browser holds exactly what a watching one does");
+  back();
+  // Nothing changed since: nothing to send.
+  const quiet: TimelineOp[][] = [];
+  h.view.watch((ops) => quiet.push(ops), away.resumePoint()!)();
+  assert.deepEqual(quiet, []);
+  // Another epoch, or a point the view cannot resume from: a reset, as before.
+  const other: TimelineOp[][] = [];
+  h.view.watch((ops) => other.push(ops), { ...point, epoch: "e0" })();
+  h.view.watch((ops) => other.push(ops), { ...point, seq: 0 })();
+  assert.deepEqual(other.map((ops) => ops[0].type), ["reset", "reset"]);
+  h.view.dispose();
+});
+
+test("a view nobody watches keeps no pending changes, and whoever comes back sees them all", async () => {
+  const daemon = new ReferenceDaemon();
+  const h = harness(daemon);
+  h.emit(h.append({ type: "assistant_message", text: "a", messageId: "m" }, "t1"));
+  await sleep(550);
+  const point = h.store.resumePoint()!;
+  h.unwatch();
+  for (let i = 0; i < 50; i++) h.emit(h.append({ type: "assistant_message", text: " " + i }, "t1"));
+  h.emit(h.append({ type: "tool_call", callId: "c", status: "running", detail: { type: "unknown" } } as any, "t1"));
+  await sleep(550);
+  assert.equal((h.view as any).pending.size, 0, "an unwatched view accumulates nothing to send");
+  const later = new TimelineStore();
+  later.apply(structuredClone([{ type: "reset", epoch: point.epoch, rows: visible(h.store), hasOlder: false, startCursor: null, seq: point.seq }] as TimelineOp[]));
+  h.view.watch((ops) => later.apply(structuredClone(ops)), point);
+  assert.deepEqual(visible(later), expected(daemon, 1));
+  h.view.dispose();
+});
+
+test("a view that trimmed rows a browser still lacks changes for sends a reset", async () => {
+  const daemon = new ReferenceDaemon();
+  const h = harness(daemon);
+  await sleep(550); // loaded: what follows arrives live
+  h.emit(h.append({ type: "tool_call", callId: "old", status: "running", detail: { type: "unknown" } } as any, "t0"));
+  for (let i = 0; i < 598; i++) h.emit(h.append({ type: "user_message", text: "m" + i }, "t" + i));
+  await sleep(550);
+  const point = h.store.resumePoint()!;
+  // The old call changes, then a few rows arrive: just enough that the view drops the call.
+  h.emit(h.append({ type: "tool_call", callId: "old", status: "completed", detail: { type: "unknown" } } as any, "t0"));
+  for (let i = 0; i < 5; i++) h.emit(h.append({ type: "user_message", text: "n" + i }, "n" + i));
+  await sleep(550);
+  assert.equal(h.store.rows.length, 604, "the watching browser still holds every row");
+  assert.ok(!(h.view as any).bySeqStart.has(1), "the view dropped the old call");
+  const ops: TimelineOp[][] = [];
+  h.view.watch((o) => ops.push(o), point)();
+  assert.equal(ops[0][0].type, "reset");
+  h.view.dispose();
+});
+
 test("randomized: dropped events and reconnects converge to the daemon projection", async () => {
   let seed = 42;
   const random = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+  let totalResumes = 0;
   for (let run = 0; run < 25; run++) {
     const daemon = new ReferenceDaemon();
     const callIds: string[] = [];
@@ -229,6 +309,10 @@ test("randomized: dropped events and reconnects converge to the daemon projectio
     }
     const h = harness(daemon);
     await sleep(60);
+    // A second browser that leaves and comes back, resuming from what it holds.
+    const roamer = new TimelineStore();
+    let roaming: (() => void) | null = h.view.watch((ops) => roamer.apply(structuredClone(ops)));
+    let resumes = 0;
     let turn = 0;
     for (let step = 0; step < 300; step++) {
       const r = random();
@@ -260,7 +344,18 @@ test("randomized: dropped events and reconnects converge to the daemon projectio
       else if (roll < 0.93) h.send({ type: "agent.timeline.subscription_restored", payload: { agentId: "agent" } });
       // else: dropped event
       if (random() < 0.05) await sleep(0);
+      if (random() < 0.04) {
+        if (roaming) {
+          roaming();
+          roaming = null;
+        } else {
+          const point = roamer.resumePoint() ?? undefined;
+          if (point) resumes++;
+          roaming = h.view.watch((ops) => roamer.apply(structuredClone(ops)), point);
+        }
+      }
     }
+    roaming ??= h.view.watch((ops) => roamer.apply(structuredClone(ops)), roamer.resumePoint() ?? undefined);
     // A final event lets the view notice any trailing gap.
     h.emit(h.append({ type: "user_message", text: "end" }, "end"));
     await sleep(550);
@@ -277,8 +372,20 @@ test("randomized: dropped events and reconnects converge to the daemon projectio
       expected(daemon, windowStart).map((r) => r.seqStart),
       `run ${run}`,
     );
+    // The browser that came and went holds the same rows, with no gaps from where it started.
+    const roamed = visible(roamer);
+    for (const row of roamed) assert.deepEqual(row, bySeq.get(row.seqStart), `run ${run} roamer seq ${row.seqStart}`);
+    const roamStart = roamer.resumePoint()!.from;
+    assert.deepEqual(
+      roamed.filter((r) => r.seqStart >= windowStart && r.seqStart >= roamStart).map((r) => r.seqStart),
+      expected(daemon, Math.max(windowStart, roamStart)).map((r) => r.seqStart),
+      `run ${run} roamer (${resumes} resumes)`,
+    );
+    totalResumes += resumes;
+    roaming();
     h.view.dispose();
   }
+  assert.ok(totalResumes > 20, "the randomized runs resume often: " + totalResumes);
 });
 
 test("a conversation's first rows go out at once, and slow opens report which layer waited", async () => {

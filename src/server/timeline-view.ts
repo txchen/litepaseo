@@ -43,6 +43,13 @@ const MAX_ROWS = 600;
 const KEEP_ROWS = 500;
 /** Rows sent to a client that (re)joins; older ones load on demand. */
 const RESET_ROWS = 200;
+
+/** What a returning browser already holds: rows from `from` on, with every change up to `seq`. */
+export interface TimelineResume {
+  epoch: string;
+  seq: number;
+  from: number;
+}
 const MAX_BUFFER = 5000;
 // About two steady-state timeline renders/s; input and permissions stay immediate.
 const FLUSH_MS = 500;
@@ -111,6 +118,11 @@ export class TimelineView {
   private lastSeq = -1;
   private hasOlder = false;
   private startCursor: TimelineCursor | null = null;
+  /**
+   * The view knows every row changed after this seq, so a browser holding everything up to it
+   * can resume with just those rows. Set by each load; raised when rows are trimmed.
+   */
+  private resumeFloor = Number.POSITIVE_INFINITY;
   /** True while rows reach back to the first projected row, so unseen identities are new. */
   private complete = false;
   private state: "loading" | "live" | "catching-up" | "failed" | "disposed" = "loading";
@@ -182,11 +194,18 @@ export class TimelineView {
     return released;
   }
 
-  watch(watcher: Watcher) {
+  /**
+   * Adds a browser. A live view answers at once: with the rows changed since `since` when the
+   * browser holds this conversation up to a point the view can resume from (nothing when none
+   * changed), else with a reset. A loading view sends its reset once loaded.
+   */
+  watch(watcher: Watcher, since?: TimelineResume) {
     if (this.state === "live" || this.state === "catching-up") {
-      // Deliver what existing watchers are owed first; the newcomer starts from the reset.
+      // Deliver what existing watchers are owed first; the newcomer starts from here.
       this.flush();
-      watcher([this.resetOp()]);
+      const resumed = since ? this.resumeOps(since) : null;
+      if (!resumed) watcher([this.resetOp()]);
+      else if (resumed.length) watcher(resumed);
     } else if (this.watchers.size) this.joiners.push(now());
     this.watchers.add(watcher);
     return () => this.watchers.delete(watcher);
@@ -377,6 +396,7 @@ export class TimelineView {
     this.pending.clear();
     this.epoch = page.epoch;
     this.lastSeq = page.window.maxSeq;
+    this.resumeFloor = this.lastSeq;
     this.hasOlder = page.hasOlder;
     this.startCursor = page.startCursor;
     this.complete = !page.hasOlder;
@@ -439,6 +459,8 @@ export class TimelineView {
   private trim() {
     const removed = this.rows.splice(0, this.rows.length - KEEP_ROWS);
     for (const row of removed) {
+      // A browser that missed this row's last change can no longer get it from here.
+      this.resumeFloor = Math.max(this.resumeFloor, row.seqEnd);
       this.bySeqStart.delete(row.seqStart);
       this.pending.delete(row.seqStart);
       const identity = timelineItemIdentity(row.item as never);
@@ -452,7 +474,8 @@ export class TimelineView {
   // ---- browser output -----------------------------------------------------------------------
 
   private mark(seqStart: number, full: boolean, text = "") {
-    if (this.pendingReset) return;
+    // Unwatched, changes need not wait to be sent: whoever joins next gets the rows as they are.
+    if (this.pendingReset || !this.watchers.size) return;
     const pending = this.pending.get(seqStart);
     if (!pending) this.pending.set(seqStart, { full, text: full ? "" : text });
     else if (full) {
@@ -491,6 +514,18 @@ export class TimelineView {
     if (ops.length) this.broadcast(ops);
   }
 
+  /**
+   * The rows a returning browser lacks: those from its window on that changed after `since.seq`,
+   * as upserts. Null when the view cannot tell (another epoch, history it no longer holds) or
+   * when so much changed that a reset is the smaller answer.
+   */
+  private resumeOps(since: TimelineResume): TimelineOp[] | null {
+    if (since.epoch !== this.epoch || since.seq < this.resumeFloor || since.seq > this.lastSeq) return null;
+    const changed = this.rows.filter((row) => row.seqEnd > since.seq && row.seqStart >= since.from);
+    if (changed.length > RESET_ROWS) return null;
+    return changed.map((row) => ({ type: "upsert", row: { ...row } }));
+  }
+
   private resetOp(): TimelineOp {
     const start = Math.max(0, this.rows.length - RESET_ROWS);
     const rows = this.rows.slice(start).map((row) => ({ ...row }));
@@ -500,6 +535,7 @@ export class TimelineView {
       rows,
       hasOlder: this.hasOlder || start > 0,
       startCursor: start > 0 ? { epoch: this.epoch, seq: rows[0].seqStart } : this.startCursor,
+      seq: this.lastSeq,
     };
   }
 

@@ -5,7 +5,7 @@ import type { Host } from "./store.ts";
 import type { AgentSummary, WorkspaceSummary, HostDiagnostic } from "../shared/wire.ts";
 import { VersionedCollection } from "./versioned-collection.ts";
 import { HostDirectory, HostWorkspaces, type DirectoryDriver, type Transition } from "./host-directory.ts";
-import { TimelineView, type TimelineDriver } from "./timeline-view.ts";
+import { TimelineView, type TimelineDriver, type TimelineResume } from "./timeline-view.ts";
 import { HostSubagents, type SubagentDriver } from "./subagents.ts";
 import type { ProviderSubagent } from "../shared/wire.ts";
 import { HostLiveness, forceReconnect, type LivenessDriver } from "./host-liveness.ts";
@@ -29,8 +29,12 @@ interface Client {
   stopStatus: () => void;
 }
 
-/** Idle grace before an unwatched timeline releases its daemon subscription. */
-const TIMELINE_GRACE_MS = 30_000;
+/**
+ * Idle grace before an unwatched timeline releases its daemon subscription. Browsers keep
+ * recently opened conversations and come back to them; while the view lives, coming back
+ * costs only the rows that changed meanwhile, not a reload from the daemon.
+ */
+const TIMELINE_GRACE_MS = 5 * 60_000;
 /** Conversation opens slower than this are logged with a per-layer breakdown. */
 const SLOW_TIMELINE_MS = 3000;
 /** A viewer still without rows after this long has the daemon checked for a silent connection. */
@@ -188,9 +192,10 @@ export class Hosts {
 
   /**
    * Shares one live timeline per agent across all watching browsers. With `subagentId`, the
-   * conversation of one of the agent's provider subagents.
+   * conversation of one of the agent's provider subagents. With `since`, a browser that holds
+   * the conversation resumes with what changed (see TimelineView.watch).
    */
-  watchTimeline(hostId: string, agentId: string, watcher: Parameters<TimelineView["watch"]>[0], subagentId?: string) {
+  watchTimeline(hostId: string, agentId: string, watcher: Parameters<TimelineView["watch"]>[0], subagentId?: string, since?: TimelineResume) {
     const client = this.get(hostId);
     const key = subagentId ? `${hostId}:${agentId}:subagent:${subagentId}` : `${hostId}:${agentId}`;
     let entry = this.timelines.get(key);
@@ -233,7 +238,9 @@ export class Hosts {
     const stop = entry.view.watch((ops) => {
       if (waiting && ops.some((op) => op.type === "reset")) finishWait(false);
       watcher(ops);
-    });
+    }, since);
+    // A live view answers at once, possibly with nothing (a resume with no changes).
+    if (joined.state === "live" || joined.state === "catching-up") finishWait(false);
     const current = entry;
     return () => {
       finishWait(true);

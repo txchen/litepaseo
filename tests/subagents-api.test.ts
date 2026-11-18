@@ -44,8 +44,10 @@ test("the conversation stream carries the agent's provider subagents; their conv
     listener([]);
     return () => void stopped++;
   };
-  hosts.watchTimeline = (host, agent, watcher, subagent) => {
+  const resumes: unknown[] = [];
+  hosts.watchTimeline = (host, agent, watcher, subagent, since) => {
     watched.push(["timeline", host, agent, subagent]);
+    resumes.push(since);
     watcher([{ type: "reset", epoch: "e", rows: [], hasOlder: false, startCursor: null } satisfies TimelineOp]);
     return () => void stopped++;
   };
@@ -74,6 +76,13 @@ test("the conversation stream carries the agent's provider subagents; their conv
     await sub.cancel();
     await new Promise((r) => setTimeout(r, 10));
     assert.equal(stopped, 3);
+    // A browser that holds the conversation resumes from where it is; a malformed point is ignored.
+    for (const query of ["?epoch=e&seq=41&from=3", "?epoch=e&seq=-1&from=3", "?epoch=e&seq=4"]) {
+      const resumed = await open("/hosts/h/agents/a1/timeline/stream" + query);
+      await resumed.next();
+      await resumed.cancel();
+    }
+    assert.deepEqual(resumes.slice(-3), [{ epoch: "e", seq: 41, from: 3 }, undefined, undefined]);
   } finally {
     store.close();
     rmSync(directory, { recursive: true, force: true });

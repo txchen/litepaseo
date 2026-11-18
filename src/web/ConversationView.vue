@@ -162,7 +162,12 @@ const opening = trackTimelineOpen(
 let stream = connect();
 function connect() {
   return openStream({
-  url: () => "/api" + base() + "/timeline/stream",
+  // Evaluated on every (re)connect: holding the conversation, ask only for what changed since.
+  url: () => {
+    const at = store.value.resumePoint();
+    const query = at ? `?epoch=${encodeURIComponent(at.epoch)}&seq=${at.seq}&from=${at.from}` : "";
+    return "/api" + base() + "/timeline/stream" + query;
+  },
   onResponse: () => opening.response(),
   onState: (state) => {
     if (state === "unauthorized") emit("unauthorized");

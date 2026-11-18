@@ -169,6 +169,8 @@ export type TimelineOp =
       rows: TimelineRow[];
       hasOlder: boolean;
       startCursor: TimelineCursor | null;
+      /** The latest change the rows include, for resuming after a reconnect (servers before 0.9). */
+      seq?: number;
     }
   | { type: "upsert"; row: TimelineRow }
   | { type: "append"; seqStart: number; seqEnd: number; timestamp: string; text: string }

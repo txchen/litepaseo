@@ -338,7 +338,7 @@ test("browsers report slow conversation opens to the server log, validated and c
       body: JSON.stringify(body),
     });
     const report = {
-      hostId: "h1", agentId: "a1", totalMs: 18500, connectedMs: 18100, rowsMs: 18200, renderMs: 300, attempts: 1, hidden: false,
+      hostId: "h1", agentId: "a1", totalMs: 18500, connectedMs: 18100, firstByteMs: 18150, rowsMs: 18200, renderMs: 300, attempts: 1, hidden: false,
       pageAgeMs: 7_200_000, backgroundMs: 3_000_000, visibleForMs: 800, version: "0.6.8",
     };
     assert.equal((await post(report)).status, 200);
@@ -348,7 +348,10 @@ test("browsers report slow conversation opens to the server log, validated and c
     // Unknown fields (say, message text) and nonsense values are refused, not logged.
     assert.equal((await post({ ...report, text: "secret" })).status, 400);
     assert.equal((await post({ ...report, totalMs: -1 })).status, 400);
-    assert.equal(logged.filter((l) => l.includes("timeline_slow_client")).length, 1);
+    // Pages before 0.8.1 report no first bytes.
+    const { firstByteMs, ...older } = report;
+    assert.equal((await post(older)).status, 200);
+    assert.equal(logged.filter((l) => l.includes("timeline_slow_client")).length, 2);
   } finally {
     console.warn = original;
     rmSync(directory, { recursive: true, force: true });

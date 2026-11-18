@@ -1246,6 +1246,7 @@ watch(
   const opening = (timelineOpening = trackTimelineOpen(agent));
   timelineStream = openStream({
     url: () => "/api" + path(agent) + "/timeline/stream",
+    onResponse: () => opening.response(),
     onState: (state) => {
       if (state === "unauthorized") signOut("ended");
       opening.state(state);
@@ -1276,17 +1277,19 @@ watch(
   },
 );
 /**
- * Times one conversation open in this browser: connected (stream headers), first rows, and
- * rows on screen. Opens slower than SLOW_OPEN_MS are reported to the server log, so a stall
- * can be placed: the server logs its own side as timeline_slow.
+ * Times one conversation open in this browser: connected (stream headers), first bytes (the
+ * server's opening comment), first rows, and rows on screen. Opens slower than SLOW_OPEN_MS
+ * are reported to the server log, so a stall can be placed: the server logs its own side as
+ * timeline_slow.
  */
 const SLOW_OPEN_MS = 3000;
 let timelineOpening: ReturnType<typeof trackTimelineOpen> | null = null;
 /**
  * What a conversation that is still loading after SLOW_OPEN_MS waits for, shown in place of
- * the plain spinner: the LitePaseo server (no stream response yet) or the host's daemon.
+ * the plain spinner: the LitePaseo server (no stream response yet), the network (headers but
+ * no bytes: a proxy holding data) or the host's daemon (the stream is flowing, rows are not).
  */
-const timelineWait = ref<"server" | "host" | null>(null);
+const timelineWait = ref<"server" | "network" | "host" | null>(null);
 /** The server's version, from the directory stream; this page was built as WEB_VERSION. */
 const serverVersion = ref("");
 const reloadPage = () => location.reload();
@@ -1304,7 +1307,8 @@ document.addEventListener("visibilitychange", () => {
 function trackTimelineOpen(agent: AgentSummary) {
   const started = performance.now();
   const since = () => Math.round(performance.now() - started);
-  let connectedMs: number | null = null, rowsMs: number | null = null, attempts = 0, hidden = document.hidden, done = false;
+  let connectedMs: number | null = null, firstByteMs: number | null = null, rowsMs: number | null = null;
+  let attempts = 0, hidden = document.hidden, done = false;
   // Background time just before this open: a long one can leave a dead connection behind.
   const background = lastHidden && started - lastHidden.at < 60_000
     ? { backgroundMs: lastHidden.ms, visibleForMs: Math.round(started - lastHidden.at) }
@@ -1314,7 +1318,7 @@ function trackTimelineOpen(agent: AgentSummary) {
   document.addEventListener("visibilitychange", onVisibility);
   timelineWait.value = null;
   const slow = setTimeout(() => {
-    if (!done) timelineWait.value = connectedMs === null ? "server" : "host";
+    if (!done) timelineWait.value = connectedMs === null ? "server" : firstByteMs === null ? "network" : "host";
   }, SLOW_OPEN_MS);
   const finish = () => {
     done = true;
@@ -1325,7 +1329,7 @@ function trackTimelineOpen(agent: AgentSummary) {
   const report = (totalMs: number) => {
     if (totalMs < SLOW_OPEN_MS) return;
     void api("/diagnostics/timeline-slow", "POST", {
-      hostId: agent.hostId, agentId: agent.id, totalMs, connectedMs, rowsMs,
+      hostId: agent.hostId, agentId: agent.id, totalMs, connectedMs, firstByteMs, rowsMs,
       renderMs: rowsMs === null ? null : totalMs - rowsMs, attempts, hidden,
       pageAgeMs, ...background, version: WEB_VERSION,
     }).catch(() => {});
@@ -1337,12 +1341,19 @@ function trackTimelineOpen(agent: AgentSummary) {
       finish();
       report(since());
     },
+    /** Stream headers arrived. */
+    response() {
+      if (done) return;
+      connectedMs ??= since();
+      if (timelineWait.value === "server") timelineWait.value = "network";
+    },
     state(state: StreamState) {
       if (done) return;
       if (state === "connecting") attempts++;
       if (state === "live") {
         connectedMs ??= since();
-        if (timelineWait.value === "server") timelineWait.value = "host";
+        firstByteMs ??= since();
+        if (timelineWait.value) timelineWait.value = "host";
       }
       if (state === "closed" || state === "unauthorized") finish();
     },
@@ -2423,7 +2434,7 @@ onUnmounted(() => {
             </div>
             <div v-if="!visibleRows.length" class="timeline-empty">
               <span v-if="!timeline.ready" class="spinner"></span>
-              {{ timeline.ready ? "No messages yet." : timelineWait === "server" ? "Still connecting to LitePaseo…" : timelineWait === "host" ? `Waiting for ${hostLabels.get(active?.hostId ?? "") ?? "the host"} to load this conversation…` : "Loading conversation…" }}
+              {{ timeline.ready ? "No messages yet." : timelineWait === "server" ? "Still connecting to LitePaseo…" : timelineWait === "network" ? "Connected, waiting for the network to deliver data…" : timelineWait === "host" ? `Waiting for ${hostLabels.get(active?.hostId ?? "") ?? "the host"} to load this conversation…` : "Loading conversation…" }}
             </div>
           </div>
         </div>

@@ -423,6 +423,8 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     const input = z.object({
       hostId: z.string().min(1).max(200), agentId: z.string().min(1).max(200),
       totalMs: ms, connectedMs: ms, rowsMs: ms, renderMs: ms,
+      // Pages before 0.8.1 do not report first bytes.
+      firstByteMs: ms.optional(),
       attempts: z.number().int().nonnegative().max(1000), hidden: z.boolean(),
       // A page, and its time in the background, can last days.
       pageAgeMs: long.optional(), backgroundMs: long.optional(), visibleForMs: ms.optional(),

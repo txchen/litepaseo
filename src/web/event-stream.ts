@@ -4,7 +4,12 @@ export interface StreamOptions {
   /** Evaluated on every (re)connect so resumable streams can carry their latest cursor. */
   url: () => string;
   onMessage: (data: unknown) => void;
+  /**
+   * "live" means the first bytes arrived, not just response headers: a proxy in between can
+   * pass headers on and still hold the data. `onResponse` reports the headers.
+   */
   onState?: (state: StreamState) => void;
+  onResponse?: () => void;
 }
 
 const MIN_RETRY_MS = 1000;
@@ -40,12 +45,17 @@ export function openStream(options: StreamOptions) {
         return;
       }
       if (!response.ok || !response.body) throw new Error("Stream unavailable");
-      setState("live");
+      options.onResponse?.();
       const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-      let buffer = "";
+      let buffer = "",
+        live = false;
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
+        if (!live && value) {
+          live = true;
+          setState("live");
+        }
         buffer += value;
         let boundary: number;
         while ((boundary = buffer.indexOf("\n\n")) >= 0) {

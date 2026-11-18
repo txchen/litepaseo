@@ -1,4 +1,10 @@
 const HEARTBEAT_MS = 20_000;
+/**
+ * Some proxies hold a stream's latest bytes until more arrive: behind a Cloudflare Tunnel, a
+ * conversation's rows reached the browser only with the next heartbeat, 20 s later. So every
+ * burst of writes is followed by a tiny comment, which pushes it through.
+ */
+const NUDGE_MS = 50;
 
 /** Server-sent events over a plain fetch response, so the bearer header still authenticates. */
 export function eventStream(
@@ -9,21 +15,35 @@ export function eventStream(
 ) {
   const encoder = new TextEncoder();
   let cleanup: (() => void) | undefined;
+  let nudge: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
   const stop = () => {
+    stopped = true;
+    clearTimeout(nudge);
     cleanup?.();
     cleanup = undefined;
   };
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
-      const write = (text: string) => {
+      const enqueue = (text: string) => {
+        if (stopped) return;
         try {
           controller.enqueue(encoder.encode(text));
         } catch {
           stop();
         }
       };
+      const write = (text: string) => {
+        enqueue(text);
+        if (stopped || nudge) return;
+        nudge = setTimeout(() => {
+          nudge = undefined;
+          enqueue(":\n\n");
+        }, NUDGE_MS);
+      };
       const heartbeat = setInterval(() => {
-        if (valid()) return write(": ping\n\n");
+        // A heartbeat needs no nudge: it carries nothing anyone waits for.
+        if (valid()) return enqueue(": ping\n\n");
         stop();
         try {
           controller.close();
@@ -37,6 +57,8 @@ export function eventStream(
         clearInterval(heartbeat);
         close();
       };
+      // Stopped while opening (the client already left): release what open() acquired.
+      if (stopped) stop();
       signal.addEventListener("abort", () => {
         stop();
         try {

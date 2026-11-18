@@ -597,7 +597,7 @@ try {
   assert.match(report.version, /^\d+\.\d+\.\d+/);
   assert.equal(report.hostId, "alpha");
   assert.equal(report.agentId, "a1");
-  assert.ok(report.totalMs >= 3000 && report.connectedMs >= 3000 && report.rowsMs >= report.connectedMs, JSON.stringify(report));
+  assert.ok(report.totalMs >= 3000 && report.connectedMs >= 3000 && report.firstByteMs >= report.connectedMs && report.rowsMs >= report.firstByteMs, JSON.stringify(report));
   assert.equal(report.attempts, 1);
   // A page built for another version than the server offers a reload.
   assert.equal(await page.locator(".update-toast").count(), 0);

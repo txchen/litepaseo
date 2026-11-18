@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.1
+
+- Fix conversations that sometimes took about 20 seconds to load behind a Cloudflare Tunnel, showing "Waiting for the host to load this conversation". The host had answered at once; the tunnel held the stream's latest bytes until more arrived, which for an idle conversation was the next 20-second heartbeat. Each burst of live updates is now followed by a few bytes of padding, which pushes it through. This applies to every live stream, including the sidebar and queues.
+- A conversation that waits for data the network has not delivered now says so ("Connected, waiting for the network to deliver data") instead of blaming the host: the page counts the stream as connected only once its first bytes arrive, not when the response headers do. Slow-open reports add `firstByteMs`.
+
 ## 0.8.0
 
 - Refresh a host's model lists from its settings: the Paseo daemon caches each provider's models until asked, so a newly released model (such as a new Codex model) stayed hidden in new sessions and profiles. Providers now show how many models they report and when the list was fetched, with "Refresh models" for every provider or one at a time; the result names any new models found.

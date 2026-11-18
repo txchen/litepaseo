@@ -276,15 +276,21 @@ A conversation that takes more than 3 seconds to show is logged, without its con
 `timeline_slow` is the server's side: the daemon subscription (`subscribeMs`), the
 daemon's history read (`fetchMs`; a closed agent is resumed from disk first), and retries
 (`attempts`, `failures`). `timeline_slow_client` is the browser's side: when the stream
-connected (`connectedMs`), when rows arrived (`rowsMs`; `null` if you left first),
-rendering (`renderMs`), and how long the page had just been in the background
-(`backgroundMs`, `visibleForMs`). A late `connectedMs` with no matching `timeline_slow`
-means the request took that long to reach the server, typically a connection the browser
-reused after sleep or a network change. Find them with
+connected (`connectedMs`), when its first bytes arrived (`firstByteMs`), when rows
+arrived (`rowsMs`; `null` if you left first), rendering (`renderMs`), and how long the
+page had just been in the background (`backgroundMs`, `visibleForMs`). A late
+`connectedMs` with no matching `timeline_slow` means the request took that long to reach
+the server, typically a connection the browser reused after sleep or a network change. A
+late `firstByteMs` after an early `connectedMs` means something in between, such as a
+proxy or tunnel, held the data. Find them with
 `litepaseo logs -n 2000 | grep timeline_slow`.
 
 While a conversation is still loading after 3 seconds, the page says whether it is still
-connecting to LitePaseo or waiting for the host. After an upgrade, open pages offer a
+connecting to LitePaseo, waiting for the network to deliver data, or waiting for the host.
+
+Some proxies hold a stream's latest bytes until more arrive. LitePaseo follows each burst
+of live updates with a few bytes of padding, so they get through without waiting for the
+next heartbeat. After an upgrade, open pages offer a
 reload so they run the installed version.
 
 ## How it fits together

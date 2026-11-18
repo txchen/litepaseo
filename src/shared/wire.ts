@@ -228,6 +228,15 @@ export interface ProviderOption {
   }[];
 }
 
+/** Every provider a host knows, for its settings page: enabled or not, with catalogue freshness. */
+export interface HostProviderInfo extends ProviderOption {
+  description?: string;
+  source: "builtin" | "custom";
+  enabled: boolean;
+  /** When the daemon last fetched this provider's model catalogue; null before the first fetch. */
+  fetchedAt: string | null;
+}
+
 /** A provider feature the composer can switch (Paseo's AgentFeature: toggle or select). */
 export type AgentFeatureOption =
   | { type: "toggle"; id: string; label: string; tooltip?: string; value: boolean }

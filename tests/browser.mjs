@@ -172,6 +172,7 @@ try {
   );
   let hostConfig = { appendSystemPrompt: "Original host instructions", mcp: { injectIntoAgents: true }, browserTools: { enabled: false }, agentProfiles: [], terminalProfiles: [], metadataGeneration: { providers: [] }, providers: { codex: { enabled: true } } };
   const hostSettingsWrites = [];
+  const providerRefreshes = [];
   await page.route("**/api/hosts**", async (route) => {
     const p = new URL(route.request().url()).pathname;
     const host = p.split("/")[3];
@@ -180,6 +181,16 @@ try {
       return route.fulfill({json: {config: hostConfig, revision: 'r' + hostSettingsWrites.length, features: {agentProfiles:true,daemonStatusRpc:true}, version:'0.15.3'}});
     }
     if (p.endsWith('/lifecycle')) return route.fulfill({json:null});
+    if (p.endsWith('/settings/providers') || p.endsWith('/settings/providers/refresh')) {
+      const refresh = p.endsWith('/refresh');
+      if (refresh) providerRefreshes.push(route.request().postDataJSON());
+      const models = [{ id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', isDefault: true, thinking: [{ id: 'low', label: 'Low' }, { id: 'high', label: 'High' }], defaultThinkingId: 'high' }];
+      if (providerRefreshes.length) models.unshift({ id: 'gpt-6.2-sol', label: 'GPT-6.2-Sol', isDefault: false, thinking: [{ id: 'high', label: 'High' }], defaultThinkingId: 'high' });
+      return route.fulfill({json: [
+        { id: 'codex', label: 'Codex', source: 'builtin', enabled: true, status: 'ready', fetchedAt: refresh ? new Date().toISOString() : new Date(Date.now() - 3 * 86400e3).toISOString(), defaultModeId: null, modes: [{ id: 'full-access', label: 'Full access' }], models },
+        { id: 'claude', label: 'Claude', source: 'builtin', enabled: false, status: 'unavailable', fetchedAt: null, defaultModeId: null, modes: [], models: [] },
+      ]});
+    }
     if (p.endsWith("/attachments/capabilities")) return route.fulfill({ json: { images: true, files: true, maxBytes: 8 * 1024 * 1024 } });
     if (p.endsWith("/attachments") && route.request().method() === "POST") {
       const id = crypto.randomUUID();
@@ -661,15 +672,47 @@ try {
   await page.getByRole('button', {name:/Hosts, /}).click();
   await page.locator('.card-row', {hasText:'Alpha'}).getByRole('button',{name:'Settings',exact:true}).click();
   await page.getByRole('heading',{name:'Alpha',exact:true}).waitFor();
+  // Every provider is listed, with how old its model list is; refreshing finds the new model.
+  await page.getByText('1 model · updated 3 days ago').waitFor();
+  await page.getByText('Not installed on this host').or(page.getByText('Disabled',{exact:true})).first().waitFor();
+  await page.locator('.hs-head').getByRole('button',{name:'Refresh models'}).click();
+  await page.getByText('Found 1 new model.').waitFor();
+  assert.deepEqual(providerRefreshes.at(-1), {});
+  await page.getByRole('button',{name:'Configure Codex'}).click();
+  await page.locator('.hs-models').getByText('GPT-6.2-Sol').waitFor();
+  await page.getByRole('button',{name:'Refresh Codex models'}).click();
+  await page.getByText('Model list is up to date').waitFor();
+  assert.deepEqual(providerRefreshes.at(-1), { providers: ['codex'] });
+  // Opening a provider is not an edit.
+  assert.equal(await page.getByText('Unsaved changes').count(), 0);
   await page.getByLabel('Additional system instructions').fill('New host instructions');
   await page.getByRole('button',{name:'Add agent profile',exact:true}).click();
+  await page.getByText('Agent profile 1 needs a name.').waitFor();
+  assert.equal(await page.getByRole('button',{name:'Save changes',exact:true}).isDisabled(), true);
   await page.locator('.host-settings').getByLabel('Name',{exact:true}).fill('Review');
+  await page.locator('.hs-item-body').getByLabel('Model',{exact:true}).selectOption('gpt-6.2-sol');
+  await page.locator('.hs-item-body').getByLabel('Thinking',{exact:true}).selectOption('high');
+  // A new terminal profile's arguments accept newlines while typing.
+  await page.getByRole('button',{name:'Add terminal profile',exact:true}).click();
+  await page.locator('.hs-item-body').last().getByLabel('Name',{exact:true}).fill('Login shell');
+  await page.getByPlaceholder('/bin/bash').fill('/bin/bash');
+  const args = page.locator('.hs-item-body').last().getByLabel(/Arguments/);
+  await args.click();
+  await page.keyboard.type('-l');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('-i');
+  assert.equal(await args.inputValue(), '-l\n-i');
   await page.getByRole('button',{name:'Save changes',exact:true}).click();
-  await page.getByText('Saved on this host.',{exact:false}).waitFor();
+  await page.getByText('Saved. New agents',{exact:false}).waitFor();
   assert.equal(hostSettingsWrites.at(-1).patch.appendSystemPrompt,'New host instructions');
   assert.equal(hostSettingsWrites.at(-1).patch.agentProfiles[0].name,'Review');
+  assert.equal(hostSettingsWrites.at(-1).patch.agentProfiles[0].model,'gpt-6.2-sol');
+  assert.equal(hostSettingsWrites.at(-1).patch.agentProfiles[0].thinkingOptionId,'high');
+  assert.equal(hostSettingsWrites.at(-1).patch.agentProfiles[0].modeId,undefined);
+  assert.deepEqual(hostSettingsWrites.at(-1).patch.terminalProfiles[0].args,['-l','-i']);
   assert.equal(hostSettingsWrites.at(-1).patch.mcp,undefined);
-  assert.equal(await page.getByRole('button',{name:'Update & restart daemon…'}).count(),0);
+  assert.equal(hostSettingsWrites.at(-1).patch.providers,undefined);
+  assert.equal(await page.getByRole('button',{name:'Update & restart…'}).count(),0);
   for (const width of [390,320]) {
     await page.setViewportSize({width,height:844});
     const overflow = await page.locator('.host-settings').evaluate(el => el.scrollWidth > el.clientWidth + 1);

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0
+
+- Refresh a host's model lists from its settings: the Paseo daemon caches each provider's models until asked, so a newly released model (such as a new Codex model) stayed hidden in new sessions and profiles. Providers now show how many models they report and when the list was fetched, with "Refresh models" for every provider or one at a time; the result names any new models found.
+- Rework host settings. Every provider is listed, including disabled and uninstalled ones, with its status and models; its options, diagnostic and refresh open in place. Custom providers can be removed on hosts that support it.
+- Agent profiles and metadata generation pick provider, model, thinking level and mode from what the host reports instead of free-text IDs. Profiles and terminal profiles collapse to one-line summaries.
+- Save changes from a bar that stays in view, with Discard and Ctrl/Cmd+S. Saving is blocked, with the reason shown, while a profile lacks a name or provider or an additional model lacks an ID. Leaving the page with unsaved changes asks first.
+- Fix: opening a provider's options marked the page as changed; terminal profile arguments dropped newlines while typing; diagnostics showed as escaped JSON; plain checkboxes stretched across the row; changing one relay option resent the other; "Host plugins" showed on hosts without plugin support, where saving it failed; the plugin list did not load on hosts that report plugin management but not plugins; IDs for new profiles failed on plain-http addresses.
+- After a daemon restart or update completes, the page reloads what the host now reports.
+
 ## 0.7.2
 
 - Show images agents send from anywhere on their host, not only from their working directory: a screenshot in another repository or a temp folder used to appear as a link that copied its path. LitePaseo now reads it through the host's daemon, from the image's own folder. Images Paseo saved on a remote host's machine now show too. Only raster images (PNG, JPEG, WebP, GIF, BMP, AVIF) up to 16 MB are served this way; an image that no longer exists shows "Image failed to load".

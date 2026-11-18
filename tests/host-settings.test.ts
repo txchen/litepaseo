@@ -134,3 +134,105 @@ test("remote update checks package success and replacement before reporting comp
     if (success) assert.equal(job.version, "new");
   }
 });
+
+test("settings list every provider and refresh re-fetches catalogues once per request", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lp-host-providers-")),
+    store = new Store(dir),
+    hosts = new Hosts();
+  let models = [{ id: "old", label: "Old" }];
+  const refreshes: unknown[] = [];
+  hosts.clients.set("a", {
+    driver: {},
+    api: {
+      providers: {
+        snapshot: async () => ({
+          entries: [
+            { provider: "codex", status: "ready", enabled: true, label: "Codex", fetchedAt: "2026-11-15T00:00:00Z", models },
+            { provider: "claude", status: "unavailable", enabled: false },
+          ],
+        }),
+        refresh: async (options: unknown) => {
+          refreshes.push(options);
+          await new Promise((r) => setTimeout(r, 20));
+          models = [...models, { id: "new", label: "New", isSelectable: true } as never];
+          return { acknowledged: true };
+        },
+      },
+    },
+  } as never);
+  const app = createApp(store, hosts, "test-token", "/missing");
+  const call = (path: string, body?: unknown) =>
+    app.request(`/api/hosts/a/settings/providers${path}`, {
+      method: body ? "POST" : "GET",
+      headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  try {
+    const listed = await (await call("")).json();
+    assert.deepEqual(listed.map((p: any) => [p.id, p.enabled, p.status]), [
+      ["codex", true, "ready"],
+      ["claude", false, "unavailable"],
+    ]);
+    assert.equal(listed[0].fetchedAt, "2026-11-15T00:00:00Z");
+    const [first, second] = await Promise.all([call("/refresh", { providers: ["codex"] }), call("/refresh", { providers: ["codex"] })]);
+    assert.equal(refreshes.length, 1, "concurrent refreshes of the same providers coalesce");
+    assert.deepEqual(refreshes[0], { providers: ["codex"] });
+    const after = await first.json();
+    assert.deepEqual(after[0].models.map((m: any) => m.id), ["old", "new"]);
+    assert.equal(second.status, 200);
+    await call("/refresh", {});
+    assert.deepEqual(refreshes[1], {});
+  } finally {
+    app.dispose();
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("custom providers can be removed; built-ins and unsupported hosts refuse", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lp-host-remove-")),
+    store = new Store(dir),
+    hosts = new Hosts();
+  let config: Record<string, any> = { providers: { codex: { enabled: true }, mine: { extends: "codex", label: "Mine" } } };
+  let removal = true;
+  const patches: any[] = [];
+  hosts.clients.set("a", {
+    driver: {
+      getDaemonConfig: async () => ({ config }),
+      getLastServerInfoMessage: () => ({ features: { providerRemoval: removal } }),
+      patchDaemonConfig: async (patch: any) => {
+        patches.push(patch);
+        const providers = { ...config.providers };
+        for (const id of patch.removeProviders ?? []) delete providers[id];
+        config = { ...config, providers };
+      },
+    },
+  } as never);
+  const app = createApp(store, hosts, "test-token", "/missing");
+  const request = (body?: unknown) =>
+    app.request(`/api/hosts/a/settings`, {
+      method: body ? "PATCH" : "GET",
+      headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  try {
+    let { revision } = await (await request()).json();
+    assert.equal((await request({ revision, patch: { removeProviders: ["codex"] } })).status, 400);
+    removal = false;
+    assert.equal((await request({ revision, patch: { removeProviders: ["mine"] } })).status, 409);
+    removal = true;
+    assert.equal(
+      (await request({ revision, patch: { removeProviders: ["mine"], providers: { mine: { label: "x" } } } })).status,
+      400,
+    );
+    assert.equal(patches.length, 0);
+    const saved = await request({ revision, patch: { removeProviders: ["mine"] } });
+    assert.equal(saved.status, 200);
+    assert.deepEqual(patches, [{ removeProviders: ["mine"] }]);
+    assert.equal((await saved.json()).config.providers.mine, undefined);
+  } finally {
+    app.dispose();
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

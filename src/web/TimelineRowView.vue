@@ -40,6 +40,16 @@ const tool = computed(() => {
   const display = toolDisplay(i, context?.value.cwd);
   return { ...display, summary: display.summary.split("\n")[0], status: String(i.status ?? "running") };
 });
+/** The provider subagent this tool call started, when the provider reported one. */
+const subagent = computed(() => {
+  const i = item.value;
+  if (tool.value?.kind !== "sub_agent" || typeof i.callId !== "string") return null;
+  return context?.value.subagents?.value.find((s) => s.toolCallId === i.callId) ?? null;
+});
+const openSubagent = (event: Event) => {
+  event.preventDefault();
+  if (subagent.value) context?.value.openSubagent?.(subagent.value.id);
+};
 /** Thinking shows its first line, as Paseo does; the rest opens on click. */
 const headline = computed(() => (item.value.type === "reasoning" ? reasoningHeadline(String(item.value.text ?? "")) : ""));
 /** The one-line headline is cut off on screen (ellipsis): opening shows the whole line. */
@@ -146,6 +156,7 @@ async function copyMessage() {
       <span class="line-text" :class="{ mono: tool.kind !== 'sub_agent' && tool.kind !== 'plain' && tool.kind !== 'unknown' }">{{ tool.summary }}</span>
       <span v-if="tool.meta" class="line-meta">{{ tool.meta }}</span>
       <span v-else-if="tool.status === 'canceled'" class="line-meta">canceled</span>
+      <button v-if="subagent" type="button" class="line-open" title="Open the subagent conversation" @click="openSubagent">Open</button>
     </summary>
     <div v-if="detail" class="tool-body">
       <pre v-if="detail.command" class="tool-pre tool-command"><span class="tool-prompt">$</span> {{ detail.command }}</pre>

@@ -10,6 +10,7 @@ test("host removal awaits unsubscribe acknowledgements before closing the SDK tr
   hosts.clients.set("h", {
     directory: { dispose: () => released.then(() => { calls.push("directory released"); }) },
     workspaces: { dispose: async () => { calls.push("workspaces released"); } },
+    subagents: { dispose: async () => { calls.push("subagents released"); } },
     stopStatus: () => {},
     api: { dispose: async () => { calls.push("api disposed"); } },
     driver: { close: async () => { calls.push("transport closed"); } },
@@ -20,5 +21,6 @@ test("host removal awaits unsubscribe acknowledgements before closing the SDK tr
   release();
   await removing;
   assert.ok(calls.indexOf("directory released") < calls.indexOf("transport closed"));
+  assert.ok(calls.indexOf("subagents released") < calls.indexOf("transport closed"));
   assert.equal(calls.at(-1), "transport closed");
 });

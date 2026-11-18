@@ -6,6 +6,8 @@ import type { AgentSummary, WorkspaceSummary, HostDiagnostic } from "../shared/w
 import { VersionedCollection } from "./versioned-collection.ts";
 import { HostDirectory, HostWorkspaces, type DirectoryDriver, type Transition } from "./host-directory.ts";
 import { TimelineView, type TimelineDriver } from "./timeline-view.ts";
+import { HostSubagents, type SubagentDriver } from "./subagents.ts";
+import type { ProviderSubagent } from "../shared/wire.ts";
 
 type Driver = ReturnType<typeof createHostClient>;
 
@@ -20,6 +22,7 @@ interface Client {
   api: Api;
   directory: HostDirectory;
   workspaces: HostWorkspaces;
+  subagents: HostSubagents;
   stopStatus: () => void;
 }
 
@@ -86,7 +89,8 @@ export class Hosts {
     };
     const stopStatus = driver.subscribeConnectionStatus(update);
     update(driver.getConnectionState());
-    this.clients.set(hostId, { driver, api, directory, workspaces, stopStatus });
+    const subagents = new HostSubagents(driver as unknown as SubagentDriver);
+    this.clients.set(hostId, { driver, api, directory, workspaces, subagents, stopStatus });
     directory.start();
     // Daemons that predate workspaces simply have none; agents still list.
     if ((driver as unknown as DirectoryDriver).observeWorkspaces) workspaces.start();
@@ -123,7 +127,7 @@ export class Hosts {
         this.timelines.delete(key);
       }
     if (c) {
-      await Promise.all([...releases, c.directory.dispose(), c.workspaces.dispose()]);
+      await Promise.all([...releases, c.directory.dispose(), c.workspaces.dispose(), c.subagents.dispose()]);
       c.stopStatus();
       await c.api.dispose();
       await c.driver.close();
@@ -166,17 +170,28 @@ export class Hosts {
     return () => this.hostListeners.delete(listener);
   }
 
-  /** Shares one live timeline per agent across all watching browsers. */
-  watchTimeline(hostId: string, agentId: string, watcher: Parameters<TimelineView["watch"]>[0]) {
+  /** The provider subagents of one agent, as they change. */
+  watchSubagents(hostId: string, agentId: string, listener: (subagents: ProviderSubagent[]) => void) {
+    return this.get(hostId).subagents.watch(agentId, listener);
+  }
+
+  /**
+   * Shares one live timeline per agent across all watching browsers. With `subagentId`, the
+   * conversation of one of the agent's provider subagents.
+   */
+  watchTimeline(hostId: string, agentId: string, watcher: Parameters<TimelineView["watch"]>[0], subagentId?: string) {
     const client = this.get(hostId);
-    const key = `${hostId}:${agentId}`;
+    const key = subagentId ? `${hostId}:${agentId}:subagent:${subagentId}` : `${hostId}:${agentId}`;
     let entry = this.timelines.get(key);
     if (!entry) {
       const connection = client.driver.getConnectionState().status;
-      const view = new TimelineView(client.driver as unknown as TimelineDriver, agentId, (report) => {
+      const driver = subagentId
+        ? client.subagents.timelineDriver(agentId, subagentId)
+        : (client.driver as unknown as TimelineDriver);
+      const view = new TimelineView(driver, agentId, (report) => {
         if (report.totalMs < SLOW_TIMELINE_MS) return;
         // Which layer a slow open spent its time in; no conversation content.
-        console.warn(JSON.stringify({ event: "timeline_slow", hostId, agentId, connectionAtStart: connection ?? null, ...report }));
+        console.warn(JSON.stringify({ event: "timeline_slow", hostId, agentId, ...(subagentId ? { subagentId } : {}), connectionAtStart: connection ?? null, ...report }));
       });
       entry = { view, hostId };
       this.timelines.set(key, entry);

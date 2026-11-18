@@ -40,6 +40,7 @@ import type {
   TimelineItem,
   TimelineMessage,
   TimelinePage,
+  SubagentsMessage,
   PromptIndex,
   AgentConfigChange,
   AgentConfigOptions,
@@ -582,8 +583,47 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
           const enrich = (row: import("../shared/wire.ts").TimelineRow) => ({ ...row, item: withMessageImages(store, c.req.param("host"), c.req.param("agent"), row.item) });
           return op.type === "reset" ? { ...op, rows: op.rows.map(enrich) } : op.type === "upsert" ? { ...op, row: enrich(op.row) } : op;
         }) } satisfies TimelineMessage));
-      return stop;
+      // The agent's provider subagents ride the same stream: no extra connection per chat.
+      // The first list always goes out, so a reconnecting browser drops subagents that are gone.
+      let sent = "";
+      let stopSubagents = () => {};
+      try {
+        stopSubagents = hosts.watchSubagents(c.req.param("host"), c.req.param("agent"), (subagents) => {
+          const text = JSON.stringify(subagents);
+          if (text === sent) return;
+          sent = text;
+          send({ type: "subagents", subagents } satisfies SubagentsMessage);
+        });
+      } catch {
+        // A host without provider subagent support: the conversation still streams.
+      }
+      return () => {
+        stop();
+        stopSubagents();
+      };
     }, streamValidity(c));
+  });
+  /** One provider subagent's conversation, read-only, live like an agent's. */
+  app.get("/api/hosts/:host/agents/:agent/subagents/:subagent/timeline/stream", (c) => {
+    hosts.get(c.req.param("host"));
+    return eventStream(c.req.raw.signal, (send) =>
+      hosts.watchTimeline(c.req.param("host"), c.req.param("agent"), (ops) => send({ type: "ops", ops } satisfies TimelineMessage), c.req.param("subagent")),
+    streamValidity(c));
+  });
+  app.get("/api/hosts/:host/agents/:agent/subagents/:subagent/timeline", async (c) => {
+    const cursor = z
+      .object({ epoch: z.string().min(1), seq: z.number().int().nonnegative() })
+      .parse(parseJson(c.req.query("cursor")));
+    const page = await hosts
+      .get(c.req.param("host"))
+      .subagents.timelineDriver(c.req.param("agent"), c.req.param("subagent"))
+      .fetchAgentTimeline(c.req.param("agent"), { direction: "before", cursor, limit: 100 });
+    return c.json({
+      epoch: page.epoch,
+      hasOlder: page.hasOlder,
+      startCursor: page.startCursor,
+      rows: page.entries.map((e) => ({ seqStart: e.seqStart, seqEnd: e.seqEnd, timestamp: e.timestamp, provider: e.provider, item: e.item })),
+    } satisfies TimelinePage);
   });
   app.get("/api/hosts/:host/agents/:agent/message-images/:message/:index", (c) => {
     const index = c.req.param("index");

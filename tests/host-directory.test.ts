@@ -223,6 +223,12 @@ test("activity time is the last turn end: held while running, ignores idle metad
   assert.equal(at("idle"), Date.parse(t(95)));
 });
 
+test("an agent delegated through Paseo names its parent", async () => {
+  const { summarize } = await import("../src/server/host-directory.ts");
+  assert.equal(summarize("h", agent("c", { labels: { "paseo.parent-agent-id": " root " } })).parentAgentId, "root");
+  assert.equal("parentAgentId" in summarize("h", agent("r", { labels: { other: "x" } })), false);
+});
+
 test("agent state follows Paseo's state bucket; a finished turn is unread, not needs-input", async () => {
   const { summarize } = await import("../src/server/host-directory.ts");
   const s = (extra: Record<string, unknown>) => summarize("h", agent("a", extra));

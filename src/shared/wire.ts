@@ -58,6 +58,8 @@ export interface AgentSummary {
   pendingPermissions: Permission[];
   /** How this agent's provider can rewind to an earlier message; empty when it cannot. */
   rewind?: RewindMode[];
+  /** The agent that delegated this one through Paseo (same host), when it is a subagent. */
+  parentAgentId?: string;
 }
 
 export type MessageDeliveryMode = "queue" | "steer" | "interrupt";
@@ -176,6 +178,30 @@ export interface TimelineMessage {
   type: "ops";
   ops: TimelineOp[];
 }
+
+/** A subagent the provider runs inside an agent (Claude Task, Codex, pi-subagents…). */
+export interface ProviderSubagent {
+  id: string;
+  parentSubagentId: string | null;
+  provider: string;
+  title: string | null;
+  description: string | null;
+  subtitle: string | null;
+  status: "running" | "completed" | "failed" | "canceled";
+  createdAt: string;
+  updatedAt: string;
+  /** The parent's tool call that started it, when the provider reports one. */
+  toolCallId: string | null;
+}
+
+/** The agent's provider subagents, oldest first; sent whenever the list changes. */
+export interface SubagentsMessage {
+  type: "subagents";
+  subagents: ProviderSubagent[];
+}
+
+/** What a conversation's timeline stream carries. */
+export type TimelineStreamMessage = TimelineMessage | SubagentsMessage;
 
 export interface TimelinePage {
   epoch: string;

@@ -1,6 +1,7 @@
 import { messageDeliveryModes } from "./message-delivery.ts";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
 import { deriveAgentStateBucket } from "@getpaseo/protocol/agent-state-bucket";
+import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
 import type { AgentState, AgentSummary, Permission, RewindMode, WorkspaceSummary } from "../shared/wire.ts";
 import type { VersionedCollection } from "./versioned-collection.ts";
 
@@ -332,6 +333,7 @@ export function summarize(
         ? "unread"
         : bucket;
   const turnActive = isRunning(agent) || agent.status === "initializing";
+  const parentAgentId = getParentAgentIdFromLabels(agent.labels);
   return {
     key: `${hostId}:${agent.id}`,
     hostId,
@@ -360,6 +362,7 @@ export function summarize(
     contextUsed: agent.lastUsage?.contextWindowUsedTokens ?? null,
     contextMax: agent.lastUsage?.contextWindowMaxTokens ?? null,
     rewind: rewindModes(agent.capabilities),
+    ...(parentAgentId ? { parentAgentId } : {}),
   };
 }
 

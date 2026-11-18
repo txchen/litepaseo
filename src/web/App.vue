@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { trackViewingPresence } from "./viewing-presence.ts";
 import { computed, nextTick, onUnmounted, provide, reactive, ref, shallowRef, watch } from "vue";
-import type { DirectoryMessage, HostState, Permission, TimelineMessage, TimelinePage, WorkspaceSummary, MessageDeliveryMode } from "../shared/wire.ts";
+import type { DirectoryMessage, HostState, Permission, ProviderSubagent, TimelineMessage, TimelinePage, TimelineStreamMessage, WorkspaceSummary, MessageDeliveryMode } from "../shared/wire.ts";
 import { DirectoryStore, comparePinnedFirst } from "./directory-store.ts";
 import ThreadMenu from "./ThreadMenu.vue";
 import RenameThread from "./RenameThread.vue";
@@ -44,6 +44,7 @@ const ConversationSearch = defineAsyncComponent(() => import("./ConversationSear
 const FilesPanel = defineAsyncComponent(() => import("./FilesPanel.vue"));
 const FileViewer = defineAsyncComponent(() => import("./FileViewer.vue"));
 const TerminalPanel = defineAsyncComponent(() => import("./TerminalPanel.vue"));
+const SubagentsPanel = defineAsyncComponent(() => import("./SubagentsPanel.vue"));
 import DictationButton from "./DictationButton.vue";
 import { TIMELINE_CONTEXT, parseFileLink, turnFooters, type FileLink, type FileViewState, type LineRange, type TimelineContext } from "./timeline-display.ts";
 
@@ -54,9 +55,17 @@ const coarsePointer = matchMedia("(pointer: coarse)").matches;
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 const viewMenu = ref(false);
 // The file tree stays in the side panel; terminal content opens in the center.
-const panel = ref<"files" | "changes" | "search" | null>(localStorage.getItem("litepaseo-panel") === "files" ? "files" : null);
+type Panel = "files" | "changes" | "search" | "subagents";
+const panel = ref<Panel | null>(localStorage.getItem("litepaseo-panel") === "files" ? "files" : null);
 watch(panel, (p) => (p ? localStorage.setItem("litepaseo-panel", p) : localStorage.removeItem("litepaseo-panel")));
-const togglePanel = (p: "files" | "changes" | "search") => (panel.value = panel.value === p ? null : p);
+const togglePanel = (p: Panel) => (panel.value = panel.value === p ? null : p);
+/** The open agent's provider subagents (from its timeline stream) and the one being read. */
+const providerSubagents = shallowRef<ProviderSubagent[]>([]);
+const openedSubagent = ref<string | null>(null);
+function openSubagent(id: string | null) {
+  openedSubagent.value = id;
+  panel.value = "subagents";
+}
 const terminalTabs = reactive(new Map<string, boolean>());
 const terminalOpen = computed(() => terminalTabs.has(tabOwner.value));
 const terminalActive = computed(() => terminalTabs.get(tabOwner.value) === true);
@@ -212,7 +221,10 @@ const hosts = shallowRef<HostState[]>([]),
   }),
   /** Agents: the board, the open conversation, notifications; indexed by their thread. */
   agentDirectory = new DirectoryStore<AgentSummary>({
-    indexBy: (a) => (a.workspaceId ? `${a.hostId}:${a.workspaceId}` : null),
+    indexBy: (a) => [
+      a.workspaceId ? `${a.hostId}:${a.workspaceId}` : null,
+      a.parentAgentId ? `parent:${a.hostId}:${a.parentAgentId}` : null,
+    ],
   }),
   /** The thread shown; the agent shown is `selectedKey`, one of the thread's agents. */
   selectedThread = ref<string | null>(null),
@@ -401,6 +413,32 @@ const activeThread = computed(() => {
   directory.version.value;
   return directory.get(selectedThread.value) ?? null;
 });
+/** Agents the open agent delegated through Paseo, most recent first. */
+const delegatedAgents = computed(() => {
+  agentDirectory.version.value;
+  const a = active.value;
+  return a ? agentDirectory.indexed(`parent:${a.hostId}:${a.id}`, 50) : [];
+});
+/** The agent that delegated the open one, when it is a subagent. */
+const parentAgent = computed(() => {
+  agentDirectory.version.value;
+  const a = active.value;
+  return a?.parentAgentId ? agentDirectory.get(`${a.hostId}:${a.parentAgentId}`) ?? null : null;
+});
+/** The chat header's subagent summary, as Paseo's pill words it. */
+const subagentSummary = computed(() => {
+  const agents = delegatedAgents.value, subagents = providerSubagents.value;
+  const total = agents.length + subagents.length;
+  if (!total) return null;
+  const attention = agents.filter((a) => a.attention).length;
+  const working = agents.filter((a) => a.state === "running" && !a.attention).length + subagents.filter((s) => s.status === "running").length;
+  const failed = agents.filter((a) => a.state === "failed").length + subagents.filter((s) => s.status === "failed").length;
+  const label = attention ? `${attention} need${attention === 1 ? "s" : ""} input`
+    : working ? `${working} working`
+    : failed ? `${failed} failed`
+    : `${total} subagent${total === 1 ? "" : "s"}`;
+  return { total, label, tone: attention ? "attention" : working ? "running" : failed ? "error" : "idle" };
+});
 /** The open thread's agents, most recent first (tabs when there is more than one). */
 const threadAgents = computed(() => {
   agentDirectory.version.value;
@@ -558,6 +596,7 @@ watch([active, workspaceCwd, activeHostLocal], ([a, workspace, localHost]) => {
     timelineContext.value = {
       base, cwd: a?.cwd ?? "", session: a?.key, workspace, localHost,
       rewindModes: modes, rewinding, rewind: (id, text, mode) => void rewindTo(id, text, mode),
+      subagents: providerSubagents, openSubagent,
     };
 }, { immediate: true });
 provide(TIMELINE_CONTEXT, timelineContext);
@@ -1199,6 +1238,9 @@ watch(
   historyRows.value = null;
   historyNewer.value = [];
   timelineNotice.value = "";
+  providerSubagents.value = [];
+  openedSubagent.value = null;
+  if (panel.value === "subagents") panel.value = null;
   const agent = agentDirectory.get(key);
   if (!agent) return;
   const opening = (timelineOpening = trackTimelineOpen(agent));
@@ -1210,7 +1252,12 @@ watch(
     },
     onMessage: (data) => {
       if (timeline.value !== store) return;
-      opening.message(data as TimelineMessage);
+      const message = data as TimelineStreamMessage;
+      if (message.type === "subagents") {
+        providerSubagents.value = message.subagents;
+        return;
+      }
+      opening.message(message);
       const stick = !historyRows.value && (nearBottom() || !store.ready);
       const ops = (data as TimelineMessage).ops;
       const failure = ops.find((op) => op.type === "error");
@@ -2229,7 +2276,26 @@ onUnmounted(() => {
             class="chat-context hide-sm"
             :title="[activeProject, hostLabels.get(active.hostId), activeThread?.branch, active.provider].filter(Boolean).join(' · ')"
           >{{ activeProject }}<template v-if="hosts.length > 1"> · {{ hostLabels.get(active.hostId) }}</template><template v-if="activeThread?.branch"> · {{ activeThread.branch }}</template></span>
+          <button
+            v-if="parentAgent"
+            class="chat-chip"
+            :title="'Subagent of ' + (parentAgent.title || 'another session') + ' · open the parent'"
+            @click="select(parentAgent.key)"
+          >
+            <Icon name="back" :size="12" /><span>{{ parentAgent.title || "Parent agent" }}</span>
+          </button>
           <span class="grow"></span>
+          <button
+            v-if="subagentSummary"
+            class="chat-chip chat-subagents"
+            :class="['is-' + subagentSummary.tone, { chosen: panel === 'subagents' }]"
+            :aria-label="'Subagents: ' + subagentSummary.label"
+            :title="subagentSummary.total + (subagentSummary.total === 1 ? ' subagent' : ' subagents')"
+            @click="openedSubagent = null; togglePanel('subagents')"
+          >
+            <span v-if="subagentSummary.tone !== 'idle'" class="status-dot" :class="'is-' + subagentSummary.tone"></span>
+            <Icon v-else name="bot" :size="14" /><span>{{ subagentSummary.label }}</span>
+          </button>
           <button class="icon-btn head-tool" aria-label="Changes" title="Workspace changes" @click="togglePanel('changes')"><Icon name="file" :size="16" /></button>
           <button class="icon-btn head-tool" aria-label="Search conversation" title="Search conversation" @click="togglePanel('search')"><Icon name="search" :size="16" /></button>
           <button
@@ -2513,12 +2579,22 @@ onUnmounted(() => {
           <button :class="{ chosen: panel === 'files' }" @click="panel = 'files'"><Icon name="folder" :size="14" />Files</button>
           <button :class="{ chosen: panel === 'changes' }" @click="panel = 'changes'">Changes</button>
           <button :class="{ chosen: panel === 'search' }" @click="panel = 'search'">Search</button>
+          <button v-if="subagentSummary || panel === 'subagents'" :class="{ chosen: panel === 'subagents' }" @click="panel = 'subagents'">Subagents</button>
           <span class="grow"></span>
           <button class="icon-btn" aria-label="Close panel" title="Close panel" @click="panel = null"><Icon name="close" :size="14" /></button>
         </div>
         <div class="panel-body">
           <ChangesPanel v-if="panel === 'changes'" :host-id="active.hostId" :cwd="workspaceCwd" :api="api" />
           <ConversationSearch v-if="panel === 'search'" :base="path(active)" :api="api" @jump="jumpSearch" />
+          <SubagentsPanel
+            v-if="panel === 'subagents'"
+            v-model:opened="openedSubagent"
+            :agents="delegatedAgents"
+            :subagents="providerSubagents"
+            :base="path(active)"
+            :api="api"
+            @select="select"
+          />
           <KeepAlive>
             <FilesPanel
               v-if="panel === 'files'"

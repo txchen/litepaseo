@@ -117,6 +117,20 @@ test("agents are indexed by thread: a thread opens its most recent agent", () =>
   assert.deepEqual(agents.indexed("h:none"), []);
 });
 
+test("agents are also indexed by the agent that delegated them", () => {
+  const agents = new DirectoryStore<AgentSummary>({
+    indexBy: (a) => [a.workspaceId ? `${a.hostId}:${a.workspaceId}` : null, a.parentAgentId ? `parent:${a.hostId}:${a.parentAgentId}` : null],
+  });
+  const agent = (id: string, parentAgentId: string | undefined, activityAt: number) =>
+    ({ key: "h:" + id, hostId: "h", id, workspaceId: "w1", title: id, status: "idle", provider: "codex", cwd: "/", project: "p", projectKey: null, activityAt, attention: false, state: "done", unread: false, lastError: null, pendingPermissions: [], ...(parentAgentId ? { parentAgentId } : {}) }) as AgentSummary;
+  agents.apply({ type: "snapshot", generation: "g", seq: 1, agents: [agent("root", undefined, 10), agent("c1", "root", 20), agent("c2", "root", 30)] });
+  assert.deepEqual(agents.indexed("parent:h:root", 5).map((a) => a.id), ["c2", "c1"]);
+  assert.deepEqual(agents.indexed("h:w1", 5).map((a) => a.id), ["c2", "c1", "root"]);
+  agents.apply({ type: "changes", generation: "g", seq: 2, changes: [{ key: "h:c2", value: null }, { key: "h:c1", value: agent("c1", undefined, 40) }] });
+  assert.deepEqual(agents.indexed("parent:h:root", 5), []);
+  assert.equal(agents.indexedSize("h:w1"), 2);
+});
+
 test("thread actions reach the daemon's workspace operations on the right host", async () => {
   const directory = mkdtempSync(join(tmpdir(), "litepaseo-ws-"));
   const store = new Store(directory);

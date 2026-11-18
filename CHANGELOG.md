@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0
+
+- Show an agent's subagents in its conversation, as the official Paseo app does. A header button sums them up (for example "3 subagents", "1 working", "1 needs input") and opens a Subagents panel that lists agents it delegated through Paseo and subagents its provider runs (Claude Task, Codex, pi-subagents and others), with live status.
+- Open a provider subagent's conversation in the panel, read-only and live, with earlier messages on request. A subagent tool call in the conversation also gets an Open button.
+- Open a delegated agent from the panel; its header links back to the parent agent. The sidebar is unchanged.
+- The subagent list travels on the conversation's existing stream, so opening a chat needs no extra connection. LitePaseo follows the daemon's subagent events only while a conversation is open, plus 30 seconds.
+
 ## 0.6.11
 
 - Hold pushes briefly while you are using LitePaseo on another device: a finished turn waits 45 seconds, an input request or failure 20 seconds, and a conversation you open in that time is not pushed to your other devices. A browser counts as in use while it is in the foreground with keyboard, pointer or touch input in the last 2 minutes; with nobody at a device, pushes go out at once as before.

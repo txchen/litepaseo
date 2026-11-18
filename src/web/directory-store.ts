@@ -258,8 +258,8 @@ export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
   private filtered: View<T> | null = null;
   private predicate: ((item: T) => boolean) | null = null;
   private readonly persist: (collapsed: string[]) => void;
-  /** Secondary index (e.g. agents by workspace), each bucket in recency order. */
-  private readonly indexOf: ((item: T) => string | null) | null;
+  /** Secondary indexes (e.g. agents by workspace and by parent), each bucket in recency order. */
+  private readonly indexOf: ((item: T) => string | null | (string | null)[]) | null;
   private readonly buckets = new Map<string, OrderedIndex<T>>();
   /** Bumped once per applied message or view change; the only reactive dependency views take. */
   readonly version = shallowRef(0);
@@ -269,7 +269,7 @@ export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
       collapsed?: Iterable<string>;
       persist?: (collapsed: string[]) => void;
       compare?: (a: T, b: T) => number;
-      indexBy?: (item: T) => string | null;
+      indexBy?: (item: T) => string | null | (string | null)[];
     } = {},
   ) {
     this.collapsed = new Set(options.collapsed);
@@ -440,17 +440,19 @@ export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
     this.filtered = filtered;
   }
 
-  private bucketOf(item: T) {
-    return this.indexOf ? this.indexOf(item) : null;
+  private bucketsOf(item: T): (string | null)[] {
+    const buckets = this.indexOf ? this.indexOf(item) : null;
+    return Array.isArray(buckets) ? buckets : [buckets];
   }
 
   private unbucket(item: T) {
-    const bucket = this.bucketOf(item);
-    if (!bucket) return;
-    const index = this.buckets.get(bucket);
-    if (!index) return;
-    index.remove(item);
-    if (!index.size) this.buckets.delete(bucket);
+    for (const bucket of this.bucketsOf(item)) {
+      if (!bucket) continue;
+      const index = this.buckets.get(bucket);
+      if (!index) continue;
+      index.remove(item);
+      if (!index.size) this.buckets.delete(bucket);
+    }
   }
 
   private put(item: T) {
@@ -458,8 +460,8 @@ export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
     this.all.add(item);
     this.hostView(item.hostId).add(item);
     if (this.filtered && this.matches(item)) this.filtered.add(item);
-    const bucket = this.bucketOf(item);
-    if (bucket) {
+    for (const bucket of this.bucketsOf(item)) {
+      if (!bucket) continue;
       let index = this.buckets.get(bucket);
       if (!index) this.buckets.set(bucket, (index = new OrderedIndex<T>(compareAgents)));
       index.insert(item);

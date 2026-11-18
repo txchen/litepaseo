@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, provide, ref, shallowRef, watch } from "vue";
+import { computed, inject, nextTick, onActivated, onDeactivated, onUnmounted, provide, ref, shallowRef, watch } from "vue";
+import { SUGGESTIONS } from "./suggestions.ts";
 import type { AgentSummary, PromptIndex, PromptMarker, ProviderSubagent, TimelineMessage, TimelinePage, TimelineRow, TimelineStreamMessage } from "../shared/wire.ts";
 import { TimelineStore, type RowRef } from "./timeline-store.ts";
 import { PAGE_STEP, pageHistory, RENDER_WINDOW } from "./timeline-window.ts";
@@ -16,6 +17,11 @@ import Icon from "./Icon.vue";
  * One agent's conversation: its live timeline stream, history paging in both directions, the
  * outline rail and jumps. One instance per conversation (keyed by the agent), so everything
  * here belongs to that conversation alone.
+ *
+ * The app keeps recently opened conversations alive (KeepAlive): switching back shows the
+ * rendered rows at once. A conversation in the background is inert: no stream, no clock, no
+ * reactive input. Back in view it reconnects, and the server's reset only re-renders rows
+ * that changed meanwhile.
  */
 const props = defineProps<{
   agent: AgentSummary;
@@ -37,15 +43,33 @@ const emit = defineEmits<{
   /** A click in the timeline (images open full size, local links open in the app). */
   timelineClick: [event: MouseEvent];
   unauthorized: [];
+  /** A ready next-input suggestion in this conversation (the composer's Tab completion). */
+  suggestion: [key: string, seqStart: number, text: string];
 }>();
 
 const base = () => `/hosts/${encodeURIComponent(props.agent.hostId)}/agents/${encodeURIComponent(props.agent.id)}`;
 
-// Rows read this conversation's context, with its own subagents.
+// Rows read this conversation's context, with its own subagents. Coming back to a cached
+// conversation brings an equal but new context object: replacing it would re-render every row.
 const subagents = shallowRef<ProviderSubagent[]>([]);
 const context = shallowRef<TimelineContext>({ base: "", cwd: "" });
-watch(() => props.context, (value) => (context.value = { ...value, subagents }), { immediate: true });
+const contextKey = (c: TimelineContext) => JSON.stringify([c.base, c.cwd, c.session, c.workspace, c.localHost, c.rewindModes]);
+watch(() => props.context, (value) => {
+  if (contextKey(value) !== contextKey(context.value)) context.value = { ...value, subagents };
+}, { immediate: true });
 provide(TIMELINE_CONTEXT, context);
+// Suggestion rows predict and offer for this conversation, even if another one opened while a
+// prediction was on its way; using one acts on the open composer, as only a visible row can.
+const suggestions = inject(SUGGESTIONS, null);
+if (suggestions)
+  provide(SUGGESTIONS, {
+    predict: (token) => props.api(base() + "/suggestion", "POST", { token }, 65_000),
+    use: (text) => suggestions.use(text),
+    send: (text) => suggestions.send(text),
+    offer: (seqStart, text) => emit("suggestion", props.agent.key, seqStart, text),
+  });
+/** False while the conversation is cached out of view. */
+let inView = true;
 
 const store = shallowRef(new TimelineStore());
 const timelineNotice = ref("");
@@ -116,7 +140,7 @@ function syncElapsedClock() {
   clearTimeout(elapsedTimer);
   elapsedTimer = undefined;
   const start = turnStartedAt.value;
-  if (!start || document.hidden || disposed) return;
+  if (!start || document.hidden || disposed || !inView) return;
   // Tick just after each whole second of the turn, so every tick changes the display once.
   const tick = () => {
     clockNow.value = Date.now();
@@ -129,12 +153,15 @@ watch(turnStartedAt, syncElapsedClock, { immediate: true });
 document.addEventListener("visibilitychange", syncElapsedClock);
 
 // ---- Live stream ------------------------------------------------------------------------------
+/** Times the first open only: a cached conversation coming back already shows its rows. */
 const opening = trackTimelineOpen(
   props.agent,
   (report) => void props.api("/diagnostics/timeline-slow", "POST", report).catch(() => {}),
   (wait) => (timelineWait.value = wait),
 );
-const stream = openStream({
+let stream = connect();
+function connect() {
+  return openStream({
   url: () => "/api" + base() + "/timeline/stream",
   onResponse: () => opening.response(),
   onState: (state) => {
@@ -166,12 +193,15 @@ const stream = openStream({
     }
     if (stick) scrollToBottom();
   },
-});
+  });
+}
 
 // ---- Scrolling --------------------------------------------------------------------------------
 // Async Markdown nodes can acquire height after the SSE update's nextTick.
 // Follow that layout only while the reader remains at the live tail.
 let followLatest = true;
+/** Where the reader was, restored when a cached conversation comes back into view. */
+let savedTop = 0;
 watch(timelineElement, (element, _previous, cleanup) => {
   const inner = element?.querySelector(".timeline-inner");
   if (!element || !inner) return;
@@ -179,7 +209,9 @@ watch(timelineElement, (element, _previous, cleanup) => {
   // bottom when content grows before its scroll event is dispatched; that must not unfollow.
   let lastTop = element.scrollTop;
   const onScroll = () => {
+    if (!inView) return;
     const top = element.scrollTop;
+    savedTop = top;
     if (nearBottom()) followLatest = true;
     else if (top < lastTop - 1) followLatest = false;
     // Pages load ahead of the reader in the direction they scroll; our own anchor
@@ -196,7 +228,7 @@ watch(timelineElement, (element, _previous, cleanup) => {
     lastTop = top;
   };
   const observer = new ResizeObserver(() => {
-    if (!historyRows.value && followLatest) scrollToBottom();
+    if (inView && !historyRows.value && followLatest) scrollToBottom();
   });
   // At either end of a window there is nothing left to scroll, so no scroll event: the wheel
   // still says which way the reader wants to go.
@@ -260,7 +292,7 @@ function setScrollTop(el: HTMLElement, top: number) {
 }
 function autoPage() {
   const el = timelineElement.value;
-  if (!el || paging.value || !pagingIntent || el.offsetParent === null) return;
+  if (!el || !inView || paging.value || !pagingIntent || el.offsetParent === null) return;
   const ahead = Math.max(600, el.clientHeight);
   if (pagingIntent === "up" && el.scrollTop < ahead && canShowOlder.value) void moveHistory("before");
   else if (pagingIntent === "down" && historyRows.value && el.scrollHeight - el.scrollTop - el.clientHeight < ahead) {
@@ -409,7 +441,7 @@ async function moveHistory(direction: "before" | "after") {
   const epoch = s.epoch;
   paging.value = direction;
   try {
-    const stillHere = () => !disposed && store.value === s && s.epoch === epoch;
+    const stillHere = () => !disposed && inView && store.value === s && s.epoch === epoch;
     if (direction === "before") {
       const page = await fetchHistoryPage(epoch, edge.seqStart);
       if (!stillHere()) return;
@@ -511,7 +543,7 @@ function revealRow(seq: number) {
  */
 async function jumpToPrompt(seq: number, exact = false) {
   const s = store.value;
-  if (paging.value) return;
+  if (paging.value || !inView) return;
   if (timelineElement.value?.querySelector(`[data-seq-start="${seq}"]`)) return revealRow(seq);
   const rows = s.rows;
   const local = rows.length && rows[0].seqStart <= seq ? rows.findIndex((r) => r.seqStart >= seq || (r.row.value.item.type === "assistant_message" && r.row.value.seqEnd >= seq)) : -1;
@@ -535,7 +567,7 @@ async function jumpToPrompt(seq: number, exact = false) {
     // A turn longer than a page: keep reading back until the prompt itself is in hand.
     for (let request = 0; request < 8; request++) {
       const page = await fetchHistoryPage(epoch, cursor);
-      if (disposed || store.value !== s) return;
+      if (disposed || !inView || store.value !== s) return;
       if (page.epoch !== epoch) return showLatest();
       collected = [...page.rows, ...collected];
       hasOlder = page.hasOlder;
@@ -551,7 +583,7 @@ async function jumpToPrompt(seq: number, exact = false) {
     // A short turn: fill the window from the following turns, so there is something to scroll.
     if (jumped.length && jumped.length <= RENDER_WINDOW - PAGE_STEP) {
       const more = await newerRows(s, epoch, jumped.at(-1)!.seqStart);
-      if (disposed || store.value !== s) return;
+      if (disposed || !inView || store.value !== s) return;
       if (more === "stale") return showLatest();
       if (more) jumped = [...jumped, ...more];
     }
@@ -568,6 +600,31 @@ async function jumpToPrompt(seq: number, exact = false) {
     paging.value = null;
   }
 }
+
+// Out of view: inert until it comes back. In view again: the reader's place, then a fresh
+// stream (its reset re-renders only rows that changed meanwhile).
+onDeactivated(() => {
+  inView = false;
+  opening.abandon();
+  stream.close();
+  clearTimeout(elapsedTimer);
+  cancelAnimationFrame(activeFrame);
+  activeFrame = 0;
+  pagingIntent = null;
+});
+onActivated(() => {
+  if (inView) return; // the first mount
+  inView = true;
+  const el = timelineElement.value;
+  if (el) {
+    setScrollTop(el, followLatest && !historyRows.value ? el.scrollHeight : savedTop);
+  }
+  if (store.value.ready) emit("ready");
+  if (subagents.value.length) emit("subagents", subagents.value);
+  stream = connect();
+  syncElapsedClock();
+  scheduleActivePrompt();
+});
 
 onUnmounted(() => {
   disposed = true;

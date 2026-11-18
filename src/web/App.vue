@@ -755,6 +755,8 @@ watch(threadAgents, (list) => {
 // Compact layouts: the detail pane is a history entry, so the system back button or gesture
 // returns to the list instead of leaving the app.
 const compact = matchMedia("(max-width: 760px)");
+/** Conversations kept rendered for switching back: fewer on phones, where memory is tighter. */
+const CACHED_CONVERSATIONS = compact.matches ? 3 : 5;
 function openDetail() {
   if (!detailOpen.value && compact.matches) history.pushState({ litepaseoDetail: true }, "");
   detailOpen.value = true;
@@ -962,8 +964,13 @@ watch(
   },
 );
 
-// next-input suggestions: rows ask through these; the newest ready one is the Tab completion.
-const suggestion = ref<{ key: string; seqStart: number; text: string } | null>(null);
+// next-input suggestions: rows ask through these; each conversation's newest ready one is its
+// Tab completion, kept while the conversation is cached out of view.
+const suggestions = reactive(new Map<string, { seqStart: number; text: string }>());
+function offerSuggestion(key: string, seqStart: number, text: string) {
+  const current = suggestions.get(key);
+  if (!current || seqStart >= current.seqStart) suggestions.set(key, { seqStart, text });
+}
 provide(SUGGESTIONS, {
   predict: (token) => {
     const a = active.value;
@@ -979,15 +986,13 @@ provide(SUGGESTIONS, {
   },
   send: (text) => void sendText(text),
   offer: (seqStart, text) => {
-    const a = active.value;
-    if (!a) return;
-    if (!suggestion.value || suggestion.value.key !== a.key || seqStart >= suggestion.value.seqStart)
-      suggestion.value = { key: a.key, seqStart, text };
+    if (active.value) offerSuggestion(active.value.key, seqStart, text);
   },
 });
-const composerSuggestion = computed(() =>
-  suggestion.value && suggestion.value.key === active.value?.key && !prompt.value ? suggestion.value.text : "",
-);
+const composerSuggestion = computed(() => {
+  const offered = active.value && suggestions.get(active.value.key);
+  return offered && !prompt.value ? offered.text : "";
+});
 const composerPlaceholder = computed(() => {
   if (composerSuggestion.value && !coarsePointer) return composerSuggestion.value;
   if (!running.value) return "Message this agent…";
@@ -1011,9 +1016,6 @@ async function loadUsage(refresh = false) {
     usageLoading.value = false;
   }
 }
-watch(selectedKey, () => {
-  suggestion.value = null;
-});
 /** The server's version, from the directory stream; this page was built as WEB_VERSION. */
 const serverVersion = ref("");
 const reloadPage = () => location.reload();
@@ -1062,7 +1064,7 @@ async function sendText(text: string, fromComposer = false) {
       queueAttempts.delete(attempt);
       for (const entry of selected) attachments.remove(a.key, entry, true);
       if (fromComposer && composer.state(a.key).text === text) composer.setText(a.key, "");
-      if (selectedKey.value === a.key) suggestion.value = null;
+      suggestions.delete(a.key);
       await refreshQueue();
       void nextTick(autosize);
     });
@@ -1088,7 +1090,7 @@ async function deliver(a: AgentSummary, text: string, selected: LocalAttachment[
       if (generation !== composer.generation) return;
       composer.resolve(a.key, sent.messageId);
       for (const entry of selected) attachments.remove(a.key, entry, true);
-      if (selectedKey.value === a.key) suggestion.value = null;
+      suggestions.delete(a.key);
       void nextTick(autosize);
       if (selectedKey.value === a.key) conversation.value?.showLatest();
     } catch (e) {
@@ -1771,22 +1773,26 @@ onUnmounted(() => {
           @reveal="revealDirectory"
         />
 
-        <ConversationView
-          v-show="!activeFile && !terminalActive"
-          ref="conversation"
-          :key="active.key"
-          :agent="active"
-          :api="api"
-          :context="timelineContext"
-          :host-label="hostLabels.get(active.hostId) ?? ''"
-          :settled="markdownSettled"
-          :footer-model="footerModel"
-          @error="(message) => (error = message)"
-          @subagents="(list) => (providerSubagents = list)"
-          @ready="readyKey = active.key"
-          @timeline-click="onTimelineClick"
-          @unauthorized="signOut('ended')"
-        />
+        <!-- Recently opened conversations stay rendered (out of view they are inert): switching back is instant. -->
+        <KeepAlive :max="CACHED_CONVERSATIONS">
+          <ConversationView
+            v-show="!activeFile && !terminalActive"
+            ref="conversation"
+            :key="active.key"
+            :agent="active"
+            :api="api"
+            :context="timelineContext"
+            :host-label="hostLabels.get(active.hostId) ?? ''"
+            :settled="markdownSettled"
+            :footer-model="footerModel"
+            @error="(message) => (error = message)"
+            @subagents="(list) => (providerSubagents = list)"
+            @ready="readyKey = active.key"
+            @timeline-click="onTimelineClick"
+            @unauthorized="signOut('ended')"
+            @suggestion="offerSuggestion"
+          />
+        </KeepAlive>
 
         <div v-show="!activeFile && !terminalActive" class="dock">
           <div class="dock-inner">

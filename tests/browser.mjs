@@ -143,6 +143,8 @@ try {
     );
   });
   const threadActions = [];
+  /** Hosts whose timeline stream was requested, in order (each conversation reconnects while open). */
+  const timelineOpens = [];
   const creations = [],
     predictions = [],
     reads = [];
@@ -228,7 +230,8 @@ try {
       creations.push({ host, ...route.request().postDataJSON() });
       return route.fulfill({ status: 201, json: { id: "new-1", key: `${host}:new-1` } });
     }
-    if (p.endsWith("/timeline/stream"))
+    if (p.endsWith("/timeline/stream")) {
+      timelineOpens.push(host);
       return route.fulfill(
         sse({
           type: "ops",
@@ -265,6 +268,7 @@ try {
           ],
         }),
       );
+    }
     if (p.includes("/workspaces/")) {
       threadActions.push({ host, action: p.split("/").pop(), ...(route.request().postDataJSON() ?? {}) });
       return route.fulfill({ json: { ok: true } });
@@ -667,6 +671,23 @@ try {
   await page.waitForFunction(() => true);
   for (let i = 0; i < 50 && !reads.includes("alpha"); i++) await page.waitForTimeout(100);
   assert.ok(reads.includes("alpha"), "viewing an unread session clears its unread state");
+
+  // Switching back to a recently opened conversation shows the same rendered rows at once,
+  // instead of rendering them again; out of view it is inert (no stream reconnects).
+  await page.getByText("Hello from alpha").waitFor();
+  await page.evaluate(() => { document.querySelector(".timeline [data-seq-start=\"1\"]").dataset.cachedMark = "kept"; });
+  await page.locator("button.session", { hasText: "beta conversation" }).click();
+  await page.getByText("Hello from beta").waitFor();
+  const alphaOpens = timelineOpens.filter((h) => h === "alpha").length;
+  await page.waitForTimeout(2500); // the open conversation reconnects in this window; alpha must not
+  assert.equal(timelineOpens.filter((h) => h === "alpha").length, alphaOpens, "a conversation out of view keeps no stream");
+  assert.equal(await page.locator(".timeline [data-cached-mark]").count(), 0, "only the open conversation is in the page");
+  await page.locator("button.session", { hasText: "alpha conversation" }).click();
+  assert.equal(await page.locator(".timeline [data-seq-start=\"1\"]").getAttribute("data-cached-mark"), "kept", "the cached rows come back as they were");
+  await page.getByText("Hello from alpha").waitFor();
+  for (let i = 0; i < 50 && timelineOpens.filter((h) => h === "alpha").length === alphaOpens; i++) await page.waitForTimeout(50);
+  assert.ok(timelineOpens.filter((h) => h === "alpha").length > alphaOpens, "back in view, it reconnects");
+  assert.equal(await page.locator(".timeline [data-seq-start=\"1\"]").getAttribute("data-cached-mark"), "kept", "an unchanged reset keeps the rendered rows");
 
   // Host settings: real form, explicit host scope, sparse patches and profile creation.
   await page.getByRole('button', {name:/Hosts, /}).click();

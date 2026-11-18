@@ -10,6 +10,13 @@ export interface RowRef {
 const MAX_ROWS = 3000;
 const TRIM_TO = 2500;
 
+/** Whether a row from the server is unchanged: every change to a row moves its seqEnd, except
+ * message images, which the server adds to the item; comparing the item covers both. */
+function sameRow(a: TimelineRow, b: TimelineRow) {
+  return a.seqEnd === b.seqEnd && a.timestamp === b.timestamp && a.provider === b.provider && a.turnId === b.turnId
+    && JSON.stringify(a.item) === JSON.stringify(b.item);
+}
+
 /**
  * One conversation in the browser. Each row has its own ref, so an append re-renders only
  * that row; `membership` changes only when rows are added or removed.
@@ -26,7 +33,18 @@ export class TimelineStore {
     let membership = false;
     for (const op of ops) {
       if (op.type === "reset") {
-        this.rows = op.rows.map((row) => ({ seqStart: row.seqStart, row: shallowRef(row) }));
+        // A reset of the same conversation (reconnect, a cached view reopened) keeps the refs
+        // of rows that did not change, so only new and changed rows render again.
+        const previous = this.ready && op.epoch === this.epoch ? new Map(this.rows.map((r) => [r.seqStart, r])) : null;
+        this.rows = op.rows.map((row) => {
+          const kept = previous?.get(row.seqStart);
+          if (kept && sameRow(kept.row.value, row)) return kept;
+          if (kept) {
+            kept.row.value = row;
+            return kept;
+          }
+          return { seqStart: row.seqStart, row: shallowRef(row) };
+        });
         this.epoch = op.epoch;
         this.hasOlder = op.hasOlder;
         this.startCursor = op.startCursor;

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DirectoryStore } from "../src/web/directory-store.ts";
 import { TimelineStore } from "../src/web/timeline-store.ts";
-import type { AgentSummary } from "../src/shared/wire.ts";
+import type { AgentSummary, TimelineRow } from "../src/shared/wire.ts";
 
 const summary = (key: string, extra: Partial<AgentSummary> = {}): AgentSummary => ({
   key,
@@ -87,6 +87,33 @@ test("TimelineStore: appends update only the row; inserts change membership", ()
   store.apply([{ type: "upsert", row: row(6, "mid") }]);
   assert.deepEqual(store.rows.map((r) => r.seqStart), [5, 6, 7]);
   assert.equal(store.membership.value, membership + 1);
+});
+
+test("TimelineStore: a reset of the same conversation keeps unchanged rows, so they do not render again", () => {
+  const store = new TimelineStore();
+  const row = (seqStart: number, text: string, seqEnd = seqStart): TimelineRow => ({
+    seqStart, seqEnd, timestamp: "t", provider: "codex", item: { type: "assistant_message", text },
+  });
+  const reset = (epoch: string, rows: TimelineRow[]) =>
+    store.apply([{ type: "reset", epoch, rows, hasOlder: false, startCursor: null }]);
+  reset("e", [row(1, "a"), row(2, "b"), row(3, "c")]);
+  const [first, second, third] = store.rows;
+  const thirdRow = third.row;
+  // Away meanwhile: row 3 grew, row 4 arrived, row 1 left the server's window.
+  reset("e", [row(2, "b"), row(3, "cd", 5), row(6, "new")]);
+  assert.deepEqual(store.rows.map((r) => r.seqStart), [2, 3, 6]);
+  assert.equal(store.rows[0], second, "an unchanged row keeps its ref");
+  assert.equal(store.rows[1], third, "a changed row is updated in place");
+  assert.equal(thirdRow.value.item.text, "cd");
+  assert.equal(thirdRow.value.seqEnd, 5);
+  assert.equal(store.rows.indexOf(first), -1, "a row the server no longer sends is dropped");
+  // The same rows with different content (a server-side image, say) are not kept as they were.
+  reset("e", [{ ...row(2, "b"), item: { type: "assistant_message", text: "b", images: ["x"] } }, row(3, "cd", 5), row(6, "new")]);
+  assert.equal(store.rows[0], second);
+  assert.deepEqual(second.row.value.item, { type: "assistant_message", text: "b", images: ["x"] });
+  // A rewound conversation (new epoch) starts over.
+  reset("e2", [row(2, "b")]);
+  assert.notEqual(store.rows[0], second, "another epoch never reuses rows");
 });
 
 test("renderMarkdown escapes all input and only emits safe links", async () => {

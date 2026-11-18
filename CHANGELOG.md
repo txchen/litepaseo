@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.0
+
+- Switch back to a conversation you opened recently and it shows at once, where you left it: the last 5 conversations (3 on phones) stay rendered. Out of view they do nothing: no connection, no timers, no rendering. Coming back, only messages that changed meanwhile render again. In a test switching between real conversations at 4x CPU slowdown (an approximation of a phone), rows were on screen in 162-196 ms instead of 340-384 ms, using less than half the CPU.
+- Coming back to a conversation, or to the tab after it was in the background, downloads only what changed instead of the latest 200 rows again: in the same test, 0.1-0.4 KB instead of 175 KB. The server keeps a conversation ready for 5 minutes after the last viewer leaves (was 30 seconds), so coming back within that time does not reload it from the host.
+- Next-input suggestions stay with their conversation: switching away and back keeps the Tab completion, and a suggestion that arrives after you switched no longer lands in another conversation's composer.
+
 ## 0.8.1
 
 - Fix conversations that sometimes took about 20 seconds to load behind a Cloudflare Tunnel, showing "Waiting for the host to load this conversation". The host had answered at once; the tunnel held the stream's latest bytes until more arrived, which for an idle conversation was the next 20-second heartbeat. Each burst of live updates is now followed by a few bytes of padding, which pushes it through. This applies to every live stream, including the sidebar and queues.

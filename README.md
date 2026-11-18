@@ -37,12 +37,14 @@ battery runtime has not been measured.
 latency, rendering differences, raw data and reproduction steps.
 
 The approach is simple: update less often, send only changes, keep rendered history
-bounded, and pause streams while a tab is hidden. Everything ships in one npm
-package, with no separate database service to deploy.
+bounded, and pause streams while a tab is hidden. Recently opened conversations stay
+rendered but idle, so switching back costs neither a re-render nor a re-download.
+Everything ships in one npm package, with no separate database service to deploy.
 
 ## What you can do
 
 - Manage conversations across multiple Paseo hosts in one place.
+- Switch back and forth between recent conversations instantly: each one comes back as you left it, scrolled to the same place, and fetches only what changed meanwhile.
 - Pin projects from their ⋮ menu to keep important repositories at the top of the Projects sidebar. Pins follow pin order and sync across devices; Unpin restores activity ordering.
 - Create sessions, choose a provider/model, send messages, stop turns, and answer
   permission requests or structured questions.

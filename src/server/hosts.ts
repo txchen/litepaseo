@@ -8,6 +8,8 @@ import { HostDirectory, HostWorkspaces, type DirectoryDriver, type Transition } 
 import { TimelineView, type TimelineDriver } from "./timeline-view.ts";
 import { HostSubagents, type SubagentDriver } from "./subagents.ts";
 import type { ProviderSubagent } from "../shared/wire.ts";
+import { HostLiveness, forceReconnect, type LivenessDriver } from "./host-liveness.ts";
+import { logEvent } from "./log-event.ts";
 
 type Driver = ReturnType<typeof createHostClient>;
 
@@ -23,6 +25,7 @@ interface Client {
   directory: HostDirectory;
   workspaces: HostWorkspaces;
   subagents: HostSubagents;
+  liveness?: HostLiveness;
   stopStatus: () => void;
 }
 
@@ -30,6 +33,8 @@ interface Client {
 const TIMELINE_GRACE_MS = 30_000;
 /** Conversation opens slower than this are logged with a per-layer breakdown. */
 const SLOW_TIMELINE_MS = 3000;
+/** A viewer still without rows after this long has the daemon checked for a silent connection. */
+const LIVENESS_CHECK_MS = 2000;
 
 export class Hosts {
   readonly agents = new VersionedCollection<AgentSummary>();
@@ -39,7 +44,7 @@ export class Hosts {
   private readonly labels = new Map<string, string>();
   private readonly timelines = new Map<
     string,
-    { view: TimelineView; hostId: string; idle?: ReturnType<typeof setTimeout> }
+    { view: TimelineView; hostId: string; fresh: boolean; idle?: ReturnType<typeof setTimeout> }
   >();
   private readonly agentListeners = new Set<() => void>();
   private readonly hostListeners = new Set<() => void>();
@@ -78,7 +83,10 @@ export class Hosts {
     );
     const update = (state: ReturnType<Driver["getConnectionState"]>) => {
       const previous = this.diagnostics.get(hostId) ?? {};
-      if (state.status === "connected") this.diagnostics.set(hostId, { lastConnectedAt: new Date().toISOString() });
+      if (state.status === "connected") {
+        if (previous.error) logEvent("host_reconnected", { hostId, after: previous.error.code });
+        this.diagnostics.set(hostId, { lastConnectedAt: new Date().toISOString() });
+      }
       else if (state.status === "connecting") this.diagnostics.set(hostId, { ...previous, nextRetryAt: undefined, attempt: state.attempt });
       else if (state.status === "disconnected") {
         this.noteFailure(hostId, state);
@@ -90,7 +98,10 @@ export class Hosts {
     const stopStatus = driver.subscribeConnectionStatus(update);
     update(driver.getConnectionState());
     const subagents = new HostSubagents(driver as unknown as SubagentDriver);
-    this.clients.set(hostId, { driver, api, directory, workspaces, subagents, stopStatus });
+    const liveness = typeof (driver as unknown as Partial<LivenessDriver>).ping === "function"
+      ? new HostLiveness(driver as unknown as LivenessDriver, hostId, () => forceReconnect(driver))
+      : undefined;
+    this.clients.set(hostId, { driver, api, directory, workspaces, subagents, liveness, stopStatus });
     directory.start();
     // Daemons that predate workspaces simply have none; agents still list.
     if ((driver as unknown as DirectoryDriver).observeWorkspaces) workspaces.start();
@@ -108,7 +119,7 @@ export class Hosts {
   private noteFailure(id: string, failure: unknown) {
     const error = connectionProblem(failure);
     const previous = this.diagnostics.get(id) ?? {};
-    if (previous.error?.code !== error.code) console.warn(JSON.stringify({ event: "host_connection_failed", hostId: id, code: error.code }));
+    if (previous.error?.code !== error.code) logEvent("host_connection_failed", { hostId: id, code: error.code });
     this.diagnostics.set(id, { ...previous, error });
   }
 
@@ -191,17 +202,41 @@ export class Hosts {
       const view = new TimelineView(driver, agentId, (report) => {
         if (report.totalMs < SLOW_TIMELINE_MS) return;
         // Which layer a slow open spent its time in; no conversation content.
-        console.warn(JSON.stringify({ event: "timeline_slow", hostId, agentId, ...(subagentId ? { subagentId } : {}), connectionAtStart: connection ?? null, ...report }));
+        logEvent("timeline_slow", { hostId, agentId, ...(subagentId ? { subagentId } : {}), connectionAtStart: connection ?? null, ...report });
       });
-      entry = { view, hostId };
+      entry = { view, hostId, fresh: true };
       this.timelines.set(key, entry);
       view.start();
     }
     clearTimeout(entry.idle);
     entry.idle = undefined;
-    const stop = entry.view.watch(watcher);
+    // How long this viewer waits for rows, whatever the view was doing when it joined (the
+    // view's own report covers fresh views only). A viewer that gives up waiting is logged too.
+    const joinedAt = performance.now();
+    const joined = { state: entry.view.status, fresh: entry.fresh, others: entry.view.watcherCount };
+    entry.fresh = false;
+    let waiting = true;
+    const finishWait = (left: boolean) => {
+      if (!waiting) return;
+      waiting = false;
+      clearTimeout(check);
+      const waitMs = Math.round(performance.now() - joinedAt);
+      if (waitMs < SLOW_TIMELINE_MS) return;
+      logEvent("timeline_wait", {
+        hostId, agentId, ...(subagentId ? { subagentId } : {}), waitMs, left,
+        joinedState: joined.state, freshView: joined.fresh, otherViewers: joined.others,
+        connection: client.driver.getConnectionState().status,
+      });
+    };
+    const check = setTimeout(() => void client.liveness?.check("timeline_wait"), LIVENESS_CHECK_MS);
+    check.unref?.();
+    const stop = entry.view.watch((ops) => {
+      if (waiting && ops.some((op) => op.type === "reset")) finishWait(false);
+      watcher(ops);
+    });
     const current = entry;
     return () => {
+      finishWait(true);
       stop();
       if (current.view.watcherCount || this.timelines.get(key) !== current) return;
       current.idle = setTimeout(() => {

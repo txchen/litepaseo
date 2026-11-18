@@ -342,7 +342,9 @@ test("browsers report slow conversation opens to the server log, validated and c
       pageAgeMs: 7_200_000, backgroundMs: 3_000_000, visibleForMs: 800, version: "0.6.8",
     };
     assert.equal((await post(report)).status, 200);
-    assert.deepEqual(JSON.parse(logged.at(-1)!), { event: "timeline_slow_client", ...report });
+    const { time, ...line } = JSON.parse(logged.at(-1)!);
+    assert.deepEqual(line, { event: "timeline_slow_client", ...report });
+    assert.ok(Math.abs(Date.parse(time) - Date.now()) < 60_000, "events carry the time they happened");
     // Unknown fields (say, message text) and nonsense values are refused, not logged.
     assert.equal((await post({ ...report, text: "secret" })).status, 400);
     assert.equal((await post({ ...report, totalMs: -1 })).status, 400);

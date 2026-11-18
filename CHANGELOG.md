@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1
+
+- Recover in seconds when a host's connection goes silent: after a laptop sleeps, Wi-Fi changes or a network drops the connection without closing it, a conversation could load for up to about 50 seconds with no error until the Paseo SDK noticed. When a conversation is still loading after 2 seconds, LitePaseo now pings the host and reopens the connection if it does not answer within 3 seconds. In a test with a deliberately silenced connection, opening took 8 seconds instead of 49.
+- Log every slow conversation open, including a browser joining a conversation that was already loading and one that gives up waiting (for example by reloading the page), as `timeline_wait`. Hosts that stop answering are logged as `host_unresponsive`, recoveries as `host_reconnected`. Diagnostic log lines now carry the time.
+- Start each live stream response at once, so a slow open shows whether the wait was in LitePaseo, the network in between, or the host.
+
 ## 0.7.0
 
 - Show an agent's subagents in its conversation, as the official Paseo app does. A header button sums them up (for example "3 subagents", "1 working", "1 needs input") and opens a Subagents panel that lists agents it delegated through Paseo and subagents its provider runs (Claude Task, Codex, pi-subagents and others), with live status.

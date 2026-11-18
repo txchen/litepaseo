@@ -6,6 +6,7 @@ import { importProjectIcon, MAX_ICON_BYTES } from "./project-icon-import.ts";
 import { ServerSendQueue } from "./send-queue.ts";
 import { VERSION } from "./version.ts";
 import { eventStream } from "./sse.ts";
+import { logEvent } from "./log-event.ts";
 import { registerWorkspaceRoutes } from "./workspace-routes.ts";
 import { Attachments, MAX_FILE_BYTES } from "./attachments.ts";
 import { notificationPreview } from "./notification-preview.ts";
@@ -307,7 +308,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     const failure = error as Error & { code?: unknown; cause?: unknown };
     const cause = failure.cause instanceof Error ? failure.cause : null;
     console.error(JSON.stringify({
-      event: "api_operation_failed", requestId, method: c.req.method, path: c.req.path, route: c.req.routePath,
+      time: new Date().toISOString(), event: "api_operation_failed", requestId, method: c.req.method, path: c.req.path, route: c.req.routePath,
       error: failure.name, ...(typeof failure.code === "string" ? { code: failure.code } : {}),
       message: String(failure.message ?? "").slice(0, 500),
       ...(cause ? { cause: `${cause.name}: ${cause.message}`.slice(0, 300) } : {}),
@@ -427,7 +428,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
       pageAgeMs: long.optional(), backgroundMs: long.optional(), visibleForMs: ms.optional(),
       version: z.string().max(40).optional(),
     }).strict().parse(await c.req.json());
-    console.warn(JSON.stringify({ event: "timeline_slow_client", ...input }));
+    logEvent("timeline_slow_client", input);
     return c.json({ ok: true });
   });
   app.get("/api/instance", c => c.json({ name: instanceName() }));

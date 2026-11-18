@@ -29,6 +29,9 @@ export function eventStream(
           controller.close();
         } catch {}
       }, HEARTBEAT_MS);
+      // Sent at once, so the response starts even while the first data is still loading: the
+      // browser can tell a slow server or proxy from a slow host.
+      write(": open\n\n");
       const close = open((data) => write(`data: ${JSON.stringify(data)}\n\n`));
       cleanup = () => {
         clearInterval(heartbeat);

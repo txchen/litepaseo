@@ -144,6 +144,11 @@ export class TimelineView {
     return this.watchers.size;
   }
 
+  /** Where the view stands, for diagnosing a viewer that waits. */
+  get status() {
+    return this.state;
+  }
+
   start() {
     const token = ++this.token;
     this.state = "loading";

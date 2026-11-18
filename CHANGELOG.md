@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.2
+
+- Show images agents send from anywhere on their host, not only from their working directory: a screenshot in another repository or a temp folder used to appear as a link that copied its path. LitePaseo now reads it through the host's daemon, from the image's own folder. Images Paseo saved on a remote host's machine now show too. Only raster images (PNG, JPEG, WebP, GIF, BMP, AVIF) up to 16 MB are served this way; an image that no longer exists shows "Image failed to load".
+
 ## 0.7.1
 
 - Recover in seconds when a host's connection goes silent: after a laptop sleeps, Wi-Fi changes or a network drops the connection without closing it, a conversation could load for up to about 50 seconds with no error until the Paseo SDK noticed. When a conversation is still loading after 2 seconds, LitePaseo now pings the host and reopens the connection if it does not answer within 3 seconds. In a test with a deliberately silenced connection, opening took 8 seconds instead of 49.

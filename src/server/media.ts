@@ -18,6 +18,27 @@ export const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 const extension = (path: string) => /\.([a-z0-9]+)$/i.exec(path)?.[1]?.toLowerCase() ?? "";
 export const imageMime = (path: string) => IMAGE_MIME[extension(path)] ?? null;
 
+/**
+ * Where the daemon reads an image a message names: an absolute path (`/x/a.png`, `C:/x/a.png`)
+ * from its own folder, a relative one from the agent's cwd. Null when it cannot be read.
+ */
+export function imageReadTarget(path: string, cwd: string | undefined): { root: string; path: string } | null {
+  const p = path.replace(/\\/g, "/");
+  const drive = /^[A-Za-z]:\//.test(p);
+  if (p.startsWith("/") || drive) {
+    const parts: string[] = [];
+    for (const part of p.slice(drive ? 3 : 1).split("/")) {
+      if (!part || part === ".") continue;
+      if (part === "..") parts.pop();
+      else parts.push(part);
+    }
+    const name = parts.pop();
+    if (!name) return null;
+    return { root: (drive ? p.slice(0, 3) : "/") + parts.join("/"), path: name };
+  }
+  return cwd ? { root: cwd, path } : null;
+}
+
 /** True when the daemon runs on this machine (loopback TCP/WebSocket or a local socket). */
 export function isLocalConnection(connection: string) {
   try {

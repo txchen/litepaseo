@@ -11,7 +11,7 @@ import { registerWorkspaceRoutes } from "./workspace-routes.ts";
 import { Attachments, MAX_FILE_BYTES } from "./attachments.ts";
 import { notificationPreview } from "./notification-preview.ts";
 import { confirmedMessages } from "./message-status.ts";
-import { IconCache, MAX_IMAGE_BYTES, imageMime, isLocalConnection, isMaterializedImagePath, readMaterializedImage } from "./media.ts";
+import { IconCache, MAX_IMAGE_BYTES, imageMime, imageReadTarget, isLocalConnection, isMaterializedImagePath, readMaterializedImage } from "./media.ts";
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -711,9 +711,14 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     if (isMaterializedImagePath(path)) {
       const host = store.hosts().find((h) => h.id === hostId);
       if (host && isLocalConnection(host.connection)) bytes = await readMaterializedImage(path);
-    } else if (cwd) {
+    }
+    // Agents show images from anywhere on their machine (another repo, a temp folder), not
+    // only their cwd. The daemon confines a read to the root it is given, so an absolute path
+    // is read from its own folder. Only image files, size-capped, as before.
+    const target = bytes ? null : imageReadTarget(path, cwd);
+    if (target) {
       try {
-        const file = await driver.readFile(cwd, path, undefined, MAX_IMAGE_BYTES);
+        const file = await driver.readFile(target.root, target.path, undefined, MAX_IMAGE_BYTES);
         if (file.size <= MAX_IMAGE_BYTES) bytes = file.bytes;
       } catch {
         bytes = null;

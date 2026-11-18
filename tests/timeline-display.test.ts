@@ -203,7 +203,9 @@ test("images in agent messages show when the host can serve them, otherwise open
   // In the workspace but outside the agent's cwd: the host's file endpoint.
   assert.equal(out("/repo/shared/a.webp"), "![i](/api/hosts/h/fs/raw?cwd=%2Frepo&path=shared%2Fa.webp)");
   assert.equal(out("diagram.svg"), `[i](/?session=h%3Aa1&file=app%2Fdiagram.svg "app/diagram.svg")`);
-  assert.deepEqual(parseFileLink(/\]\((\S+)/.exec(out("/tmp/elsewhere/x.png"))![1]), { kind: "copy", path: "/tmp/elsewhere/x.png" });
+  // Anywhere else on the host (another repo, a temp folder): read through the daemon.
+  assert.equal(out("/tmp/elsewhere/x.png"), `![i](${base}/image?path=${encodeURIComponent("/tmp/elsewhere/x.png")})`);
+  assert.equal(out("file:///Users/me/other/shot%20one.png"), `![i](${base}/image?path=${encodeURIComponent("/Users/me/other/shot one.png")})`);
   assert.equal(parseFileLink(/\]\((\S+)/.exec(out("/etc/passwd"))![1])?.kind, "copy");
   for (const src of ["https://x.y/a.png", "data:image/png;base64,AA==", "/api/hosts/h/agents/a/image?path=x.png"]) assert.equal(out(src), `![i](${src})`);
   assert.equal(rewriteMessageImages("`![i](x.png)`", base, ctx), "`![i](x.png)`");
@@ -230,10 +232,11 @@ test("home, Windows and nested-bracket links resolve like any other local link",
   assert.equal(both, `[![logo](/api/hosts/h/agents/a/image?path=%2Fhome%2Fme%2Fapp%2Fimg%2Fl.png)](/?session=h%3Aa1&file=docs%2Fa.md "docs/a.md")`);
 });
 
-test("images Paseo saved on a remote daemon's machine are copied, not shown broken", () => {
+test("images Paseo saved on a remote daemon's machine load through that daemon", () => {
   const hash = "b".repeat(64);
   const ctx = { session: "h:a1", cwd: "/repo", workspace: "/repo", localHost: false };
-  const out = rewriteMessageImages(`![shot](/tmp/paseo-attachments-x/${hash}.png)`, "/api/hosts/h/agents/a", ctx);
-  assert.deepEqual(parseFileLink(/\]\((\S+)/.exec(out)![1]), { kind: "copy", path: `/tmp/paseo-attachments-x/${hash}.png` });
-  assert.match(rewriteMessageImages(`![shot](/tmp/paseo-attachments-x/${hash}.png)`, "/api/hosts/h/agents/a", { ...ctx, localHost: true }), /^!\[shot\]\(\/api\/hosts\/h\/agents\/a\/image\?path=/);
+  for (const localHost of [false, true])
+    assert.match(rewriteMessageImages(`![shot](/tmp/paseo-attachments-x/${hash}.png)`, "/api/hosts/h/agents/a", { ...ctx, localHost }), /^!\[shot\]\(\/api\/hosts\/h\/agents\/a\/image\?path=/);
+  // An unresolvable `~` path still has nowhere to load from.
+  assert.equal(parseFileLink(/\]\((\S+)/.exec(rewriteMessageImages("![s](~/x.png)", "/api/hosts/h/agents/a", { ...ctx, cwd: "/srv", workspace: "/srv" }))![1])?.kind, "copy");
 });

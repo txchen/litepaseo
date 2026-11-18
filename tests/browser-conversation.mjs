@@ -266,10 +266,11 @@ try {
   assert.equal(new URL(page.url()).pathname, "/");
 
   assert.equal(await agentImage.getAttribute("src"), "/api/hosts/alpha/agents/a1/image?path=%2Fcode%2Fapp%2Fdocs%2Fdiagram.png");
-  // Images the host cannot show as one never render broken: SVG opens in a tab, others copy.
+  // SVG never renders inline (it opens in a tab); raster images anywhere on the host's machine,
+  // even outside the workspace, load through the host.
   assert.equal(await page.locator(".prose a", { hasText: "Flow" }).getAttribute("href"), "/?session=alpha%3Aa1&file=docs%2Fflow.svg");
-  assert.match(await page.locator(".prose a", { hasText: "Lost" }).getAttribute("href"), /^#litepaseo-copy-path=/);
-  assert.equal(await page.locator(".prose img").count(), 1);
+  assert.equal(await page.locator('.prose img[alt="Lost"]').getAttribute("src"), "/api/hosts/alpha/agents/a1/image?path=%2Ftmp%2Flost.png");
+  assert.equal(await page.locator(".prose img").count(), 2);
 
   const attachedImage = page.locator(".user-images img");
   await attachedImage.scrollIntoViewIfNeeded();

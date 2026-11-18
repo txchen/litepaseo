@@ -517,17 +517,18 @@ function rewriteLocalImages(markdown: string, context: FileLinkContext, raster: 
 }
 
 /**
- * Images in an agent message (`base` is "/api/hosts/<host>/agents/<agent>"). Paseo's
- * materialized images (when its daemon is on this machine) and files under the agent's cwd
- * load through the agent image endpoint; other workspace images through the host's file endpoint.
+ * Images in an agent message (`base` is "/api/hosts/<host>/agents/<agent>"). Workspace images
+ * outside the agent's cwd load through the host's file endpoint; any other image on the host's
+ * machine (the agent's cwd, another repo, Paseo's saved attachments) through the agent image
+ * endpoint, which reads it through the daemon.
  */
 export function rewriteMessageImages(markdown: string, base: string, context: FileLinkContext): string {
   const fs = base.replace(/\/agents\/[^/]+$/, "/fs");
   const workspace = context.workspace;
   return rewriteLocalImages(markdown, context, (path, relative) => {
-    if (MATERIALIZED.test(path)) return context.localHost === false ? null : `${base}/image?path=${encodeURIComponent(path)}`;
-    if (within(path, context.cwd)) return `${base}/image?path=${encodeURIComponent(path)}`;
-    return relative !== null ? `${fs}/raw?cwd=${encodeURIComponent(workspace)}&path=${encodeURIComponent(relative)}` : null;
+    if (relative !== null && !within(path, context.cwd) && !MATERIALIZED.test(path))
+      return `${fs}/raw?cwd=${encodeURIComponent(workspace)}&path=${encodeURIComponent(relative)}`;
+    return isAbsolutePath(path) ? `${base}/image?path=${encodeURIComponent(path)}` : null;
   });
 }
 

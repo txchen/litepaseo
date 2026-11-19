@@ -1,3 +1,4 @@
+import { notifyListeners } from "./listeners.ts";
 import type { ProviderSubagent, TimelineCursor, TimelineItem } from "../shared/wire.ts";
 import type { TimelineDriver } from "./timeline-view.ts";
 
@@ -196,6 +197,11 @@ export class HostSubagents {
     this.snapshots = 0;
     this.stopEvents = this.driver.on(UPDATE, (message) => this.receive(message.payload as UpdatePayload));
     const events = (this.events = this.driver.observeEvents([UPDATE]));
+    // A subscription that failed to start is not kept: the next user starts a fresh one instead
+    // of being handed the same rejected one again.
+    events.ready.catch(() => {
+      if (this.events === events) void this.close();
+    });
     events.subscribe({
       // A fresh subscription after a reconnect: updates may have been missed meanwhile.
       snapshot: () => {
@@ -288,7 +294,7 @@ export class HostSubagents {
     clearTimeout(parent.timer);
     parent.timer = undefined;
     const list = this.list(parent);
-    for (const listener of parent.listeners) listener(list);
+    notifyListeners(parent.listeners, list);
   }
 
   private list(parent: Parent) {

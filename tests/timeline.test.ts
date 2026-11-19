@@ -433,3 +433,39 @@ test("a conversation's first rows go out at once, and slow opens report which la
   view.dispose();
   restore.mock.restore();
 });
+
+test("a catch-up page that claims more rows but does not advance falls back to the tail", async () => {
+  const daemon = new ReferenceDaemon();
+  const h = harness(daemon);
+  await sleep(550);
+  const fetch = daemon.fetch.bind(daemon);
+  daemon.fetch = (options: any) => {
+    const page = fetch(options);
+    // A confused daemon: always "more", never past the cursor.
+    return options.direction === "after" ? { ...page, hasNewer: true, endCursor: options.cursor } : page;
+  };
+  h.append({ type: "user_message", text: "lost" }, "t1");
+  h.emit(h.append({ type: "assistant_message", text: "reply" }, "t1"));
+  await sleep(550);
+  const directions = daemon.fetches.map((f: any) => f.direction);
+  assert.deepEqual(directions.slice(-2), ["after", "tail"], "one catch-up page, then the tail, not an endless loop");
+  assert.deepEqual(visible(h.store), expected(daemon, 1));
+  h.view.dispose();
+});
+
+test("a catch-up that touches a row older than the rows held keeps them contiguous", async () => {
+  const daemon = new ReferenceDaemon();
+  daemon.append({ type: "tool_call", callId: "old", status: "running", detail: { type: "unknown" } } as any, "t0");
+  for (let i = 0; i < 80; i++) daemon.append({ type: "user_message", text: "m" + i }, "t" + i);
+  const h = harness(daemon);
+  await sleep(550);
+  const first = h.store.rows[0].seqStart;
+  assert.ok(first > 1 && h.store.hasOlder);
+  // The old tool call finishes; the event is missed, so a catch-up reads it back.
+  h.append({ type: "tool_call", callId: "old", status: "completed", detail: { type: "shell", command: "ls" } } as any, "t0");
+  h.emit(h.append({ type: "user_message", text: "next" }, "t9"));
+  await sleep(550);
+  assert.equal(h.store.rows[0].seqStart, first, "the older row is left to history pages");
+  assert.deepEqual(visible(h.store), expected(daemon, first));
+  h.view.dispose();
+});

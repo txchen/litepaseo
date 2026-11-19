@@ -78,6 +78,29 @@ export class Store {
     if (value === null) this.db.prepare("DELETE FROM settings WHERE key=?").run(key);
     else this.db.prepare("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, value);
   }
+  /** Settings whose key starts with `prefix`, as [key, value] pairs. */
+  settingsWithPrefix(prefix: string): [string, string][] {
+    return this.db
+      .prepare("SELECT key,value FROM settings WHERE substr(key,1,length(?))=?")
+      .all(prefix, prefix)
+      .map((row) => [String(row.key), String(row.value)]);
+  }
+  /**
+   * Runs `fn` in one write transaction (BEGIN IMMEDIATE), rolled back if it throws. Inside an
+   * open transaction it simply joins it: the outermost caller commits or rolls back.
+   */
+  transaction<T>(fn: () => T): T {
+    if (this.db.isTransaction) return fn();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = fn();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   /** Compare-and-set, for single-use values such as the last accepted TOTP step. */
   advanceSetting(key: string, value: number) {
     const current = Number(this.setting(key) ?? -1);

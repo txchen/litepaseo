@@ -76,8 +76,10 @@ const detail = (a: AgentSummary) => {
         class="task-card"
         :class="'is-' + a.state"
         tabindex="0"
+        :aria-label="'Open ' + (a.title || 'Untitled session')"
         @click="emit('open', a.key)"
-        @keydown.enter="emit('open', a.key)"
+        @keydown.enter.self.prevent="emit('open', a.key)"
+        @keydown.space.self.prevent="emit('open', a.key)"
       >
         <div class="task-top">
           <span class="status-dot" :class="'is-' + (a.state === 'needs_input' ? 'attention' : a.state === 'failed' ? 'error' : a.state)"></span>

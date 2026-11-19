@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import type { HostState, ProjectOption, ProviderOption } from "../shared/wire.ts";
 import Icon from "./Icon.vue";
+import { confirmAction } from "./confirm.ts";
 import { formatMessageTimestamp } from "./timeline-display.ts";
 
 /** Scheduled agent runs on every host (Paseo's schedules): list, run now, pause, logs, create. */
@@ -26,6 +27,8 @@ interface Run { id: string; status: string; startedAt: string | null; endedAt: s
 const groups = ref<{ hostId: string; schedules: Schedule[]; error: string | null }[] | null>(null);
 const error = ref("");
 const busy = ref<string | null>(null);
+/** Schedule ids are only unique per host. */
+const rowKey = (hostId: string, s: Schedule) => `${hostId}:${s.id}`;
 const label = (id: string) => props.hosts.find((h) => h.id === id)?.label ?? "Unknown host";
 async function load() {
   try {
@@ -40,8 +43,8 @@ const rows = computed(() => (groups.value ?? []).flatMap((g) => g.schedules.map(
 const failures = computed(() => (groups.value ?? []).filter((g) => g.error));
 
 async function act(hostId: string, s: Schedule, what: "run" | "pause" | "resume" | "delete") {
-  if (what === "delete" && !confirm(`Delete the schedule “${s.name || s.prompt.slice(0, 40)}”?`)) return;
-  busy.value = s.id;
+  if (what === "delete" && !(await confirmAction({ title: `Delete the schedule “${s.name || s.prompt.slice(0, 40)}”?`, confirmLabel: "Delete", danger: true }))) return;
+  busy.value = rowKey(hostId, s);
   try {
     await props.api(`/hosts/${encodeURIComponent(hostId)}/schedules/${encodeURIComponent(s.id)}${what === "delete" ? "" : "/" + what}`, what === "delete" ? "DELETE" : "POST");
     await load();
@@ -56,13 +59,15 @@ async function act(hostId: string, s: Schedule, what: "run" | "pause" | "resume"
 const openLogs = ref<string | null>(null);
 const runs = ref<Run[]>([]);
 async function toggleLogs(hostId: string, s: Schedule) {
-  if (openLogs.value === s.id) return (openLogs.value = null);
-  openLogs.value = s.id;
+  const key = rowKey(hostId, s);
+  if (openLogs.value === key) return (openLogs.value = null);
+  openLogs.value = key;
   runs.value = [];
   try {
-    runs.value = (await props.api(`/hosts/${encodeURIComponent(hostId)}/schedules/${encodeURIComponent(s.id)}/logs`)).runs;
+    const result = await props.api(`/hosts/${encodeURIComponent(hostId)}/schedules/${encodeURIComponent(s.id)}/logs`);
+    if (openLogs.value === key) runs.value = result.runs;
   } catch (e) {
-    error.value = (e as Error).message;
+    if (openLogs.value === key) error.value = (e as Error).message;
   }
 }
 
@@ -95,13 +100,14 @@ watch(() => form.value.hostId, async (id) => {
   if (!id) return;
   try {
     const [p, j] = await Promise.all([props.api(`/hosts/${encodeURIComponent(id)}/providers`), props.api(`/hosts/${encodeURIComponent(id)}/projects`)]);
+    if (form.value.hostId !== id) return; // another host was chosen meanwhile
     providers.value = p;
     projects.value = j;
     form.value.provider ||= p.find((x: ProviderOption) => x.status === "ready")?.id ?? p[0]?.id ?? "";
     form.value.cwd ||= j[0]?.rootPath ?? "";
 
   } catch (e) {
-    error.value = (e as Error).message;
+    if (form.value.hostId === id) error.value = (e as Error).message;
   }
 });
 /** An edited schedule may point at a directory the project list does not show. */
@@ -114,6 +120,8 @@ const projectChoices = computed(() => {
 });
 const models = computed(() => providers.value?.find((p) => p.id === form.value.provider)?.models ?? []);
 watch(models, (list) => {
+  // Providers still loading (host just chosen or changed): keep the model, e.g. an edited schedule's.
+  if (!providers.value) return;
   if (!list.some((m) => m.id === form.value.model)) form.value.model = list.find((m) => m.isDefault)?.id ?? list[0]?.id ?? "";
 });
 const cron = computed(() => {
@@ -306,15 +314,15 @@ async function create() {
               </div>
             </div>
             <div class="schedule-actions">
-              <button class="icon-btn" title="Run now" aria-label="Run now" :disabled="busy === s.id" @click="act(hostId, s, 'run')"><Icon name="play" :size="14" /></button>
-              <button v-if="s.status === 'active'" class="icon-btn" title="Pause" aria-label="Pause" :disabled="busy === s.id" @click="act(hostId, s, 'pause')"><Icon name="pause" :size="14" /></button>
-              <button v-else class="icon-btn" title="Resume" aria-label="Resume" :disabled="busy === s.id" @click="act(hostId, s, 'resume')"><Icon name="refresh" :size="14" /></button>
-              <button class="icon-btn" title="Edit" aria-label="Edit schedule" :disabled="busy === s.id" @click="startEdit(hostId, s)"><Icon name="edit" :size="14" /></button>
-              <button class="icon-btn" title="Run history" aria-label="Run history" :aria-expanded="openLogs === s.id" @click="toggleLogs(hostId, s)"><Icon name="list" :size="14" /></button>
-              <button class="icon-btn" title="Delete" aria-label="Delete schedule" :disabled="busy === s.id" @click="act(hostId, s, 'delete')"><Icon name="trash" :size="14" /></button>
+              <button class="icon-btn" title="Run now" aria-label="Run now" :disabled="busy === rowKey(hostId, s)" @click="act(hostId, s, 'run')"><Icon name="play" :size="14" /></button>
+              <button v-if="s.status === 'active'" class="icon-btn" title="Pause" aria-label="Pause" :disabled="busy === rowKey(hostId, s)" @click="act(hostId, s, 'pause')"><Icon name="pause" :size="14" /></button>
+              <button v-else class="icon-btn" title="Resume" aria-label="Resume" :disabled="busy === rowKey(hostId, s)" @click="act(hostId, s, 'resume')"><Icon name="refresh" :size="14" /></button>
+              <button class="icon-btn" title="Edit" aria-label="Edit schedule" :disabled="busy === rowKey(hostId, s)" @click="startEdit(hostId, s)"><Icon name="edit" :size="14" /></button>
+              <button class="icon-btn" title="Run history" aria-label="Run history" :aria-expanded="openLogs === rowKey(hostId, s)" @click="toggleLogs(hostId, s)"><Icon name="list" :size="14" /></button>
+              <button class="icon-btn" title="Delete" aria-label="Delete schedule" :disabled="busy === rowKey(hostId, s)" @click="act(hostId, s, 'delete')"><Icon name="trash" :size="14" /></button>
             </div>
           </div>
-          <div v-if="openLogs === s.id" class="schedule-runs">
+          <div v-if="openLogs === rowKey(hostId, s)" class="schedule-runs">
             <p class="schedule-prompt">{{ s.prompt }}</p>
             <p v-if="!runs.length" class="subtle small">No runs yet.</p>
             <div v-for="r in runs" :key="r.id" class="schedule-run" :class="'is-' + r.status">

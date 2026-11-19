@@ -197,7 +197,8 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
         this.upsert(raw, seq, false, extra);
       }
       for (const removal of payload.sync.removals) this.remove(removal.id, removal.seq);
-      this.cursor = { generation: payload.sync.generation, afterSeq: payload.sync.headSeq };
+      // A live update may already have moved the cursor past the snapshot's head.
+      this.cursor = { generation: payload.sync.generation, afterSeq: Math.max(this.cursor.afterSeq, payload.sync.headSeq) };
       return;
     }
     let entries = payload.entries;
@@ -216,14 +217,22 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
     const seen = new Set<string>();
     for (const e of entries) {
       const { raw, seq, extra } = this.adapter.entry(e);
-      seen.add(this.adapter.id(raw));
+      const id = this.adapter.id(raw);
+      seen.add(id);
+      // Paged rows predate the live updates seen while paging: those win, deletions included.
+      if (this.liveTouched?.has(id)) continue;
       this.upsert(raw, sync ? seq : undefined, sync, extra);
     }
     for (const id of [...this.members.keys()])
       if (!seen.has(id) && !this.liveTouched?.has(id)) this.remove(id);
     this.liveTouched = null;
     this.cursor = payload.sync
-      ? { generation: payload.sync.generation, afterSeq: payload.sync.headSeq }
+      ? {
+          generation: payload.sync.generation,
+          afterSeq: this.cursor?.generation === payload.sync.generation
+            ? Math.max(this.cursor.afterSeq, payload.sync.headSeq)
+            : payload.sync.headSeq,
+        }
       : undefined;
   }
 
@@ -253,7 +262,8 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
     const kept = extra === undefined ? member?.extra : extra;
     const { summary, memo } = this.adapter.summarize(this.hostId, raw, kept, member?.memo);
     const fingerprint = JSON.stringify(summary);
-    const next: Member<Extra, Memo, S> = { fingerprint, version, extra: kept, memo, summary, retained: this.adapter.retain?.(raw) };
+    // A versionless update keeps the version guard of the last versioned one.
+    const next: Member<Extra, Memo, S> = { fingerprint, version: version ?? member?.version, extra: kept, memo, summary, retained: this.adapter.retain?.(raw) };
     this.members.set(id, next);
     if (member?.fingerprint === fingerprint) {
       next.summary = member.summary;

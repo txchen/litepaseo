@@ -12,6 +12,18 @@ const ESCAPES: Record<string, string> = {
   "'": "&#39;",
 };
 const escape = (text: string) => text.replace(/[&<>"']/g, (c) => ESCAPES[c]);
+const UNESCAPES: Record<string, string> = Object.fromEntries(Object.entries(ESCAPES).map(([c, e]) => [e, c]));
+const unescape = (text: string) => text.replace(/&(?:amp|lt|gt|quot|#39);/g, (e) => UNESCAPES[e]);
+
+const emphasis = (s: string) =>
+  s
+    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_\n]+)__/g, "<strong>$1</strong>")
+    .replace(/(^|[^*\w])\*([^*\s][^*\n]*?)\*(?!\w)/g, "$1<em>$2</em>")
+    .replace(/(^|[^_\w])_([^_\s][^_\n]*?)_(?!\w)/g, "$1<em>$2</em>")
+    .replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
+/** Stands in for a finished tag; NUL is stripped from the input, so it cannot be forged. */
+const TOKEN = /\u0000(\d+)\u0000/g;
 
 function safeUrl(url: string) {
   const trimmed = url.trim();
@@ -30,31 +42,30 @@ function inline(text: string): string {
       continue;
     }
     if (i % 3 === 1) continue;
-    let s = escape(parts[i]);
+    // Each finished tag is set aside before the next pass, so later passes (autolinks, emphasis)
+    // never rewrite a URL, title or alt text inside one, nor break out of its quotes.
+    const held: string[] = [];
+    const hold = (html: string) => `\u0000${held.push(html) - 1}\u0000`;
+    const restore = (html: string): string => html.replace(TOKEN, (_m, n: string) => restore(held[Number(n)]!));
+    let s = escape(parts[i].replace(/\u0000/g, ""));
     // Only images served by this app (rewritten local references); remote images stay links.
     s = s.replace(/!\[([^\]]*)\]\((\/api\/hosts\/[^)\s]+)\)/g, (_m, alt: string, src: string) =>
-      `<img src="${src}" alt="${alt}" loading="lazy" decoding="async">`);
+      hold(`<img src="${src}" alt="${alt}" loading="lazy" decoding="async">`));
     s = s.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+&quot;((?:(?!&quot;).)*)&quot;)?\)/g, (match, label: string, href: string, title?: string) => {
-      const raw = href.replace(/&amp;/g, "&");
+      const raw = unescape(href);
       const titled = title ? ` title="${title}"` : "";
-      if (appLink(raw)) return `<a href="${escape(raw)}"${titled}>${label}</a>`;
+      if (appLink(raw)) return hold(`<a href="${escape(raw)}"${titled}>${emphasis(label)}</a>`);
       const url = safeUrl(raw);
       return url
-        ? `<a href="${escape(url)}"${titled} target="_blank" rel="noopener noreferrer">${label}</a>`
+        ? hold(`<a href="${escape(url)}"${titled} target="_blank" rel="noopener noreferrer">${emphasis(label)}</a>`)
         : match;
     });
     s = s.replace(
-      /(^|[\s(])(https?:\/\/[^\s<)]+[^\s<).,;:!?'"])/g,
+      /(^|[\s(])(https?:\/\/[^\s<)\u0000]+[^\s<).,;:!?'"\u0000])/g,
       (_m, lead: string, url: string) =>
-        `${lead}<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
+        `${lead}${hold(`<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`)}`,
     );
-    s = s
-      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
-      .replace(/__([^_\n]+)__/g, "<strong>$1</strong>")
-      .replace(/(^|[^*\w])\*([^*\s][^*\n]*?)\*(?!\w)/g, "$1<em>$2</em>")
-      .replace(/(^|[^_\w])_([^_\s][^_\n]*?)_(?!\w)/g, "$1<em>$2</em>")
-      .replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
-    out += s;
+    out += restore(emphasis(s));
   }
   return out;
 }

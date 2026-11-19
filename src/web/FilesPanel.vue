@@ -18,32 +18,42 @@ const error = ref("");
 const base = computed(() => `/hosts/${encodeURIComponent(props.hostId)}/fs`);
 const q = (path: string) => `cwd=${encodeURIComponent(props.cwd)}&path=${encodeURIComponent(path)}`;
 
-const inflight = new Map<string, Promise<void>>();
+let inflight = new Map<string, Promise<void>>();
+/** Bumped when the workspace changes: answers for the previous one are dropped. */
+let generation = 0;
 /** Loads a directory's entries; a second call while one is in flight waits for it. */
 function load(path: string): Promise<void> {
   const running = inflight.get(path);
   if (running) return running;
-  const done = fetchEntries(path).finally(() => inflight.delete(path));
-  inflight.set(path, done);
+  const map = inflight;
+  const done = fetchEntries(path).finally(() => { if (map.get(path) === done) map.delete(path); });
+  map.set(path, done);
   return done;
 }
 async function fetchEntries(path: string) {
+  const current = generation;
   loading.value = new Set(loading.value).add(path);
   try {
     const result = await props.api(`${base.value}/list?${q(path)}`);
+    if (current !== generation) return;
     const next = new Map(children.value);
     next.set(path, result.entries as Entry[]);
     children.value = next;
     error.value = "";
   } catch (e) {
-    error.value = (e as Error).message;
+    if (current === generation) error.value = (e as Error).message;
   } finally {
+    if (current !== generation) return;
     const next = new Set(loading.value);
     next.delete(path);
     loading.value = next;
   }
 }
 watch(() => [props.hostId, props.cwd], () => {
+  generation++;
+  inflight = new Map();
+  loading.value = new Set();
+  error.value = "";
   children.value = new Map();
   expanded.value = new Set();
   void load(".");
@@ -79,10 +89,13 @@ watch(() => props.reveal?.seq, async () => {
   const target = props.reveal?.path;
   if (!target) return;
   const parts = target === "." ? [] : target.split("/").filter(Boolean);
+  const current = generation;
   await load(".");
   for (let i = 1; i <= parts.length; i++) {
+    if (current !== generation) return;
     const dir = parts.slice(0, i).join("/");
     if (!children.value.has(dir)) await load(dir);
+    if (current !== generation) return;
     expanded.value = new Set(expanded.value).add(dir);
   }
   revealed.value = parts.join("/") || null;

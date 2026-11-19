@@ -54,13 +54,21 @@ export function setConfig(store: Store, key: ConfigKey, value: string | null) {
 
 export type ConfigEntry = { key: ConfigKey; value: string; source: "environment" | "saved" | "default"; saved: string | null };
 
-/** The value in effect for each key: environment, then saved configuration, then the default. */
+/**
+ * The value in effect for each key: environment, then saved configuration, then the default.
+ * Throws when an environment override is invalid.
+ */
 export function effectiveConfig(store: Store, env: NodeJS.ProcessEnv): Record<ConfigKey, ConfigEntry> {
   const entries = configKeys.map((key): ConfigEntry => {
     const { env: name, fallback } = CONFIG_KEYS[key];
     const saved = store.setting(settingName(key));
     const fromEnv = env[name];
-    if (fromEnv !== undefined && fromEnv !== "") return { key, value: fromEnv, source: "environment", saved };
+    if (fromEnv !== undefined && fromEnv !== "") {
+      // Checked like a saved value: a typo must not start the server on an unintended port or address.
+      const problem = CONFIG_KEYS[key].check(fromEnv);
+      if (problem) throw new Error(`${name}=${JSON.stringify(fromEnv)} is not valid. ${problem}`);
+      return { key, value: fromEnv, source: "environment", saved };
+    }
     if (saved !== null) return { key, value: saved, source: "saved", saved };
     return { key, value: fallback, source: "default", saved };
   });

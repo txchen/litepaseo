@@ -1,0 +1,453 @@
+/* ---------------------------------------------------------------------------------------------
+   Base: reset, type, form fields
+   --------------------------------------------------------------------------------------------- */
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--surface-0);
+  color: var(--fg);
+  font: 14px/1.5 var(--font);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+#app {
+  height: 100%;
+}
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+  background: none;
+  border: 0;
+  padding: 0;
+}
+button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+input,
+textarea,
+select {
+  width: 100%;
+  background: var(--surface-0);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px 11px;
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+/* Zero specificity, so a field drawn without a frame (the composer, the sidebar search) sets
+   border and box-shadow with a plain rule. */
+:where(input, textarea, select):focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+::placeholder {
+  color: var(--fg-faint);
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+}
+code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0.08em 0.35em;
+}
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.icon {
+  flex: none;
+  display: block;
+}
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+.subtle,
+.muted-text {
+  color: var(--fg-muted);
+}
+.small {
+  font-size: 12.5px;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Controls: buttons, fields, pills, badges, status marks, segmented switches
+   --------------------------------------------------------------------------------------------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.btn-primary:not(:disabled):hover {
+  background: var(--accent-hover);
+}
+.btn-outline {
+  border: 1px solid var(--border-strong);
+  background: var(--surface-0);
+}
+.btn-outline:not(:disabled):hover,
+.btn-ghost:not(:disabled):hover {
+  background: var(--hover);
+}
+.btn-ghost {
+  color: var(--fg-muted);
+}
+.btn-danger {
+  background: var(--danger);
+  color: var(--surface-0);
+}
+.btn-danger:not(:disabled):hover {
+  background: color-mix(in srgb, var(--danger) 86%, var(--fg));
+}
+.btn-block {
+  width: 100%;
+  height: 40px;
+}
+.btn-sm {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  gap: 4px;
+}
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  color: var(--fg-muted);
+}
+@media (hover: hover) {
+  .icon-btn:hover {
+    background: var(--hover);
+    color: var(--fg);
+  }
+}
+.icon-btn.chosen {
+  background: var(--selected);
+  color: var(--fg);
+}
+.link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.field {
+  display: block;
+}
+.field > span {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+.count {
+  margin-left: auto;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-faint);
+  font-weight: 500;
+}
+.pill {
+  flex: none;
+  white-space: nowrap;
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.pill-attention {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+.pill-current {
+  margin-left: 8px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.badge {
+  padding: 1px 8px 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--fg);
+  font-size: 11.5px;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+.badge.is-running {
+  background: var(--running-soft);
+  color: var(--running);
+}
+.badge.is-error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--seg-track);
+}
+.segmented button {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+.segmented button.chosen {
+  background: var(--seg-thumb);
+  color: var(--fg);
+  box-shadow: var(--shadow-sm), 0 0 0 1px var(--border);
+}
+.segmented-sm button {
+  height: 24px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+.row-title {
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+.row-sub {
+  font-size: 12.5px;
+  color: var(--fg-muted);
+}
+.row-sub.is-error {
+  color: var(--danger);
+}
+.status-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-faint);
+}
+.status-dot.is-running {
+  background: var(--running);
+  box-shadow: 0 0 0 0 var(--running-soft);
+  animation: pulse 3s steps(3, end) infinite paused;
+}
+.status-dot.is-attention {
+  background: var(--warn);
+}
+.status-dot.is-error {
+  background: var(--danger);
+}
+.status-dot.is-idle-ok {
+  background: var(--accent);
+}
+.status-dot.is-offline {
+  background: var(--fg-faint);
+}
+.status-dot.is-unread {
+  background: var(--unread);
+}
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--pulse);
+  }
+  100% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+.spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--surface-3);
+  border-top-color: var(--accent);
+  animation: spin 4s steps(4, end) infinite paused;
+}
+/* The turn's working spinner is turned by the elapsed-time clock instead, in step with its timer. */
+.spinner-ticked {
+  animation: none;
+}
+.spinner-on-accent {
+  border-color: rgba(255, 255, 255, 0.35);
+  border-top-color: var(--accent-fg);
+}
+.spinner-sm {
+  width: 11px;
+  height: 11px;
+  border-width: 1.5px;
+  margin-top: 3px;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-dot.is-running,
+  .spinner {
+    animation: none;
+  }
+  .spinner-ticked {
+    transform: none !important;
+  }
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Cards and forms (pages and dialogs)
+   --------------------------------------------------------------------------------------------- */
+.card {
+  background: var(--surface-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.card-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 16px;
+}
+.card-row + .card-row {
+  border-top: 1px solid var(--border);
+}
+.form-card {
+  padding: 18px 16px;
+  display: grid;
+  gap: 14px;
+}
+.field-help {
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin-top: -6px;
+}
+.field-help p {
+  margin: 0 0 6px;
+}
+.field-help summary {
+  cursor: pointer;
+  color: var(--accent);
+  width: fit-content;
+}
+.field-help dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 12px;
+  margin: 8px 0 0;
+}
+.field-help dt {
+  font-weight: 500;
+  color: var(--fg);
+}
+.field-help dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 560px) {
+  .field-help dl {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .field-help dd {
+    margin-bottom: 6px;
+  }
+}
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.form-actions.spaced {
+  margin-top: 10px;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Phone and touch
+   --------------------------------------------------------------------------------------------- */
+@media (max-width: 760px) {
+  html,
+  body {
+    font-size: 15px;
+  }
+  .btn {
+    height: 40px;
+  }
+  .btn-sm {
+    height: 32px;
+    padding: 0 12px;
+  }
+  input,
+  select,
+  textarea {
+    font-size: 16px; /* prevents iOS zoom on focus */
+  }
+  .hide-sm {
+    display: none !important;
+  }
+  /* Reading sizes; desktop typography stays unchanged. */
+  .row-title {
+    font-size: 15px;
+  }
+  .row-sub,
+  .subtle,
+  .field-help,
+  .field > span {
+    font-size: 14px;
+  }
+  .field input,
+  .field select,
+  .field textarea {
+    font-size: 16px;
+  }
+}
+/* Touch: small controls get finger-sized targets. Compact icon buttons keep their drawn size and
+   gain an invisible hit area, so dense rows keep their layout. */
+@media (pointer: coarse) {
+  .icon-btn {
+    position: relative;
+  }
+  .icon-btn::after {
+    content: "";
+    position: absolute;
+    inset: -6px;
+  }
+  .btn-sm {
+    height: 34px;
+    padding: 0 12px;
+  }
+}

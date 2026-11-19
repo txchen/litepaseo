@@ -24,3 +24,30 @@ test("host removal awaits unsubscribe acknowledgements before closing the SDK tr
   assert.ok(calls.indexOf("subagents released") < calls.indexOf("transport closed"));
   assert.equal(calls.at(-1), "transport closed");
 });
+
+test("host removal stops status reports first and finishes its cleanup even when a release fails", async () => {
+  const hosts = new Hosts();
+  const calls: string[] = [];
+  let changes = 0;
+  hosts.onHostsChanged(() => changes++);
+  hosts.clients.set("h", {
+    directory: { dispose: async () => { calls.push("directory"); throw new Error("socket closed"); } },
+    workspaces: { dispose: async () => {} },
+    subagents: { dispose: async () => {} },
+    stopStatus: () => calls.push("status stopped"),
+    api: { dispose: async () => { throw new Error("already gone"); } },
+    driver: { close: async () => { calls.push("transport closed"); } },
+  } as never);
+  const warn = console.warn;
+  console.warn = () => {};
+  try { await hosts.remove("h"); } finally { console.warn = warn; }
+  assert.equal(calls[0], "status stopped");
+  assert.equal(calls.at(-1), "transport closed");
+  assert.equal(changes, 1);
+  assert.equal(hosts.clients.has("h"), false);
+});
+
+test("a timeline snapshot that cannot start watching rejects without leaving its timer", async () => {
+  const hosts = new Hosts();
+  await assert.rejects(hosts.timelineSnapshot("missing", "a", 60_000));
+});

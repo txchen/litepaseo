@@ -31,16 +31,21 @@ const q = computed(() => `cwd=${encodeURIComponent(props.cwd)}&path=${encodeURIC
 const isImage = computed(() => /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(props.path));
 const isMarkdown = computed(() => /\.(md|markdown|mdx)$/i.test(props.path) && file.value?.text !== undefined);
 
+/** Only the latest load writes: a slow answer for a previous file must not replace this one. */
+let loadGeneration = 0;
 async function load() {
+  const generation = ++loadGeneration;
   loading.value = true;
   error.value = "";
   try {
-    file.value = await props.api(`${base.value}/read?${q.value}`);
+    const result = await props.api(`${base.value}/read?${q.value}`);
+    if (generation !== loadGeneration) return;
+    file.value = result;
     if (isMarkdown.value) void loadMarkstream();
   } catch (e) {
-    error.value = (e as Error).message;
+    if (generation === loadGeneration) error.value = (e as Error).message;
   } finally {
-    loading.value = false;
+    if (generation === loadGeneration) loading.value = false;
   }
 }
 watch(() => [props.hostId, props.cwd, props.path], load, { immediate: true });
@@ -124,6 +129,9 @@ watch([() => props.jump?.seq, () => file.value], async () => {
   });
 }, { immediate: true });
 onBeforeUnmount(() => {
+  loadGeneration++;
+  clearTimeout(noticeTimer);
+  clearTimeout(copiedTimer);
   if (props.viewKey) emit("view", props.viewKey, { rendered: rendered.value, scrollTop: body.value?.scrollTop ?? 0, mark: mark.value, jumped });
 });
 
@@ -134,10 +142,12 @@ const gutter = computed(() => Array.from({ length: lineCount.value }, (_, i) => 
 const highlighted = computed(() => file.value?.text === undefined ? null : highlight(file.value.text, languageFor(props.path)));
 const size = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
 const copied = ref(false);
+let copiedTimer: ReturnType<typeof setTimeout> | undefined;
 async function copyPath() {
   await navigator.clipboard?.writeText(fullPath.value).catch(() => {});
   copied.value = true;
-  setTimeout(() => (copied.value = false), 1200);
+  clearTimeout(copiedTimer);
+  copiedTimer = setTimeout(() => (copied.value = false), 1200);
 }
 </script>
 

@@ -70,7 +70,11 @@ export function manageService(action: string, options: ServiceOptions,
   if (action === "uninstall") {
     if (!existsSync(definition.path)) return "Service is not installed.";
     if (options.platform === "linux") run("systemctl", ["--user", "disable", "--now", definition.name]);
-    else run("launchctl", ["bootout", `gui/${options.uid}`, definition.path]);
+    else {
+      // Not loaded (stopped, or never bootstrapped since login): there is nothing to boot out,
+      // and the plist must still go.
+      try { run("launchctl", ["bootout", `gui/${options.uid}`, definition.path]); } catch {}
+    }
     unlinkSync(definition.path);
     if (options.platform === "linux") run("systemctl", ["--user", "daemon-reload"]);
     return "Autostart removed; application data is preserved.";

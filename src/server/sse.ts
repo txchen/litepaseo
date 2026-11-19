@@ -8,6 +8,8 @@ const HEARTBEAT_MS = 20_000;
  * the browser's side of each stream to find out why.
  */
 const NUDGE_MS = 50;
+/** Bytes a stream may queue for a client that is not reading before it is dropped. */
+const MAX_QUEUED_BYTES = 16 * 1024 * 1024;
 
 /** How a stream's body is compressed: brotli or gzip when the browser accepts it, else none. */
 export type StreamEncoding = "br" | "gzip" | null;
@@ -37,76 +39,101 @@ export function eventStream(
   encoding: StreamEncoding = null,
 ) {
   const encoder = new TextEncoder();
-  let cleanup: (() => void) | undefined;
+  let close: (() => void) | undefined;
   let nudge: ReturnType<typeof setTimeout> | undefined;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
   let compressor: BrotliCompress | Gzip | null = null;
+  let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
   let stopped = false;
+  /** Releases everything the stream holds; safe at any point, any number of times. */
   const stop = () => {
+    if (stopped) return;
     stopped = true;
+    signal.removeEventListener("abort", end);
     clearTimeout(nudge);
+    clearInterval(heartbeat);
     compressor?.destroy();
-    cleanup?.();
-    cleanup = undefined;
+    const release = close;
+    close = undefined;
+    release?.();
   };
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      const output = (bytes: Uint8Array) => {
-        if (stopped) return;
-        try {
-          controller.enqueue(bytes);
-        } catch {
-          stop();
+  /** Stops and ends the response. */
+  function end() {
+    stop();
+    try {
+      stream?.close();
+    } catch {}
+  }
+  const body = new ReadableStream<Uint8Array>(
+    {
+      start(controller) {
+        stream = controller;
+        // The client left before the stream started: there is nothing to open.
+        if (signal.aborted) return end();
+        signal.addEventListener("abort", end);
+        const output = (bytes: Uint8Array) => {
+          if (stopped) return;
+          try {
+            controller.enqueue(bytes);
+          } catch {
+            return stop();
+          }
+          // A client that stops reading must not make the server buffer without bound: drop the
+          // stream and its queue instead; the browser reconnects and resyncs.
+          if ((controller.desiredSize ?? 0) < -MAX_QUEUED_BYTES) {
+            stop();
+            try {
+              controller.error(new Error("event stream client is not reading"));
+            } catch {}
+          }
+        };
+        if (encoding) {
+          compressor = encoding === "br"
+            ? createBrotliCompress({ params: { [constants.BROTLI_PARAM_QUALITY]: 5 } })
+            : createGzip({ level: 6 });
+          compressor.on("data", (chunk: Buffer) => output(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)));
+          compressor.on("error", stop);
         }
-      };
-      if (encoding) {
-        compressor = encoding === "br"
-          ? createBrotliCompress({ params: { [constants.BROTLI_PARAM_QUALITY]: 5 } })
-          : createGzip({ level: 6 });
-        compressor.on("data", (chunk: Buffer) => output(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)));
-        compressor.on("error", stop);
-      }
-      const flushMode = encoding === "br" ? constants.BROTLI_OPERATION_FLUSH : constants.Z_SYNC_FLUSH;
-      const enqueue = (text: string) => {
+        const flushMode = encoding === "br" ? constants.BROTLI_OPERATION_FLUSH : constants.Z_SYNC_FLUSH;
+        const enqueue = (text: string) => {
+          if (stopped) return;
+          if (!compressor) return output(encoder.encode(text));
+          compressor.write(text);
+          compressor.flush(flushMode);
+        };
+        const write = (text: string) => {
+          enqueue(text);
+          if (stopped || nudge) return;
+          nudge = setTimeout(() => {
+            nudge = undefined;
+            enqueue(":\n\n");
+          }, NUDGE_MS);
+        };
+        heartbeat = setInterval(() => {
+          // A heartbeat needs no nudge: it carries nothing anyone waits for.
+          if (valid()) return enqueue(": ping\n\n");
+          end();
+        }, HEARTBEAT_MS);
+        // Sent at once, so the response starts even while the first data is still loading: the
+        // browser can tell a slow server or proxy from a slow host.
+        write(": open\n\n");
         if (stopped) return;
-        if (!compressor) return output(encoder.encode(text));
-        compressor.write(text);
-        compressor.flush(flushMode);
-      };
-      const write = (text: string) => {
-        enqueue(text);
-        if (stopped || nudge) return;
-        nudge = setTimeout(() => {
-          nudge = undefined;
-          enqueue(":\n\n");
-        }, NUDGE_MS);
-      };
-      const heartbeat = setInterval(() => {
-        // A heartbeat needs no nudge: it carries nothing anyone waits for.
-        if (valid()) return enqueue(": ping\n\n");
-        stop();
+        let release: () => void;
         try {
-          controller.close();
-        } catch {}
-      }, HEARTBEAT_MS);
-      // Sent at once, so the response starts even while the first data is still loading: the
-      // browser can tell a slow server or proxy from a slow host.
-      write(": open\n\n");
-      const close = open((data) => write(`data: ${JSON.stringify(data)}\n\n`));
-      cleanup = () => {
-        clearInterval(heartbeat);
-        close();
-      };
-      // Stopped while opening (the client already left): release what open() acquired.
-      if (stopped) stop();
-      signal.addEventListener("abort", () => {
-        stop();
-        try {
-          controller.close();
-        } catch {}
-      });
+          release = open((data) => write(`data: ${JSON.stringify(data)}\n\n`));
+        } catch (error) {
+          stop();
+          throw error;
+        }
+        // Stopped while opening (the client already left): release what open() acquired.
+        if (stopped) release();
+        else close = release;
+      },
+      cancel: stop,
     },
-    cancel: stop,
-  });
+    // Counted in bytes, so the backpressure guard above bounds the queue's real size.
+    new ByteLengthQueuingStrategy({ highWaterMark: 64 * 1024 }),
+  );
   return new Response(body, {
     headers: {
       "Content-Type": "text/event-stream",

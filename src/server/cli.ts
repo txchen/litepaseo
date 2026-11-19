@@ -6,7 +6,7 @@ import { FAILED_EVENT, StartupFailure, supervise } from "./supervisor.ts";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdirSync, readFileSync, existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
+import { mkdirSync, readFileSync, existsSync, statSync, fstatSync, openSync, readSync, closeSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { connect } from "node:net";
 import { backup, restore } from "./backup.ts";
@@ -128,27 +128,44 @@ async function showStatus(paths: Paths, args: Parsed) {
   if (!state) process.exitCode = NOT_RUNNING;
 }
 
+/** A log file's text, or nothing when it does not exist (yet, or any more after a rotation). */
+function readIfPresent(path: string) {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw error;
+  }
+}
+
 async function logs(paths: Paths, args: Parsed) {
   const count = args.flags.lines === undefined ? 100 : Number(args.flags.lines);
   if (!Number.isInteger(count) || count < 0) throw new UsageError("--lines needs a whole number.");
   // Older lines come from the newest archive when the current file is short.
-  let text = existsSync(paths.log) ? readFileSync(paths.log, "utf8") : "";
-  if (text.split("\n").length <= count && existsSync(paths.log + ".1")) text = readFileSync(paths.log + ".1", "utf8") + text;
+  let text = readIfPresent(paths.log);
+  if (text.split("\n").length <= count) text = readIfPresent(paths.log + ".1") + text;
   const tail = lastLines(text, count);
   if (tail) process.stdout.write(tail.endsWith("\n") ? tail : tail + "\n");
   else if (!args.flags.follow) console.log(out.dim(`No logs yet in ${paths.log}`));
   if (!args.flags.follow) return;
-  let position = existsSync(paths.log) ? statSync(paths.log).size : 0;
-  let inode = existsSync(paths.log) ? statSync(paths.log).ino : 0;
+  const start = statSync(paths.log, { throwIfNoEntry: false });
+  let position = start?.size ?? 0;
+  let inode = start?.ino ?? 0;
   for (;;) {
     await sleep(500);
-    if (!existsSync(paths.log)) continue;
-    const info = statSync(paths.log);
-    // Rotated or truncated: the current file starts over.
-    if (info.ino !== inode || info.size < position) [position, inode] = [0, info.ino];
-    if (info.size === position) continue;
-    const fd = openSync(paths.log, "r");
+    // The file can be rotated away between any two calls: a missing file is simply not there yet.
+    let fd: number;
     try {
+      fd = openSync(paths.log, "r");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    try {
+      const info = fstatSync(fd);
+      // Rotated or truncated: the current file starts over.
+      if (info.ino !== inode || info.size < position) [position, inode] = [0, info.ino];
+      if (info.size === position) continue;
       const chunk = Buffer.alloc(info.size - position);
       const read = readSync(fd, chunk, 0, chunk.length, position);
       process.stdout.write(chunk.subarray(0, read));

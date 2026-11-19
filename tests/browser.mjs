@@ -40,6 +40,8 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
+  // The inline theme boot script must pass the server's CSP (it is admitted by its hash).
+  page.on("console", (m) => m.type() === "error" && /Content Security Policy/i.test(m.text()) && errors.push(m.text()));
   let markdownOverride = null;
   let finishMessage = null;
   let messageFailure = false;
@@ -436,15 +438,25 @@ try {
   ]);
   await page.locator(".project-settings").getByRole("button", { name: "Close", exact: true }).last().click();
   await page.locator(".project-settings").waitFor({ state: "detached" });
-  page.once("dialog", (dialog) => dialog.dismiss());
+  // Destructive actions ask in an in-app dialog; Escape and Cancel answer no.
+  const confirmation = page.getByRole("alertdialog");
   await litepaseoGroup.hover();
   await litepaseoGroup.getByRole("button", { name: "Actions for project litepaseo" }).click();
   await page.getByRole("menuitem", { name: "Remove project…" }).click();
+  await confirmation.getByText("Files on disk are not touched", { exact: false }).waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent?.trim()), "Cancel", "a destructive confirmation starts on Cancel");
+  await page.keyboard.press("Escape");
+  await confirmation.waitFor({ state: "detached" });
+  await litepaseoGroup.hover();
+  await litepaseoGroup.getByRole("button", { name: "Actions for project litepaseo" }).click();
+  await page.getByRole("menuitem", { name: "Remove project…" }).click();
+  await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+  await confirmation.waitFor({ state: "detached" });
   assert.deepEqual(removals, [], "dismissing the confirmation removes nothing");
-  page.once("dialog", (dialog) => dialog.accept());
   await litepaseoGroup.hover();
   await litepaseoGroup.getByRole("button", { name: "Actions for project litepaseo" }).click();
   await page.getByRole("menuitem", { name: "Remove project…" }).click();
+  await confirmation.getByRole("button", { name: "Remove project", exact: true }).click();
   for (let i = 0; i < 50 && !removals.length; i++) await page.waitForTimeout(20);
   assert.deepEqual(removals, ["DELETE /api/hosts/alpha/projects/proj-alpha"]);
   await page.locator("button.session", { hasText: "beta conversation" }).click();
@@ -484,7 +496,7 @@ try {
   assert.ok(terminalInput.some(input => input.data?.includes('echo hello')));
   await page.locator('.agent-tabs > button').first().click();
   assert.equal(await page.locator('.terminals').isVisible(), false);
-  await page.locator('.agent-tabs > button').filter({ hasText: 'Terminal' }).click();
+  await page.locator('.agent-tabs .file-tab-open').filter({ hasText: 'Terminal' }).click();
   assert.equal(await page.locator('.terminals').isVisible(), true);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(150);
@@ -630,6 +642,18 @@ try {
   threadActions.length = 0; // Earlier conversation switching also marked alpha as read.
   // Thread actions from the row menu (right click on desktop): pin, rename, unread, archive.
   const betaRow = page.locator("button.session", { hasText: "beta conversation" });
+  // The menu is keyboard driven: first item focused, arrows wrap, Home/End, Escape closes.
+  await betaRow.click({ button: "right" });
+  const focusedText = () => page.evaluate(() => document.activeElement?.textContent?.trim());
+  await page.waitForFunction(() => document.activeElement?.textContent?.trim() === "Rename…");
+  await page.keyboard.press("End");
+  assert.equal(await focusedText(), "Archive…");
+  await page.keyboard.press("ArrowDown");
+  assert.equal(await focusedText(), "Rename…");
+  await page.keyboard.press("ArrowUp");
+  assert.equal(await focusedText(), "Archive…");
+  await page.keyboard.press("Escape");
+  await page.getByRole("menu").waitFor({ state: "detached" });
   await betaRow.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Pin to top" }).click();
   await betaRow.click({ button: "right" });
@@ -640,9 +664,9 @@ try {
   await renameDialog.waitFor({ state: "detached" });
   await page.getByRole("button", { name: "Actions for alpha conversation" }).click();
   await page.getByRole("menuitem", { name: "Mark as read" }).click();
-  page.once("dialog", (d) => d.accept());
   await betaRow.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Archive…" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Archive", exact: true }).click();
   for (let i = 0; i < 30 && threadActions.length < 4; i++) await page.waitForTimeout(100);
   assert.deepEqual(threadActions, [
     { host: "beta", action: "pin", pinned: true },
@@ -759,7 +783,7 @@ try {
   await page.getByRole("button", { name: "Kanban", exact: true }).click();
   await page.locator(".lane-review .task-card", { hasText: "alpha conversation" }).waitFor();
   assert.equal(await page.locator(".lane-needs_input .task-card").count(), 0);
-  await page.getByRole("button", { name: "Plan", exact: true }).click();
+  await page.getByRole("radio", { name: "Plan", exact: true }).click();
   await page.getByPlaceholder("New task").fill("Validate two hosts");
   await page.getByRole("button", { name: "Add task", exact: true }).click();
   await page.getByText("Validate two hosts", { exact: true }).waitFor();
@@ -787,8 +811,8 @@ try {
   await taskDialog.getByLabel("New comment").fill("Second `note`");
   await taskDialog.getByLabel("New comment").press("Control+Enter");
   await taskDialog.locator(".task-comment code", { hasText: "note" }).waitFor();
-  page.once("dialog", (d) => d.accept());
   await taskDialog.locator(".task-comment", { hasText: "First note" }).getByRole("button", { name: "Delete comment" }).click();
+  await page.getByRole("alertdialog", { name: "Delete this comment?" }).getByRole("button", { name: "Delete", exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll(".task-comment").length === 1);
   await taskDialog.getByRole("button", { name: "Close" }).click();
   await taskDialog.waitFor({ state: "detached" });

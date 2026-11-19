@@ -1,25 +1,25 @@
-import type { Hono } from "hono";
 import { z } from "zod";
-import type { Hosts } from "./hosts.ts";
-import type { Store } from "./store.ts";
-import { eventStream, type StreamEncoding } from "./sse.ts";
+import { eventStream } from "./sse.ts";
 import { imageMime, MAX_IMAGE_BYTES } from "./media.ts";
+import { errorMessage, hostPath as path, type App, type Ctx, type RouteContext } from "./route-context.ts";
 
 /** Text files larger than this open truncated: the viewer is for reading, not for dumps. */
 const MAX_TEXT_BYTES = 1024 * 1024;
 const MAX_ENTRIES = 2000;
 /** Terminal output is coalesced into one event per frame-ish interval. */
 const TERMINAL_FLUSH_MS = 16;
-
-const path = z.string().min(1).max(4096).refine((p) => !p.includes("\0"));
+/** A terminal dimension from a query string: whole, within bounds, else the default. */
+const clampSize = (value: string | undefined, fallback: number, min: number, max: number) => {
+  const n = Math.trunc(Number(value));
+  return Number.isFinite(n) && n > 0 ? Math.min(max, Math.max(min, n)) : fallback;
+};
 
 /**
  * The workspace side panel (files, terminals) and schedules. Every call goes to the host's
  * daemon, which confines file access to the workspace and owns the terminals; nothing here
  * keeps state beyond an open terminal stream.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function registerWorkspaceRoutes(app: Hono<any>, hosts: Hosts, store: Store, valid: (c: any) => () => boolean, encodingOf: (c: any) => StreamEncoding = () => null) {
+export function registerWorkspaceRoutes(app: App, { hosts, store, streamValidity, encodingOf }: RouteContext) {
   app.get("/api/hosts/:host/changes", async c => {
     const cwd = path.parse(c.req.query("cwd"));
     const result = await hosts.get(c.req.param("host")).driver.getCheckoutDiff(cwd, { mode: "uncommitted" });
@@ -38,7 +38,7 @@ export function registerWorkspaceRoutes(app: Hono<any>, hosts: Hosts, store: Sto
         .sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name, undefined, { numeric: true }) : a.kind === "directory" ? -1 : 1));
       return c.json({ path: result.path, entries: entries.slice(0, MAX_ENTRIES), truncated: entries.length > MAX_ENTRIES });
     } catch (error) {
-      return c.json({ error: (error as Error).message || "Directory unavailable" }, 404);
+      return c.json({ error: errorMessage(error, "Directory unavailable") }, 404);
     }
   });
   app.get("/api/hosts/:host/fs/read", async (c) => {
@@ -57,7 +57,7 @@ export function registerWorkspaceRoutes(app: Hono<any>, hosts: Hosts, store: Sto
         ...(text !== undefined ? { text, truncated: result.size > MAX_TEXT_BYTES } : {}),
       });
     } catch (error) {
-      return c.json({ error: (error as Error).message || "File unavailable" }, 404);
+      return c.json({ error: errorMessage(error, "File unavailable") }, 404);
     }
   });
   app.get("/api/hosts/:host/fs/raw", async (c) => {
@@ -110,8 +110,8 @@ export function registerWorkspaceRoutes(app: Hono<any>, hosts: Hosts, store: Sto
   app.get("/api/hosts/:host/terminals/:id/stream", (c) => {
     const { driver } = hosts.get(c.req.param("host"));
     const id = c.req.param("id");
-    const rows = Number(c.req.query("rows")) || 24,
-      cols = Number(c.req.query("cols")) || 80;
+    const rows = clampSize(c.req.query("rows"), 24, 4, 500),
+      cols = clampSize(c.req.query("cols"), 80, 10, 1000);
     return eventStream(c.req.raw.signal, (send) => {
       let pending: Uint8Array[] = [];
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -149,7 +149,7 @@ export function registerWorkspaceRoutes(app: Hono<any>, hosts: Hosts, store: Sto
         stop();
         void subscription.release().catch(() => {});
       };
-    }, valid(c), encodingOf(c));
+    }, streamValidity(c), encodingOf(c));
   });
 
   // ---- Schedules ---------------------------------------------------------------------------
@@ -162,7 +162,7 @@ export function registerWorkspaceRoutes(app: Hono<any>, hosts: Hosts, store: Sto
           const list = await hosts.get(h.id).driver.scheduleList();
           return { hostId: h.id, schedules: list.schedules ?? [], error: list.error ?? null };
         } catch (error) {
-          return { hostId: h.id, schedules: [], error: (error as Error).message || "Schedules unavailable" };
+          return { hostId: h.id, schedules: [], error: errorMessage(error, "Schedules unavailable") };
         }
       }),
     );
@@ -233,9 +233,9 @@ export function registerWorkspaceRoutes(app: Hono<any>, hosts: Hosts, store: Sto
     if (result?.error) return c.json({ error: result.error }, 400);
     return c.json(result?.schedule ?? { ok: true });
   });
-  const action = (name: "pause" | "resume" | "run" | "delete" | "logs") => async (c: any) => {
-    const { driver } = hosts.get(c.req.param("host"));
-    const options = { id: c.req.param("id") };
+  const action = (name: "pause" | "resume" | "run" | "delete" | "logs") => async (c: Ctx) => {
+    const { driver } = hosts.get(c.req.param("host")!);
+    const options = { id: c.req.param("id")! };
     const result: any =
       name === "pause" ? await driver.schedulePause(options)
       : name === "resume" ? await driver.scheduleResume(options)

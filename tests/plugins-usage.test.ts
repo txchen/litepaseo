@@ -128,3 +128,22 @@ test("board actions and the next-input suggestion reach the right host", async (
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("usage forgets a removed host, even one removed while its read was in flight", async () => {
+  const calls: Record<string, unknown[]> = {};
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const hosts = hostsWith({ mac: async () => { await gate; return { providers: [] }; }, build: async () => ({ providers: [] }) }, calls);
+  const usage = new UsageService(hosts, () => 1_000_000);
+  const cache = (usage as unknown as { cache: Map<string, unknown> }).cache;
+  const first = usage.report();
+  await new Promise((r) => setImmediate(r));
+  hosts.clients.delete("mac");
+  release();
+  await first;
+  assert.deepEqual([...cache.keys()], ["build"]);
+  hosts.clients.delete("build");
+  await usage.report();
+  assert.equal(cache.size, 0);
+  await hosts.close();
+});

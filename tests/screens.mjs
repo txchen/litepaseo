@@ -457,6 +457,19 @@ try {
     await row.click({ button: "right", position: { x: box.width - 60, y: 20 } });
     await page.getByRole("menu").waitFor();
   });
+  const openConfirm = async (page) => {
+    await openChat(page);
+    await page.getByRole("button", { name: "Thread actions" }).click();
+    await page.getByRole("menuitem", { name: "Archive…" }).click();
+    await page.getByRole("alertdialog").waitFor();
+  };
+  await shoot("confirm", desktop, openConfirm);
+  await shoot("confirm-mobile-dark", { ...mobile, colorScheme: "dark" }, openConfirm);
+  await shoot("conversation-search", desktop, async (page) => {
+    await openChat(page);
+    await page.getByRole("button", { name: "Search conversation", exact: true }).click();
+    await page.locator(".conversation-search").waitFor();
+  });
   await shoot("rename", desktop, async (page) => {
     await openChat(page);
     await page.getByRole("button", { name: "Thread actions" }).click();

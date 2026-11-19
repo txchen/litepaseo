@@ -300,3 +300,48 @@ test("directory publishes adapter delivery modes and updates them when the provi
     assert.deepEqual(collection.get("h1:a")?.deliveryModes, ["queue", "interrupt"]);
   } finally { directory.dispose(); }
 });
+
+test("paged rows do not overwrite or resurrect agents changed live while the pages were read", async () => {
+  const { collection, fake } = setup(false);
+  fake.pages.push({
+    entries: [{ agent: agent("a", { title: "stale" }) }, { agent: agent("gone") }],
+    pageInfo: { hasMore: false, nextCursor: null },
+  });
+  fake.snapshot({ entries: [{ agent: agent("gone") }], pageInfo: { hasMore: true, nextCursor: "p2" } });
+  fake.update({ kind: "upsert", agent: agent("a", { title: "fresh" }) });
+  fake.update({ kind: "remove", agentId: "gone" });
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(collection.snapshot().map((a) => [a.key, a.title]), [["h1:a", "fresh"]]);
+});
+
+test("a changes snapshot never moves the cursor back past a live update", () => {
+  const { fake } = setup(true);
+  fake.snapshot({
+    entries: [{ agent: agent("a"), syncSeq: 1 }],
+    pageInfo: { hasMore: false, nextCursor: null },
+    sync: { generation: "g1", headSeq: 1, mode: "snapshot", removals: [] },
+  });
+  fake.setStatus("disconnected");
+  fake.setStatus("connected");
+  fake.update({ kind: "upsert", agent: agent("a", { title: "A" }), generation: "g1", seq: 12 });
+  fake.snapshot({
+    entries: [],
+    pageInfo: { hasMore: false, nextCursor: null },
+    sync: { generation: "g1", headSeq: 10, mode: "changes", removals: [] },
+  });
+  fake.setStatus("disconnected");
+  fake.setStatus("connected");
+  assert.deepEqual(fake.requests.at(-1), { scope: "active", sync: { generation: "g1", afterSeq: 12 } });
+});
+
+test("an update without a version keeps the last version guard", () => {
+  const { collection, fake } = setup(true);
+  fake.snapshot({
+    entries: [{ agent: agent("a"), syncSeq: 5 }],
+    pageInfo: { hasMore: false, nextCursor: null },
+    sync: { generation: "g1", headSeq: 5, mode: "snapshot", removals: [] },
+  });
+  fake.update({ kind: "upsert", agent: agent("a", { title: "versionless" }) });
+  fake.update({ kind: "upsert", agent: agent("a", { title: "older" }), generation: "g1", seq: 3 });
+  assert.equal(collection.get("h1:a")!.title, "versionless");
+});

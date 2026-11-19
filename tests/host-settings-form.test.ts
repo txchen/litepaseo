@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ago, buildPatch, fromDraft, newAgentProfile, problems, toDraft } from "../src/web/host-settings-form.ts";
+import { ago, buildPatch, fromDraft, newAgentProfile, newMetadataProvider, problems, providerRows, restoreMetadataProviders, toDraft } from "../src/web/host-settings-form.ts";
 
 const saved = {
   appendSystemPrompt: "",
@@ -76,4 +76,42 @@ test("ago describes catalogue age", () => {
   assert.equal(ago("2026-11-17T23:30:00Z", now), "30 min ago");
   assert.equal(ago("2026-11-17T21:00:00Z", now), "3 h ago");
   assert.equal(ago("2026-11-15T00:00:00Z", now), "3 days ago");
+});
+
+test("restoring a provider brings back only its metadata entries, keeping other unsaved edits", () => {
+  const saved = [
+    { ...newMetadataProvider("claude"), model: "opus" },
+    { ...newMetadataProvider("mine"), model: "fast" },
+    { ...newMetadataProvider("codex"), model: "gpt" },
+  ];
+  // Removing "mine" dropped its entry; the reader then edited another entry and added one.
+  const current = [{ ...saved[0]!, model: "sonnet" }, saved[2]!, newMetadataProvider("pi")];
+  const restored = restoreMetadataProviders(current, saved, "mine")!;
+  assert.deepEqual(restored.map((p) => `${p.provider}:${p.model}`), ["claude:sonnet", "mine:fast", "codex:gpt", "pi:"]);
+  assert.deepEqual(restoreMetadataProviders(restored, saved, "mine"), restored, "restoring twice adds nothing");
+  assert.equal(restoreMetadataProviders(null, saved, "mine"), null, "metadata settings stay off when turned off");
+  assert.equal(restoreMetadataProviders(current, null, "mine"), current);
+});
+
+test("provider rows: reported providers first, then new drafts, with the draft's edits applied", () => {
+  const reported = (id: string, enabled: boolean, source: "builtin" | "custom" = "builtin") =>
+    ({ id, label: id.toUpperCase(), enabled, source, status: "ready", models: [], modes: [], fetchedAt: null }) as any;
+  const draft = toDraft(saved);
+  draft.providers.claude.enabled = true;
+  draft.removeProviders.push("mine");
+  draft.providers.fresh = { extends: "pi", label: " Fresh ", enabled: true, commandText: "", additionalModels: [] };
+  const rows = providerRows([reported("claude", false), reported("mine", true, "custom")], draft, saved);
+  assert.deepEqual(rows.map((r) => r.id), ["claude", "mine", "fresh"]);
+  const [claude, mine, fresh] = rows;
+  assert.equal(claude.label, "CLAUDE");
+  assert.equal(claude.enabled, true);
+  assert.equal(claude.pendingToggle, true);
+  assert.equal(claude.custom, false);
+  assert.equal(mine.label, "Mine");
+  assert.equal(mine.removed, true);
+  assert.equal(mine.custom, true);
+  assert.equal(fresh.label, "Fresh");
+  assert.equal(fresh.reported, undefined);
+  assert.equal(fresh.saved, false);
+  assert.equal(fresh.pendingToggle, false);
 });

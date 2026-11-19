@@ -17,12 +17,17 @@ const root = ref<HTMLElement | null>(null);
 function onDocument(event: Event) {
   if (event instanceof KeyboardEvent ? event.key === "Escape" : !root.value?.contains(event.target as Node)) open.value = false;
 }
-watch(open, (isOpen) => {
-  const method = isOpen ? "addEventListener" : "removeEventListener";
+function listen(on: boolean) {
+  const method = on ? "addEventListener" : "removeEventListener";
   document[method]("pointerdown", onDocument, true);
   document[method]("keydown", onDocument, true);
+}
+watch(open, listen);
+// Watchers do not run once unmounting starts: remove the listeners here, open or not.
+onBeforeUnmount(() => {
+  open.value = false;
+  listen(false);
 });
-onBeforeUnmount(() => (open.value = false));
 function choose(mode: RewindMode) {
   open.value = false;
   emit("rewind", mode);

@@ -102,3 +102,29 @@ test("HTTP: bearer is rate limited, refused through a proxy, and follows token r
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("HTTP: forwarding headers name the client only when a local proxy sent them", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "litepaseo-client-id-"));
+  const store = new Store(directory);
+  const hosts = new Hosts();
+  const app = createApp(store, hosts, STRONG, directory);
+  const peer = (remoteAddress: string) => ({ incoming: { socket: { remoteAddress } } });
+  const login = (token: string, headers: Record<string, string>, env?: object) =>
+    app.request("/api/login", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ token }) }, env);
+  try {
+    // A direct client inventing a new X-Forwarded-For per guess is still one client.
+    for (let i = 0; i < 10; i++) assert.equal((await login("guess", { "x-forwarded-for": `198.51.100.${i}` }, peer("192.0.2.7"))).status, 401);
+    assert.equal((await login(STRONG, { "x-forwarded-for": "198.51.100.99" }, peer("192.0.2.7"))).status, 429);
+    assert.equal((await login(STRONG, {}, peer("192.0.2.8"))).status, 200, "another address is unaffected");
+
+    // Behind a local tunnel (loopback peer), each forwarded client has its own limit.
+    for (let i = 0; i < 10; i++) assert.equal((await login("guess", { "cf-connecting-ip": "203.0.113.1" }, peer("127.0.0.1"))).status, 401);
+    assert.equal((await login(STRONG, { "cf-connecting-ip": "203.0.113.1" }, peer("::ffff:127.0.0.1"))).status, 429);
+    assert.equal((await login(STRONG, { "cf-connecting-ip": "203.0.113.2" }, peer("::1"))).status, 200);
+  } finally {
+    app.dispose();
+    await hosts.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

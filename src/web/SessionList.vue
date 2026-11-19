@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { WorkspaceSummary } from "../shared/wire.ts";
 import {
   AGENT_PITCH,
@@ -11,6 +11,7 @@ import {
 } from "./directory-store.ts";
 import Icon from "./Icon.vue";
 import ProjectIcon from "./ProjectIcon.vue";
+import { tildeHome } from "./format.ts";
 import { relativeAge } from "./timeline-display.ts";
 
 // The sidebar: projects, then their threads (Paseo workspaces), windowed.
@@ -100,12 +101,12 @@ const groupIconSource = (g: ProjectGroup<WorkspaceSummary>) => g.items.at(0) ?? 
 const canHover = matchMedia("(hover: hover) and (pointer: fine)").matches;
 const card = ref<{ thread: WorkspaceSummary; top: number; left: number } | null>(null);
 let cardTimer: ReturnType<typeof setTimeout> | undefined;
-const home = (path: string) => path.replace(/^\/(home|Users)\/[^/]+(?=\/|$)/, "~");
 function hoverStart(event: MouseEvent, thread: WorkspaceSummary) {
   if (!canHover) return;
   clearTimeout(cardTimer);
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
   cardTimer = setTimeout(() => {
+    if (!rows.value.some((r) => r.kind === "item" && r.key === thread.key)) return;
     card.value = { thread, top: Math.max(8, Math.min(rect.top - 4, window.innerHeight - 170)), left: rect.right + 10 };
   }, card.value ? 120 : 550);
 }
@@ -113,6 +114,15 @@ function hoverEnd() {
   clearTimeout(cardTimer);
   cardTimer = setTimeout(() => (card.value = null), 80);
 }
+// A row removed under the pointer (archived, collapsed, windowed out) never sends mouseleave:
+// the card must not stay open for a thread that is no longer shown.
+watch(rows, (list) => {
+  const key = card.value?.thread.key;
+  if (key && !list.some((r) => r.kind === "item" && r.key === key)) {
+    clearTimeout(cardTimer);
+    card.value = null;
+  }
+});
 
 // Touch: a long press opens the thread menu (a tap still opens the thread).
 let pressTimer: ReturnType<typeof setTimeout> | undefined;
@@ -274,7 +284,7 @@ onUnmounted(() => {
           <span v-if="hostStates.get(card.thread.hostId) !== 'connected'" class="thread-card-off">offline</span>
         </p>
         <p v-if="card.thread.branch"><Icon name="branch" :size="14" />{{ card.thread.branch }}</p>
-        <p><Icon name="folder" :size="14" />{{ home(card.thread.directory || card.thread.rootPath) }}</p>
+        <p><Icon name="folder" :size="14" />{{ tildeHome(card.thread.directory || card.thread.rootPath) }}</p>
       </div>
     </Teleport>
     <div v-if="!total" class="list-empty">

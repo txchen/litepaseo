@@ -1,3 +1,4 @@
+import { notifyListeners } from "./listeners.ts";
 import { timelineItemIdentity } from "@getpaseo/protocol/timeline-identity";
 import type { TimelineCursor, TimelineItem, TimelineOp, TimelineRow } from "../shared/wire.ts";
 
@@ -38,6 +39,10 @@ export interface TimelineDriver {
 
 const TAIL_LIMIT = 60;
 const CATCH_UP_PAGE = 200;
+/** Catch-up pages read in one go; further behind than this, reloading the tail is cheaper. */
+const MAX_CATCH_UP_PAGES = 25;
+/** Viewers that joined a loading view tracked for its load report. */
+const MAX_JOINERS = 64;
 /** Rows kept per view; older rows are dropped and stay reachable through history pages. */
 const MAX_ROWS = 600;
 const KEEP_ROWS = 500;
@@ -164,6 +169,9 @@ export class TimelineView {
   start() {
     const token = ++this.token;
     this.state = "loading";
+    // A fresh subscription is followed by a full reload: what the last one buffered is moot.
+    this.buffer = [];
+    this.overflowed = false;
     const attemptAt = now();
     if (this.timing) {
       this.timing.attempts++;
@@ -206,7 +214,7 @@ export class TimelineView {
       const resumed = since ? this.resumeOps(since) : null;
       if (!resumed) watcher([this.resetOp()]);
       else if (resumed.length) watcher(resumed);
-    } else if (this.watchers.size) this.joiners.push(now());
+    } else if (this.watchers.size && this.joiners.length < MAX_JOINERS) this.joiners.push(now());
     this.watchers.add(watcher);
     return () => this.watchers.delete(watcher);
   }
@@ -332,7 +340,8 @@ export class TimelineView {
     const token = this.token;
     this.state = "catching-up";
     try {
-      for (;;) {
+      for (let pages = 1; ; pages++) {
+        const before = this.lastSeq;
         const page = await this.driver.fetchAgentTimeline(this.agentId, {
           direction: "after",
           cursor: { epoch: this.epoch, seq: Math.max(0, this.lastSeq) },
@@ -349,6 +358,9 @@ export class TimelineView {
         if (end === null) break;
         this.lastSeq = Math.max(this.lastSeq, end);
         if (!page.hasNewer) break;
+        // A page that claims more but does not advance would be asked for again forever; one
+        // page too many means too far behind. Either way the tail is the answer.
+        if (end <= before || pages >= MAX_CATCH_UP_PAGES) return void this.reload();
       }
       this.settle();
     } catch {
@@ -367,11 +379,12 @@ export class TimelineView {
     const events = this.buffer;
     this.buffer = [];
     for (let i = 0; i < events.length; i++) {
+      this.process(events[i]);
+      // The event started a read (and may have buffered itself first): the rest wait after it.
       if (this.state !== "live") {
-        this.buffer = events.slice(i).concat(this.buffer);
+        this.buffer = this.buffer.concat(events.slice(i + 1));
         return;
       }
-      this.process(events[i]);
     }
   }
 
@@ -401,7 +414,7 @@ export class TimelineView {
     this.startCursor = page.startCursor;
     this.complete = !page.hasOlder;
     for (const entry of page.entries) this.upsertFetched(entry, false);
-    this.buffer = this.buffer.filter((e) => e.epoch === this.epoch && e.seq! > this.lastSeq);
+    this.buffer = this.buffer.filter((e) => (e.epoch === undefined || e.epoch === this.epoch) && e.seq! > this.lastSeq);
     this.pending.clear();
     this.pendingReset = true;
     this.scheduleFlush();
@@ -424,6 +437,9 @@ export class TimelineView {
       if (notify) this.mark(existing.seqStart, true);
       return;
     }
+    // An older row changed (a long tool call finishing): it starts before the rows held, and
+    // holding it would leave a hole between it and them. History pages read it from the daemon.
+    if (this.hasOlder && this.startCursor && row.seqStart < this.startCursor.seq) return;
     this.insert(row, notify);
   }
 
@@ -488,6 +504,7 @@ export class TimelineView {
   private scheduleFlush() {
     if (this.flushTimer || !this.watchers.size) return;
     this.flushTimer = setTimeout(() => this.flush(), FLUSH_MS);
+    this.flushTimer.unref?.();
   }
 
   private flush() {
@@ -542,16 +559,18 @@ export class TimelineView {
   /** The first rows went out: report how long the view, and anyone who joined it, waited. */
   private loaded() {
     const timing = this.timing;
-    if (!timing || !this.watchers.size) return;
+    const joiners = this.joiners;
+    // A load nobody waited for is not reported, and must not carry over into the next one.
     this.timing = null;
+    this.joiners = [];
+    if (!timing || !this.watchers.size) return;
     const done = now();
     const base = { subscribeMs: timing.subscribeMs, fetchMs: timing.fetchMs, attempts: timing.attempts, failures: timing.failures };
     this.report?.({ ...base, totalMs: Math.round(done - timing.startedAt), kind: "view" });
-    for (const joined of this.joiners) this.report?.({ ...base, totalMs: Math.round(done - joined), kind: "join" });
-    this.joiners = [];
+    for (const joined of joiners) this.report?.({ ...base, totalMs: Math.round(done - joined), kind: "join" });
   }
 
   private broadcast(ops: TimelineOp[]) {
-    for (const watcher of this.watchers) watcher(ops);
+    notifyListeners(this.watchers, ops);
   }
 }

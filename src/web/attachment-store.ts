@@ -1,4 +1,5 @@
 import { reactive } from "vue";
+import { newId } from "./id.ts";
 export interface LocalAttachment { localId: string; file: File; preview?: string; id?: string; error: string; uploading: boolean; cancelled: boolean; controller?: AbortController; base: string }
 export class AttachmentStore {
   readonly entries = reactive(new Map<string, LocalAttachment[]>());
@@ -10,7 +11,7 @@ export class AttachmentStore {
       if (!file.size || file.size > caps.maxBytes) throw new Error("Files must be between 1 byte and 8 MiB.");
       const image = ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type);
       if (image ? !caps.images : !caps.files) throw new Error(image ? "This provider does not support images." : "This agent cannot read uploaded files.");
-      const entry: LocalAttachment = reactive({ localId: crypto.randomUUID(), file, preview: image ? URL.createObjectURL(file) : undefined, error: "", uploading: false, cancelled: false, base });
+      const entry: LocalAttachment = reactive({ localId: newId(), file, preview: image ? URL.createObjectURL(file) : undefined, error: "", uploading: false, cancelled: false, base });
       this.entries.set(key, [...this.get(key), entry]);
       void this.upload(entry);
     }
@@ -18,24 +19,35 @@ export class AttachmentStore {
   async upload(entry: LocalAttachment) {
     if (entry.uploading || entry.cancelled) return;
     entry.error = ""; entry.uploading = true;
-    entry.controller = new AbortController();
+    // This attempt owns the entry only while its controller is the entry's: a retry after
+    // forgetRemote starts a new attempt, which the aborted one must not overwrite.
+    const controller = new AbortController();
+    entry.controller = controller;
+    const current = () => entry.controller === controller;
     try {
       if (entry.id) await this.discardRemote(entry);
       const response = await fetch(entry.base + "/attachments", { method: "POST", body: entry.file,
         headers: { "x-litepaseo": "1", "x-file-name": encodeURIComponent(entry.file.name), "content-type": entry.file.type || "application/octet-stream" },
-        signal: AbortSignal.any([entry.controller.signal, AbortSignal.timeout(60_000)]),
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)]),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "Upload failed");
+      // A proxy in front of the server may answer with an HTML error page (413, 502).
+      const data = await response.json().catch(() => ({})) as { id?: string; error?: string };
+      if (!response.ok) throw new Error(data.error ?? `Upload failed (${response.status})`);
+      if (!data.id) throw new Error("Upload failed");
+      if (!current() || controller.signal.aborted) {
+        // Superseded or forgotten meanwhile: this upload is nobody's, so drop it on the server.
+        void this.discardRemote({ ...entry, id: data.id });
+        return;
+      }
       entry.id = data.id;
       if (entry.cancelled) await this.discardRemote(entry);
     } catch (error) {
       // An abort from forgetRemote already explains what to do; keep that message.
-      if (!entry.cancelled && !entry.controller?.signal.aborted) entry.error = (error as Error).message;
+      if (current() && !entry.cancelled && !controller.signal.aborted) entry.error = (error as Error).message;
     }
-    finally { entry.uploading = false; }
+    finally { if (current()) entry.uploading = false; }
   }
-  private async discardRemote(entry: LocalAttachment) {
+  private async discardRemote(entry: Pick<LocalAttachment, "id" | "base">) {
     const id = entry.id; entry.id = undefined;
     if (id) await fetch(entry.base + "/attachments/" + encodeURIComponent(id), { method: "DELETE", headers: { "x-litepaseo": "1" }, signal: AbortSignal.timeout(5000) }).catch(() => {});
   }

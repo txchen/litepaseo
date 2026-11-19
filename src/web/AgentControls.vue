@@ -78,20 +78,26 @@ watch(() => [props.agent.model, props.agent.thinking, props.agent.modeId], () =>
 });
 
 async function change(slot: string, body: AgentConfigChange, value: string | boolean) {
+  // The reader may switch agents while the change is in flight: its result and any rollback
+  // belong to this agent, never to the one shown afterwards.
+  const key = props.agent.key;
   const previous = pending.value[slot];
   pending.value = { ...pending.value, [slot]: value };
   try {
     const result = await props.api(props.path + "/config", "POST", body);
+    if (slot.startsWith("feature:")) cache.delete(key);
+    if (props.agent.key !== key) return;
     const notice = result?.notice as { message?: string } | null;
     if (notice?.message) emit("notice", notice.message);
     if (slot.startsWith("feature:")) {
-      cache.delete(props.agent.key);
       await load(true);
+      if (props.agent.key !== key) return;
       const next = { ...pending.value };
       delete next[slot];
       pending.value = next;
     }
   } catch (e) {
+    if (props.agent.key !== key) return;
     pending.value = { ...pending.value, [slot]: previous as string };
     if (previous === undefined) {
       const next = { ...pending.value };

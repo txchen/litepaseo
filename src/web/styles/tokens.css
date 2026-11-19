@@ -1,0 +1,171 @@
+/* ---------------------------------------------------------------------------------------------
+   Tokens. Neutral zinc surfaces with a deep teal accent (Ocean; other palettes apply from theme.ts), light and dark.
+   The dark set is written twice on purpose: for an explicit choice (data-theme="dark") and for the
+   system preference while no theme is pinned. CSS has no way to share one declaration block
+   between a selector and a media query, and the tokens must stay plain values because theme.ts
+   reads them back (--sidebar for the browser chrome). tests/theme-tokens.test.ts keeps the two
+   copies identical.
+   --------------------------------------------------------------------------------------------- */
+:root {
+  --motion-step-ms: 1000;
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --surface-0: #ffffff;
+  --surface-1: #fafafa;
+  --surface-2: #f4f4f5;
+  --surface-3: #e9e9ec;
+  --sidebar: #f6f6f7;
+  --fg: #18181b;
+  --fg-muted: #5f5f69;
+  --fg-faint: #6e6e78;
+  --border: #e6e6ea;
+  --border-strong: #d6d6dc;
+  --hover: rgba(24, 24, 27, 0.045);
+  --selected: rgba(24, 24, 27, 0.075);
+  --accent: #0e7490;
+  --accent-hover: #0b5f76;
+  --accent-soft: rgba(14, 116, 144, 0.1);
+  --accent-fg: #ffffff;
+  --pulse: rgba(47, 111, 222, 0.4);
+  --link: #0e7490;
+  --running: #2f6fde;
+  --running-soft: rgba(47, 111, 222, 0.12);
+  --unread: #16a34a;
+  --seg-track: #e9e9ec;
+  --seg-thumb: #ffffff;
+  --warn: #9a5b00;
+  --warn-soft: rgba(201, 132, 18, 0.12);
+  --danger: #b4413a;
+  --danger-soft: rgba(180, 65, 58, 0.1);
+  --user-bubble: #f0f0f2;
+  --code-bg: #f6f6f8;
+  /* Syntax tokens (highlight.js classes), GitHub-like. */
+  --hl-keyword: #cf222e;
+  --hl-string: #0a3069;
+  --hl-number: #0550ae;
+  --hl-comment: #6e7781;
+  --hl-function: #8250df;
+  --hl-type: #953800;
+  --hl-variable: #0550ae;
+  --hl-tag: #116329;
+  --hl-attr: #0550ae;
+  --hl-meta: #6639ba;
+  --hl-add: #116329;
+  --hl-add-bg: rgba(46, 160, 67, 0.12);
+  --hl-del: #82071e;
+  --hl-del-bg: rgba(248, 81, 73, 0.12);
+  --shadow-lg: 0 12px 40px -12px rgba(15, 15, 20, 0.18), 0 2px 6px rgba(15, 15, 20, 0.04);
+  --shadow-sm: 0 1px 2px rgba(15, 15, 20, 0.05);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  /* Stacking layers for what floats above the page. */
+  --z-overlay: 50;
+  --z-overlay-nested: 55;
+  --z-menu: 60;
+  --z-top: 70;
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  /* One Dark–inspired: soft charcoal, never pure black. */
+  --surface-0: #282c34;
+  --surface-1: #2c313a;
+  --surface-2: #323842;
+  --surface-3: #3b4150;
+  --sidebar: #21252b;
+  --fg: #d0d4dc;
+  --fg-muted: #9aa1ad;
+  --fg-faint: #8c94a1;
+  --border: #353b45;
+  --border-strong: #454c59;
+  --hover: rgba(255, 255, 255, 0.045);
+  --selected: rgba(255, 255, 255, 0.075);
+  --accent: #5cc8dc;
+  --accent-hover: #7fd6e6;
+  --accent-soft: rgba(92, 200, 220, 0.14);
+  --accent-fg: #0f2328;
+  --pulse: rgba(97, 175, 239, 0.45);
+  --link: #7fd6e6;
+  --running: #61afef;
+  --running-soft: rgba(97, 175, 239, 0.14);
+  --unread: #4ade80;
+  --seg-track: #1f2329;
+  --seg-thumb: #3b4150;
+  --warn: #e5c07b;
+  --warn-soft: rgba(229, 192, 123, 0.13);
+  --danger: #e06c75;
+  --danger-soft: rgba(224, 108, 117, 0.13);
+  --user-bubble: #353b46;
+  --code-bg: #21252b;
+  /* Syntax tokens, One Dark. */
+  --hl-keyword: #c678dd;
+  --hl-string: #98c379;
+  --hl-number: #d19a66;
+  --hl-comment: #7f848e;
+  --hl-function: #61afef;
+  --hl-type: #e5c07b;
+  --hl-variable: #e06c75;
+  --hl-tag: #e06c75;
+  --hl-attr: #d19a66;
+  --hl-meta: #56b6c2;
+  --hl-add: #98c379;
+  --hl-add-bg: rgba(152, 195, 121, 0.1);
+  --hl-del: #e06c75;
+  --hl-del-bg: rgba(224, 108, 117, 0.1);
+  --shadow-lg: 0 16px 48px -12px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 0, 0, 0.2);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    /* One Dark–inspired: soft charcoal, never pure black. */
+    --surface-0: #282c34;
+    --surface-1: #2c313a;
+    --surface-2: #323842;
+    --surface-3: #3b4150;
+    --sidebar: #21252b;
+    --fg: #d0d4dc;
+    --fg-muted: #9aa1ad;
+    --fg-faint: #8c94a1;
+    --border: #353b45;
+    --border-strong: #454c59;
+    --hover: rgba(255, 255, 255, 0.045);
+    --selected: rgba(255, 255, 255, 0.075);
+    --accent: #5cc8dc;
+    --accent-hover: #7fd6e6;
+    --accent-soft: rgba(92, 200, 220, 0.14);
+    --accent-fg: #0f2328;
+    --pulse: rgba(97, 175, 239, 0.45);
+    --link: #7fd6e6;
+    --running: #61afef;
+    --running-soft: rgba(97, 175, 239, 0.14);
+    --unread: #4ade80;
+    --seg-track: #1f2329;
+    --seg-thumb: #3b4150;
+    --warn: #e5c07b;
+    --warn-soft: rgba(229, 192, 123, 0.13);
+    --danger: #e06c75;
+    --danger-soft: rgba(224, 108, 117, 0.13);
+    --user-bubble: #353b46;
+    --code-bg: #21252b;
+    /* Syntax tokens, One Dark. */
+    --hl-keyword: #c678dd;
+    --hl-string: #98c379;
+    --hl-number: #d19a66;
+    --hl-comment: #7f848e;
+    --hl-function: #61afef;
+    --hl-type: #e5c07b;
+    --hl-variable: #e06c75;
+    --hl-tag: #e06c75;
+    --hl-attr: #d19a66;
+    --hl-meta: #56b6c2;
+    --hl-add: #98c379;
+    --hl-add-bg: rgba(152, 195, 121, 0.1);
+    --hl-del: #e06c75;
+    --hl-del-bg: rgba(224, 108, 117, 0.1);
+    --shadow-lg: 0 16px 48px -12px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 0, 0, 0.2);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+    color-scheme: dark;
+  }
+}

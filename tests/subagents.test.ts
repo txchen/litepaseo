@@ -178,3 +178,36 @@ test("a subagent conversation streams through the shared timeline view", async (
   await sleep(30_000);
   assert.equal(daemon.released, 1);
 });
+
+test("an event subscription that fails to start is replaced on the next try", async () => {
+  const daemon = new FakeDaemon();
+  const observe = daemon.observeEvents.bind(daemon);
+  let failures = 1;
+  daemon.observeEvents = () => {
+    const events = observe();
+    if (failures-- > 0) {
+      const ready = Promise.reject(new Error("socket closed"));
+      ready.catch(() => {});
+      return { ...events, ready };
+    }
+    return events;
+  };
+  daemon.page = {
+    provider: "claude", epoch: "e1", reset: false, window: { minSeq: 1, maxSeq: 1, nextSeq: 2 },
+    startCursor: { epoch: "e1", seq: 1 }, endCursor: { epoch: "e1", seq: 1 }, hasOlder: false, hasNewer: false,
+    rows: [{ item: { type: "user_message", text: "Find the bug" }, timestamp: "t1", seq: 1, seqStart: 1, seqEnd: 1 }],
+  };
+  const subagents = new HostSubagents(daemon);
+  const view = new TimelineView(subagents.timelineDriver("parent", "sub"), "parent");
+  const store = new TimelineStore();
+  view.watch((ops: TimelineOp[]) => store.apply(ops));
+  view.start();
+  await settle();
+  assert.equal(daemon.released, 1, "the failed subscription is let go at once");
+  await sleep(2_000);
+  await sleep(2_000);
+  assert.equal(daemon.subscriptions, 2, "the retry subscribes afresh");
+  assert.deepEqual(store.rows.map((r) => r.row.value.item.text), ["Find the bug"]);
+  await view.dispose();
+  await subagents.dispose();
+});

@@ -5,6 +5,8 @@
  * Text areas edit lists as text (one entry per line) so typing a newline is never swallowed;
  * the lists are rebuilt only when the patch is made.
  */
+import type { HostProviderInfo } from "../shared/wire.ts";
+import { newId } from "./id.ts";
 
 export type Config = Record<string, any>;
 
@@ -67,10 +69,6 @@ const LIST_KEYS = ["agentProfiles", "terminalProfiles", "metadataGeneration", "p
 const clone = <T>(value: T): T => (value === undefined ? value : JSON.parse(JSON.stringify(value)));
 let keys = 0;
 const key = () => `k${++keys}`;
-/** randomUUID exists only in secure contexts; a plain-http LAN address still needs unique IDs. */
-const uuid = () =>
-  globalThis.crypto?.randomUUID?.() ??
-  `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}-${Math.random().toString(36).slice(2, 10)}`;
 const lines = (text: string) =>
   text
     .split("\n")
@@ -263,14 +261,60 @@ export function problems(saved: Config, draft: Draft): string[] {
 }
 
 export function newAgentProfile(provider: string): AgentProfileDraft {
-  return { key: key(), id: uuid(), name: "", provider, model: "", modeId: "", thinkingOptionId: "", notes: "", rest: {} };
+  return { key: key(), id: newId(), name: "", provider, model: "", modeId: "", thinkingOptionId: "", notes: "", rest: {} };
 }
 export function newTerminalProfile(): TerminalProfileDraft {
-  return { key: key(), id: uuid(), name: "", command: "", argsText: "", rest: {} };
+  return { key: key(), id: newId(), name: "", command: "", argsText: "", rest: {} };
 }
 export function newMetadataProvider(provider: string): MetadataProviderDraft {
   return { key: key(), provider, model: "", thinkingOptionId: "", rest: {} };
 }
+/**
+ * A provider marked for removal is restored: its saved metadata-generation entries come back at
+ * their saved positions; every other entry keeps the reader's unsaved edits. A draft without
+ * metadata settings stays without them.
+ */
+export function restoreMetadataProviders(
+  current: MetadataProviderDraft[] | null,
+  saved: MetadataProviderDraft[] | null,
+  provider: string,
+): MetadataProviderDraft[] | null {
+  if (!current || !saved) return current;
+  const result = [...current];
+  saved.forEach((entry, index) => {
+    if (entry.provider !== provider) return;
+    const present = result.some((p) => p.provider === provider && p.model === entry.model && p.thinkingOptionId === entry.thinkingOptionId);
+    if (!present) result.splice(Math.min(index, result.length), 0, entry);
+  });
+  return result;
+}
+
+/**
+ * The providers section's rows: every provider the host reports, then the draft's new ones, each
+ * with the draft's edits (enabled, label, removal) applied.
+ */
+export function providerRows(reported: HostProviderInfo[], draft: Draft, saved: Config | null) {
+  const info = (id: string) => reported.find((p) => p.id === id);
+  const ids = [...reported.map((p) => p.id), ...Object.keys(draft.providers).filter((id) => !info(id))];
+  return ids.map((id) => {
+    const host = info(id);
+    const conf = draft.providers[id];
+    const removed = draft.removeProviders.includes(id);
+    const enabled = conf?.enabled ?? host?.enabled ?? true;
+    return {
+      id,
+      reported: host,
+      conf,
+      removed,
+      enabled,
+      custom: conf?.extends !== undefined || host?.source === "custom",
+      saved: !!saved?.providers?.[id] || !!host,
+      label: conf?.label?.trim() || host?.label || id,
+      pendingToggle: host ? enabled !== host.enabled : false,
+    };
+  });
+}
+export type ProviderRow = ReturnType<typeof providerRows>[number];
 
 /** "just now", "5 min ago", "3 h ago", "2 days ago". */
 export function ago(iso: string | null, now = Date.now()): string {

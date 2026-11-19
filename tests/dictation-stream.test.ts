@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import WebSocket, { WebSocketServer } from "ws";
-import { DictationStreams, DICTATION_RATE } from "../src/server/dictation-stream.ts";
+import { audioBytes, DictationStreams, DICTATION_RATE } from "../src/server/dictation-stream.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(predicate: () => boolean) {
@@ -199,4 +199,30 @@ test("Realtime failure retains recognized text and never resubmits audio as a fi
     assert.equal(events.at(-1).text, "Keep this");
     assert.equal(fileCalls, 0);
   } finally { await s.done(); }
+});
+
+test("a malformed upgrade target closes the socket instead of crashing the process", async () => {
+  const manager = new DictationStreams();
+  const server = createServer();
+  manager.attach(server);
+  const url = new URL(await listen(server));
+  try {
+    const { connect } = await import("node:net");
+    const socket = connect(Number(url.port), url.hostname);
+    await once(socket, "connect");
+    socket.write("GET // HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n");
+    socket.resume();
+    await once(socket, "close");
+    assert.equal(server.listening, true);
+  } finally {
+    manager.close();
+    await stop(server);
+  }
+});
+
+test("binary audio frames read the same as a Buffer, an ArrayBuffer or fragments", () => {
+  const bytes = Buffer.from([1, 2, 3, 4]);
+  assert.deepEqual(audioBytes(bytes), bytes);
+  assert.deepEqual(audioBytes(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + 4) as ArrayBuffer), bytes);
+  assert.deepEqual(audioBytes([Buffer.from([1, 2]), Buffer.from([3, 4])]), bytes);
 });

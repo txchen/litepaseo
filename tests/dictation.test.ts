@@ -54,12 +54,46 @@ test("voice input is off until a transcription service is set up, and the key ne
     assert.doesNotMatch(JSON.stringify(ticket), /secret/);
     assert.equal((await request("/dictation/session", { method: "POST", headers: { authorization: "" } })).status, 401);
 
-    // Editing without a key keeps the saved one.
-    const edited = await (await request("/dictation", json("PUT", { baseUrl: "", model: "whisper-1" }))).json();
-    assert.deepEqual(edited, { configured: true, baseUrl: "https://api.openai.com/v1", model: "whisper-1", languages: [], keywords: [], keyHint: "…1234" });
+    // Editing without a key keeps the saved one for the same service.
+    const edited = await (await request("/dictation", json("PUT", { baseUrl: "https://stt.example/v2", model: "whisper-1" }))).json();
+    assert.deepEqual(edited, { configured: true, baseUrl: "https://stt.example/v2", model: "whisper-1", languages: [], keywords: [], keyHint: "…1234" });
 
     assert.equal((await (await request("/dictation", { method: "DELETE" })).json()).configured, false);
     assert.equal((await speak()).status, 409);
+  } finally {
+    await done();
+  }
+});
+
+test("the saved key is never sent to a different service", async () => {
+  const { calls, request, json, speak, done } = setup();
+  try {
+    await request("/dictation", json("PUT", { baseUrl: "https://stt.example/v1", apiKey: "sk-secret-1234" }));
+    for (const baseUrl of ["https://attacker.example/v1", "http://stt.example/v1", "https://stt.example:8443/v1", ""]) {
+      const moved = await request("/dictation", json("PUT", { baseUrl }));
+      assert.equal(moved.status, 400, baseUrl);
+      assert.match((await moved.json()).error, /API key is required/);
+    }
+    assert.equal((await (await request("/dictation")).json()).baseUrl, "https://stt.example/v1", "the rejected edits saved nothing");
+    await speak();
+    assert.equal(calls.at(-1)!.url, "https://stt.example/v1/audio/transcriptions");
+
+    const switched = await (await request("/dictation", json("PUT", { baseUrl: "https://other.example/v1", apiKey: "sk-other-5678" }))).json();
+    assert.equal(switched.keyHint, "…5678", "a new key may come with a new service");
+  } finally {
+    await done();
+  }
+});
+
+test("base URLs with credentials, queries or fragments are rejected", async () => {
+  const { request, json, done } = setup();
+  try {
+    for (const baseUrl of ["https://user:pass@stt.example/v1", "https://user@stt.example/v1", "https://stt.example/v1?x=1", "https://stt.example/v1?", "https://stt.example/v1#frag"]) {
+      const response = await request("/dictation", json("PUT", { baseUrl, apiKey: "k" }));
+      assert.equal(response.status, 400, baseUrl);
+    }
+    for (const baseUrl of ["http://127.0.0.1:8000/v1", "http://localhost:9000", "http://whisper.lan:8000/v1"])
+      assert.equal((await request("/dictation", json("PUT", { baseUrl, apiKey: "k" }))).status, 200, baseUrl);
   } finally {
     await done();
   }
@@ -168,4 +202,23 @@ test("wav() writes a standard 16-bit mono header", () => {
   assert.equal(out.readUInt32LE(4), 46);
   assert.equal(out.readUInt32LE(28), 48_000);
   assert.equal(out.readUInt32LE(40), 10);
+});
+
+test("an oversized transcription response is refused instead of buffered", async () => {
+  let pulled = 0;
+  const { request, json, speak, done } = setup(() => new Response(new ReadableStream({
+    pull(controller) {
+      pulled++;
+      controller.enqueue(new Uint8Array(256 * 1024));
+    },
+  })));
+  try {
+    await request("/dictation", json("PUT", { apiKey: "k" }));
+    const response = await speak();
+    assert.equal(response.status, 502);
+    assert.match((await response.json()).error, /unexpectedly large/);
+    assert.ok(pulled <= 6, "reading stopped soon after the limit");
+  } finally {
+    await done();
+  }
 });

@@ -120,6 +120,10 @@ export function tokenFile(path: string) {
   };
 }
 
+type Failures = { count: number; reset: number };
+/** Distinct clients whose failures are tracked separately (bounds memory under a flood). */
+const MAX_TRACKED_CLIENTS = 10_000;
+
 export type LoginResult =
   | { ok: true; session: LoginSession; secret: string }
   | { ok: false; status: 401 | 429; retryAfter?: number };
@@ -133,8 +137,8 @@ export type BearerResult = { ok: true } | { ok: false; status: 401 | 429; retryA
 export class Auth {
   private readonly store: Store;
   private readonly token: () => string;
-  private readonly codeFailures = new Map<string, { count: number; reset: number }>();
-  private readonly tokenFailures = new Map<string, { count: number; reset: number }>();
+  private readonly codeFailures = new Map<string, Failures>();
+  private readonly tokenFailures = new Map<string, Failures>();
   private global = { count: 0, reset: 0, lockMs: WINDOW_MS };
   private pendingTotp: { secret: string; sessionId: string; expires: number } | null = null;
 
@@ -145,12 +149,10 @@ export class Auth {
     if (saved) this.global = JSON.parse(saved);
     // Old versions issued sessions for a code alone. Invalidate them once.
     if (store.setting("auth_policy") !== "token-plus-totp-v1") {
-      store.db.exec("BEGIN IMMEDIATE");
-      try {
+      store.transaction(() => {
         if (this.totpEnabled()) store.revokeSessions();
         store.setSetting("auth_policy", "token-plus-totp-v1");
-        store.db.exec("COMMIT");
-      } catch (error) { store.db.exec("ROLLBACK"); throw error; }
+      });
     }
   }
 
@@ -259,16 +261,14 @@ export class Auth {
     if (!pending || pending.sessionId !== sessionId || pending.expires < now) return false;
     const step = matchTotp(base32Decode(pending.secret), code, now);
     if (step === null) return false;
-    this.store.db.exec("BEGIN IMMEDIATE");
-    try {
+    this.store.transaction(() => {
       this.store.setSetting("totp_secret", pending.secret);
       this.store.setSetting("totp_last_step", String(step));
       // The enrolling session has now proved both factors; other token-only sessions have not.
       this.store.db.prepare("DELETE FROM push_subscriptions WHERE session_id<>?").run(sessionId);
       this.store.db.prepare("DELETE FROM sessions WHERE id<>?").run(sessionId);
       this.resetCodeLimit();
-      this.store.db.exec("COMMIT");
-    } catch (error) { this.store.db.exec("ROLLBACK"); throw error; }
+    });
     this.pendingTotp = null;
     return true;
   }
@@ -293,12 +293,22 @@ export class Auth {
     this.store.setSetting("totp_login_limit", JSON.stringify(this.global));
   }
 
+  /**
+   * The key a client's failures are counted under. Past MAX_TRACKED_CLIENTS distinct clients the
+   * rest share one "overflow" entry, but only after expired entries are dropped: otherwise a
+   * burst of clients long gone would push every new client into the shared lockout for good.
+   */
+  private slot(map: Map<string, Failures>, client: string, now: number) {
+    if (map.has(client) || map.size < MAX_TRACKED_CLIENTS) return client;
+    for (const [key, entry] of map) if (entry.reset <= now) map.delete(key);
+    return map.size < MAX_TRACKED_CLIENTS ? client : "overflow";
+  }
+
   private limited(client: string, usesCode: boolean, now: number) {
     if (usesCode && this.global.reset > now && this.global.count >= MAX_CODE_FAILURES_GLOBAL)
       return Math.ceil((this.global.reset - now) / 1000);
     const map = usesCode ? this.codeFailures : this.tokenFailures;
-    if (!map.has(client) && map.size >= 10_000) client = "overflow";
-    const entry = map.get(client);
+    const entry = map.get(this.slot(map, client, now));
     const max = usesCode ? MAX_CODE_FAILURES_PER_CLIENT : MAX_TOKEN_FAILURES_PER_CLIENT;
     if (entry && entry.reset > now && entry.count >= max) return Math.ceil((entry.reset - now) / 1000);
     return 0;
@@ -316,7 +326,7 @@ export class Auth {
       this.store.setSetting("totp_login_limit", JSON.stringify(this.global));
     }
     const map = usesCode ? this.codeFailures : this.tokenFailures;
-    if (!map.has(client) && map.size >= 10_000) client = "overflow";
+    client = this.slot(map, client, now);
     let entry = map.get(client);
     if (!entry || entry.reset <= now) map.set(client, (entry = { count: 0, reset: now + WINDOW_MS }));
     entry.count++;

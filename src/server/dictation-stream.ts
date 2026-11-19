@@ -7,6 +7,11 @@ export const DICTATION_RATE = 24_000;
 const BYTES_PER_SECOND = DICTATION_RATE * 2;
 const MAX_BYTES = BYTES_PER_SECOND * 300;
 const MAX_BUFFERED = BYTES_PER_SECOND * 10;
+/** A binary frame as bytes, whatever form the socket delivered it in. */
+export function audioBytes(data: Buffer | ArrayBuffer | Buffer[]): Buffer {
+  if (Array.isArray(data)) return Buffer.concat(data);
+  return Buffer.isBuffer(data) ? data : Buffer.from(data);
+}
 
 type Event = { type: string; [key: string]: unknown };
 type Segment = { text: string; done: boolean; id?: string };
@@ -36,7 +41,14 @@ export class DictationStreams {
 
   attach(server: Server) {
     server.on("upgrade", (request, socket, head) => {
-      const url = new URL(request.url ?? "/", "http://localhost");
+      // Outside Hono's error boundary: a malformed request target must not crash the worker.
+      let url: URL;
+      try {
+        url = new URL(request.url ?? "/", "http://localhost");
+      } catch {
+        socket.destroy();
+        return;
+      }
       if (url.pathname !== "/api/dictation/stream") { socket.destroy(); return; }
       const key = url.searchParams.get("ticket") ?? "";
       const ticket = this.tickets.get(key);
@@ -114,7 +126,7 @@ class DictationStream {
       if (this.closed) return;
       if (!valid()) { this.fail("Your session ended. Sign in again."); return; }
       try {
-        if (binary) this.append(Buffer.from(data as Buffer));
+        if (binary) this.append(audioBytes(data));
         else {
           const event = JSON.parse(data.toString());
           if (event.type === "stop") this.finish();
@@ -222,18 +234,28 @@ class DictationStream {
     if (Math.sqrt(energy / (audio.length / 2)) >= 0.006) { this.speech = true; this.silenceBytes = 0; }
     else this.silenceBytes += audio.length;
     if (this.mode === "realtime") {
-      if (!this.upstream || this.upstream.bufferedAmount > MAX_BUFFERED) { this.fail("Voice upload cannot keep up with recording."); return; }
-      this.upstream.send(JSON.stringify({ type: "input_audio_buffer.append", audio: audio.toString("base64") }));
+      if (this.upstream && this.upstream.bufferedAmount > MAX_BUFFERED) { this.fail("Voice upload cannot keep up with recording."); return; }
+      if (!this.sendUpstream({ type: "input_audio_buffer.append", audio: audio.toString("base64") })) return;
     }
     if (this.speech && ((this.segmentBytes >= BYTES_PER_SECOND && this.silenceBytes >= BYTES_PER_SECOND * 0.7) || this.segmentBytes >= BYTES_PER_SECOND * 30)) this.commit();
     else if (!this.speech && this.segmentBytes >= BYTES_PER_SECOND * 2) this.clearAudio();
+  }
+
+  /** Sends to the realtime service; a connection no longer open ends the session instead of throwing. */
+  private sendUpstream(event: Record<string, unknown>) {
+    if (this.upstream?.readyState !== WebSocket.OPEN) {
+      this.fail("Voice connection interrupted. Please try again.");
+      return false;
+    }
+    this.upstream.send(JSON.stringify(event));
+    return true;
   }
 
   private clearAudio() {
     this.chunks = [];
     this.segmentBytes = this.silenceBytes = 0;
     this.speech = false;
-    if (this.mode === "realtime") this.upstream?.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+    if (this.mode === "realtime") this.sendUpstream({ type: "input_audio_buffer.clear" });
   }
 
   private commit() {
@@ -242,9 +264,9 @@ class DictationStream {
     this.segments.push(segment);
     if (this.mode === "realtime") {
       // The service requires at least 100 ms; pad a very short final word, never drop it.
-      if (this.segmentBytes < BYTES_PER_SECOND / 10) this.upstream?.send(JSON.stringify({ type: "input_audio_buffer.append", audio: Buffer.alloc(BYTES_PER_SECOND / 10 - this.segmentBytes).toString("base64") }));
+      if (this.segmentBytes < BYTES_PER_SECOND / 10 && !this.sendUpstream({ type: "input_audio_buffer.append", audio: Buffer.alloc(BYTES_PER_SECOND / 10 - this.segmentBytes).toString("base64") })) return;
       this.commits.push(segment);
-      this.upstream?.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+      if (!this.sendUpstream({ type: "input_audio_buffer.commit" })) return;
     } else {
       this.jobs.push({ audio: Buffer.concat(this.chunks), segment });
       this.pump();

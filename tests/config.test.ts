@@ -47,3 +47,11 @@ test("settings are validated before they are saved", () => {
     assert.equal(effectiveConfig(store, {}).bind.value, "::1");
   });
 });
+
+test("an invalid environment override is refused with the variable named", () => {
+  withStore((store) => {
+    assert.throws(() => effectiveConfig(store, { LITEPASEO_PORT: "80a" }), /LITEPASEO_PORT="80a" is not valid\. Use a port number from 1 to 65535\./);
+    assert.throws(() => effectiveConfig(store, { LITEPASEO_COMPRESSION: "yes" }), /LITEPASEO_COMPRESSION.*on or off/);
+    assert.equal(effectiveConfig(store, { LITEPASEO_BIND: "0.0.0.0" }).bind.value, "0.0.0.0");
+  });
+});

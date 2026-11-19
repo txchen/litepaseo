@@ -49,6 +49,8 @@ export class UsageService {
   }
 
   async report(force = false): Promise<UsageReport> {
+    // Removed hosts never come back under the same ID: their readings go.
+    for (const id of this.cache.keys()) if (!this.hosts.clients.has(id)) this.cache.delete(id);
     const ids = [...this.hosts.clients.keys()].filter((id) => this.hosts.state(id) === "connected");
     const results = await Promise.all(ids.map(async (id) => [id, await this.read(id, force)] as const));
     const accounts = new Map<string, UsageAccount>();
@@ -117,7 +119,8 @@ export class UsageService {
         return { at: this.now(), ok: false, providers: [], error: (error as Error).message || "Usage unavailable" };
       }
     })().then((usage) => {
-      this.cache.set(hostId, usage);
+      // A host removed while its read was in flight is not cached again.
+      if (this.hosts.clients.has(hostId)) this.cache.set(hostId, usage);
       this.inflight.delete(hostId);
       return usage;
     });

@@ -1,153 +1,107 @@
-import { ViewingPresence } from "./viewing-presence.ts";
-import { registerHostSettings } from "./host-settings.ts";
-import { messageDeliveryModes } from "./message-delivery.ts";
-import { saveMessageImages, messageImage, withMessageImages } from "./message-images.ts";
-import { importProjectIcon, MAX_ICON_BYTES } from "./project-icon-import.ts";
-import { ServerSendQueue } from "./send-queue.ts";
-import { VERSION } from "./version.ts";
-import { eventStream, streamEncoding } from "./sse.ts";
-import { compressJson } from "./compression.ts";
-import { logEvent } from "./log-event.ts";
-import { registerWorkspaceRoutes } from "./workspace-routes.ts";
-import { Attachments, MAX_FILE_BYTES } from "./attachments.ts";
-import { notificationPreview } from "./notification-preview.ts";
-import { confirmedMessages } from "./message-status.ts";
-import { IconCache, MAX_IMAGE_BYTES, imageMime, imageReadTarget, isLocalConnection, isMaterializedImagePath, readMaterializedImage } from "./media.ts";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { getCookie, setCookie, deleteCookie } from "hono/cookie";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import QRCode from "qrcode";
 import { z } from "zod";
-import { AgentPermissionResponseSchema } from "@getpaseo/protocol/messages";
-import { parseHostTarget } from "@getpaseo/client/node";
-import { Store, type LoginSession } from "./store.ts";
-import { Auth, SESSION_TTL_MS } from "./auth.ts";
-import { Notifier, vapidKeys, webPushSender, type PushSender } from "./notifier.ts";
-import { UsageService } from "./usage.ts";
-import { MAX_DICTATION_BYTES, DictationError, clearDictation, dictationConfig, dictationSettings, saveDictation, transcribe } from "./dictation.ts";
+import { Attachments, MAX_FILE_BYTES } from "./attachments.ts";
+import { Auth } from "./auth.ts";
+import { compressJson } from "./compression.ts";
+import { MAX_DICTATION_BYTES } from "./dictation.ts";
 import { DictationStreams } from "./dictation-stream.ts";
-import { Hosts, TimelineTimeoutError, UnknownHostError } from "./hosts.ts";
-import { rewindModes } from "./host-directory.ts";
-import type {
-  CreateSessionRequest,
-  DirectoryMessage,
-  HostState,
-  ProjectOption,
-  ProjectConfigState,
-  ProviderOption,
-  TimelineItem,
-  TimelineMessage,
-  TimelineSnapshot,
-  TimelinePage,
-  SubagentsMessage,
-  PromptIndex,
-  AgentConfigChange,
-  AgentConfigOptions,
-  AgentFeatureOption,
-} from "../shared/wire.ts";
-
-const AGENT_FLUSH_MS = 100;
-const HOST_FLUSH_MS = 100;
-
-function parseJson(text: string | undefined): unknown {
-  try {
-    return JSON.parse(text ?? "null");
-  } catch {
-    return null;
-  }
-}
-
-export const CARD_DESCRIPTION_MAX = 20_000, CARD_COMMENT_MAX = 5_000, CARD_COMMENTS_MAX = 200;
-const cardComment = z.object({ id: z.string().uuid(), text: z.string().trim().min(1).max(CARD_COMMENT_MAX), at: z.number().int().nonnegative() });
-const card = z
-  .object({
-    id: z.string().uuid(),
-    title: z.string().min(1).max(300),
-    column: z.enum(["Todo", "Doing", "Done"]),
-    hostId: z.string().nullable(),
-    agentId: z.string().nullable(),
-    description: z.string().max(CARD_DESCRIPTION_MAX).optional(),
-    comments: z.array(cardComment).max(CARD_COMMENTS_MAX).optional(),
-    createdAt: z.number().int().nonnegative().optional(),
-    updatedAt: z.number().int().nonnegative().optional(),
-  })
-  .refine((c) => (c.hostId === null) === (c.agentId === null));
-/** One card's editable fields; omitted fields are left as they are. */
-const cardPatch = z
-  .object({
-    title: z.string().trim().min(1).max(300),
-    column: z.enum(["Todo", "Doing", "Done"]),
-    description: z.string().max(CARD_DESCRIPTION_MAX),
-    link: z.object({ hostId: z.string(), agentId: z.string() }).nullable(),
-  })
-  .partial();
-const SESSION_COOKIE = "lp_session";
-/** Cookie-authenticated writes must carry this header; a cross-site form or image cannot. */
-const CSRF_HEADER = "x-litepaseo";
-const PUBLIC_API = new Set(["/api/auth", "/api/login"]);
+import { registerHostSettings } from "./host-settings.ts";
+import { UnknownHostError, type Hosts } from "./hosts.ts";
+import { notificationPreview } from "./notification-preview.ts";
+import { Notifier, webPushSender, type PushSender } from "./notifier.ts";
+import { ServerSendQueue } from "./send-queue.ts";
+import { streamEncoding } from "./sse.ts";
+import type { Store } from "./store.ts";
+import { UsageService } from "./usage.ts";
+import { VERSION } from "./version.ts";
+import { ViewingPresence } from "./viewing-presence.ts";
+import { HttpError, type Env, type RouteContext } from "./route-context.ts";
+import { apiAuth, registerAuthRoutes } from "./auth-routes.ts";
+import { instanceName, registerDirectoryRoutes } from "./directory-routes.ts";
+import { registerAgentRoutes } from "./agent-routes.ts";
+import { registerTimelineRoutes } from "./timeline-routes.ts";
+import { registerMessageRoutes } from "./message-routes.ts";
+import { registerProjectRoutes } from "./project-routes.ts";
+import { registerDictationRoutes } from "./dictation-routes.ts";
+import { registerBoardRoutes } from "./board-routes.ts";
+import { registerWorkspaceRoutes } from "./workspace-routes.ts";
 
 export interface AppOptions {
   pushSender?: PushSender;
   /** VAPID subject; Apple's push service requires a mailto: or https: URL. */
   pushSubject?: string;
-  /** Outbound requests to the transcription service; replaced in tests. */
+  /** Outbound requests (transcription service, project icon import); replaced in tests. */
   fetch?: typeof fetch;
   /** Compress API responses and live streams for browsers that accept it (default on). */
   compression?: boolean;
 }
 
-/** `session` for a browser, or `bearer` (the accepted token) for a script on a direct connection. */
-type Env = { Variables: { session: LoginSession | null; bearer: string | null } };
+/**
+ * CSP sources for index.html's inline scripts (the theme is pinned before first paint), by hash:
+ * exactly the shipped script runs, an injected one does not.
+ */
+export function inlineScriptHashes(webRoot: string): string[] {
+  let html: string;
+  try {
+    html = readFileSync(join(webRoot, "index.html"), "utf8");
+  } catch {
+    return [];
+  }
+  return [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => `'sha256-${createHash("sha256").update(m[1]).digest("base64")}'`);
+}
 
 /**
- * Requests that arrived through a tunnel or reverse proxy. A bearer token is never accepted from
- * them: over the network, only the browser sign-in (with its rate limits and optional
- * authenticator code) admits anyone.
+ * The composition root: shared services, middleware, error handling, the route modules and the
+ * web app itself. `token` is the access token, or a function returning the current one (it can
+ * be rotated).
  */
-const proxied = (c: { req: { header: (name: string) => string | undefined } }) =>
-  ["cf-connecting-ip", "x-forwarded-for", "x-real-ip", "forwarded"].some((name) => c.req.header(name) !== undefined);
-
-/** `token` is the access token, or a function returning the current one (it can be rotated). */
 export function createApp(store: Store, hosts: Hosts, token: string | (() => string), webRoot: string, options: AppOptions = {}) {
   const app = new Hono<Env>();
   const auth = new Auth(store, token);
   const dictationStreams = new DictationStreams(options.fetch, (metrics) => console.info(JSON.stringify({ event: "dictation_complete", ...metrics })));
   const attachments = new Attachments();
   const sendQueue = new ServerSendQueue(store, hosts);
-  const projectIcons = new IconCache();
-  const presence = new ViewingPresence(id => (store.sessionById(id)?.expires ?? 0) > Date.now());
+  const presence = new ViewingPresence((id) => (store.sessionById(id)?.expires ?? 0) > Date.now());
   const notifier = new Notifier({
     store,
     sender: options.pushSender ?? webPushSender(store, options.pushSubject ?? "mailto:litepaseo@example.com"),
-    isViewing: key => presence.isViewing(key),
+    isViewing: (key) => presence.isViewing(key),
     deviceActive: () => presence.anyActive(),
     viewedSince: (key, at) => presence.viewedSince(key, at),
     replyPreview: (agent, previous) => notificationPreview(hosts.get(agent.hostId).driver, agent.id, previous.turnStartedAt, agent.attention ? undefined : agent.activityAt),
     hostLabel: (id) => hosts.label(id) || store.hosts().find((h) => h.id === id)?.label || "",
   });
-  hosts.onTransition((previous, next) => notifier.transition(previous, next));
+  const stopNotifying = hosts.onTransition((previous, next) => notifier.transition(previous, next));
   const usage = new UsageService(hosts);
   store.pruneSessions(Date.now());
-  const secure = (c: { req: { url: string; header: (name: string) => string | undefined } }) =>
-    c.req.header("x-forwarded-proto") === "https" || c.req.url.startsWith("https:");
-  const clientId = (c: { req: { header: (name: string) => string | undefined } }) =>
-    c.req.header("cf-connecting-ip") ?? c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "direct";
+  const compression = options.compression !== false;
+  const ctx: RouteContext = {
+    store, hosts, auth, attachments, sendQueue, fetch: options.fetch,
+    streamValidity: (c) => {
+      const session = c.get("session"), bearer = c.get("bearer");
+      if (session) return () => auth.stillValid(session.id);
+      return () => !!bearer && !auth.totpEnabled() && auth.checkToken(bearer);
+    },
+    encodingOf: (c) => streamEncoding(c.req.header("Accept-Encoding"), compression),
+  };
+
+  // ---- Middleware ---------------------------------------------------------------------------
+  const scriptSrc = ["'self'", ...inlineScriptHashes(webRoot)].join(" ");
   app.use("*", async (c, next) => {
     await next();
     c.header("X-Content-Type-Options", "nosniff");
     c.header("Referrer-Policy", "no-referrer");
     c.header(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'",
+      `default-src 'self'; script-src ${scriptSrc}; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'`,
     );
   });
-  const compression = options.compression !== false;
-  /** How a live stream to this request is compressed. */
-  const encodingOf = (c: { req: { header: (name: string) => string | undefined } }) => streamEncoding(c.req.header("Accept-Encoding"), compression);
   app.use("/api/*", compressJson(compression));
   app.use("/api/*", (c, next) => bodyLimit({
     maxSize: c.req.method !== "POST" ? 1024 * 1024
@@ -155,161 +109,12 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
       : c.req.path === "/api/dictation/transcribe" ? MAX_DICTATION_BYTES
       : 1024 * 1024,
   })(c, next));
-  app.use("/api/*", async (c, next) => {
-    c.header("Cache-Control", "no-store");
-    c.set("bearer", null);
-    const bearer = /^Bearer (.+)$/.exec(c.req.header("authorization") ?? "")?.[1];
-    if (bearer && !PUBLIC_API.has(c.req.path) && !auth.totpEnabled() && !proxied(c)) {
-      const result = auth.bearer(bearer, clientId(c));
-      if (!result.ok) {
-        if (result.retryAfter) c.header("Retry-After", String(result.retryAfter));
-        return c.json({ error: result.status === 429 ? "Too many attempts. Try again later." : "Sign in required" }, result.status);
-      }
-      c.set("session", null);
-      c.set("bearer", bearer);
-      return next();
-    }
-    // One session lookup per request. The cookie is reissued only when the sliding expiry
-    // actually moved (at most hourly), and never on login/logout, which set their own cookie.
-    const secret = getCookie(c, SESSION_COOKIE);
-    const found = auth.authenticate(secret);
-    const session = found?.session ?? null;
-    if (found?.renewed && secret && c.req.path !== "/api/login" && c.req.path !== "/api/logout")
-      setCookie(c, SESSION_COOKIE, secret, {
-        httpOnly: true, secure: secure(c), sameSite: "Strict", path: "/",
-        maxAge: Math.floor(SESSION_TTL_MS / 1000),
-      });
-    if (PUBLIC_API.has(c.req.path)) {
-      c.set("session", session);
-      return next();
-    }
-    if (!session) return c.json({ error: "Sign in required" }, 401);
-    if (!["GET", "HEAD"].includes(c.req.method) && c.req.header(CSRF_HEADER) !== "1")
-      return c.json({ error: "Missing request header" }, 403);
-    c.set("session", session);
-    await next();
-  });
+  app.use("/api/*", apiAuth(auth));
 
-  // ---- Sign-in, sessions and two-factor ------------------------------------------------------
-  const instanceName = () => store.setting("instance-name") ?? "";
-  app.get("/api/auth", (c) => c.json({ authenticated: !!c.get("session"), totp: auth.totpEnabled(), ...(instanceName() ? { instanceName: instanceName() } : {}) }));
-  app.post("/api/login", async (c) => {
-    const input = z
-      .object({ token: z.string().min(1).max(200).optional(), code: z.string().regex(/^\d{6}$/).optional() })
-      .refine((x) => !!x.token || !!x.code)
-      .parse(await c.req.json());
-    const userAgent = c.req.header("user-agent") ?? "";
-    const label =
-      (/iPhone|iPad/.test(userAgent) ? "iOS" : /Android/.test(userAgent) ? "Android" : /Mac OS/.test(userAgent) ? "macOS" : /Windows/.test(userAgent) ? "Windows" : /Linux/.test(userAgent) ? "Linux" : "Browser") +
-      (/Edg\//.test(userAgent) ? " · Edge" : /Chrome\//.test(userAgent) ? " · Chrome" : /Firefox\//.test(userAgent) ? " · Firefox" : /Safari\//.test(userAgent) ? " · Safari" : "");
-    const result = auth.login(input, clientId(c), label);
-    if (!result.ok) {
-      if (result.retryAfter) c.header("Retry-After", String(result.retryAfter));
-      return c.json(
-        { error: result.status === 429 ? "Too many attempts. Try again later." : "That did not match." },
-        result.status,
-      );
-    }
-    setCookie(c, SESSION_COOKIE, result.secret, {
-      httpOnly: true,
-      secure: secure(c),
-      sameSite: "Strict",
-      path: "/",
-      maxAge: SESSION_TTL_MS / 1000,
-    });
-    return c.json({ ok: true });
-  });
-  app.post("/api/logout", (c) => {
-    const session = c.get("session");
-    if (session) { auth.revoke(session.id); attachments.clearOwner(session.id); }
-    deleteCookie(c, SESSION_COOKIE, { path: "/" });
-    return c.json({ ok: true });
-  });
-  app.get("/api/sessions", (c) =>
-    c.json(
-      store.sessions().map((s) => ({
-        id: s.id,
-        label: s.label,
-        created: s.created,
-        lastSeen: s.lastSeen,
-        current: s.id === c.get("session")?.id,
-      })),
-    ),
-  );
-  app.delete("/api/sessions/:id", (c) => {
-    auth.revoke(c.req.param("id"));
-    if (c.req.param("id") === c.get("session")?.id) deleteCookie(c, SESSION_COOKIE, { path: "/" });
-    return c.json({ ok: true });
-  });
-  app.post("/api/sessions/revoke-all", (c) => {
-    auth.revoke();
-    deleteCookie(c, SESSION_COOKIE, { path: "/" });
-    return c.json({ ok: true });
-  });
-  const requireSession = (session: LoginSession | null) => {
-    if (!session) throw new z.ZodError([{ code: "custom", path: [], message: "A browser session is required", input: null }]);
-    return session;
-  };
-  app.post("/api/totp/setup", async (c) => {
-    const session = requireSession(c.get("session"));
-    if (auth.totpEnabled()) return c.json({ error: "Disable the current authenticator before replacing it." }, 409);
-    const { secret, uri } = auth.beginTotp(session.id);
-    const qr = await QRCode.toString(uri, { type: "svg", margin: 1, errorCorrectionLevel: "M" });
-    return c.json({ secret, uri, qr: "data:image/svg+xml;base64," + Buffer.from(qr).toString("base64") });
-  });
-  app.post("/api/totp/confirm", async (c) => {
-    const session = requireSession(c.get("session"));
-    const { code } = z.object({ code: z.string().regex(/^\d{6}$/) }).parse(await c.req.json());
-    if (!auth.confirmTotp(session.id, code)) return c.json({ error: "That code did not match. Try the next one." }, 400);
-    return c.json({ ok: true });
-  });
-  app.post("/api/totp/disable", async (c) => {
-    const { code } = z.object({ code: z.string().regex(/^\d{6}$/) }).parse(await c.req.json());
-    if (!auth.disableTotp(code)) return c.json({ error: "That code did not match." }, 400);
-    return c.json({ ok: true });
-  });
-
-  // ---- Push notifications --------------------------------------------------------------------
-  const prefsSchema = z.object({ attention: z.boolean(), turns: z.boolean() });
-  app.get("/api/push/key", (c) => c.json({ publicKey: vapidKeys(store).publicKey }));
-  app.post("/api/push/subscribe", async (c) => {
-    const session = requireSession(c.get("session"));
-    const input = z
-      .object({
-        subscription: z.object({
-          endpoint: z.string().url().max(2000).refine((u) => u.startsWith("https://")),
-          keys: z.object({ p256dh: z.string().min(1).max(200), auth: z.string().min(1).max(100) }),
-        }),
-        prefs: prefsSchema,
-      })
-      .parse(await c.req.json());
-    store.savePushSubscription({
-      endpoint: input.subscription.endpoint,
-      sessionId: session.id,
-      p256dh: input.subscription.keys.p256dh,
-      auth: input.subscription.keys.auth,
-      prefs: input.prefs,
-      created: Date.now(),
-    });
-    return c.json({ ok: true });
-  });
-  app.post("/api/push/status", async (c) => {
-    const { endpoint } = z.object({ endpoint: z.string().max(2000) }).parse(await c.req.json());
-    const found = store.pushSubscriptions().find((s) => s.endpoint === endpoint);
-    return c.json(found ? { subscribed: true, prefs: found.prefs } : { subscribed: false });
-  });
-  app.post("/api/push/unsubscribe", async (c) => {
-    const { endpoint } = z.object({ endpoint: z.string().max(2000) }).parse(await c.req.json());
-    store.removePushSubscription(endpoint);
-    return c.json({ ok: true });
-  });
-  app.post("/api/push/test", async (c) => {
-    const session = requireSession(c.get("session"));
-    return c.json({ sent: await notifier.test(session.id) });
-  });
   app.onError((error, c) => {
     if (error instanceof UnknownHostError) return c.json({ error: "Unknown host" }, 404);
     if (error instanceof z.ZodError) return c.json({ error: "Invalid request", detail: error.issues }, 400);
+    if (error instanceof HttpError) return c.json({ error: error.message }, error.status);
     const requestId = randomUUID();
     // Enough to diagnose from the private service log: where it failed and what failed. The
     // query string is left out (it can carry cursors and filters), and messages are bounded.
@@ -324,961 +129,32 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     }));
     return c.json({ error: "Operation failed; refresh state before retrying", requestId }, 502);
   });
+
+  // ---- API ----------------------------------------------------------------------------------
   app.get("/api/health", (c) => c.json({ ok: true, version: VERSION, waiting: notifier.waitingCount }));
-  /** The daemon stores custom project icons (Paseo's projectCustomIcon feature). */
-  const customIcons = (hostId: string) =>
-    (hosts.clients.get(hostId)?.driver.getLastServerInfoMessage() as { features?: { projectCustomIcon?: boolean } } | null)?.features
-      ?.projectCustomIcon === true;
-  const hostStates = (): HostState[] =>
-    store.hosts().map((h) => ({
-      id: h.id,
-      label: h.label,
-      state: hosts.state(h.id),
-      diagnostic: hosts.diagnostic(h.id),
-      ...(customIcons(h.id) ? { customIcons: true } : {}),
-      ...(isLocalConnection(h.connection) ? { local: true } : {}),
-    }));
-  app.get("/api/hosts", (c) => c.json(hostStates()));
-
-  // Directory streams. Each remembers the last collection seq it delivered, so a flush sends
-  // only entries changed since then: O(changes) per flush, independent of directory size.
-  type DirectoryStream = { last: number; lastWorkspaces: number; send: (message: DirectoryMessage) => void };
-  const directoryStreams = new Set<DirectoryStream>();
-  let agentFlush: ReturnType<typeof setTimeout> | undefined;
-  let hostFlush: ReturnType<typeof setTimeout> | undefined;
-  /** Set on shutdown: closing the hosts still reports changes, but the store is about to close. */
-  let disposed = false;
-  const deliverAgents = (stream: DirectoryStream) => {
-    deliverWorkspaces(stream);
-    const { agents } = hosts;
-    const changes = agents.changesSince(stream.last);
-    if (changes === null)
-      stream.send({
-        type: "snapshot",
-        generation: agents.generation,
-        seq: agents.seq,
-        agents: agents.snapshot(),
-      });
-    else if (changes.length)
-      stream.send({ type: "changes", generation: agents.generation, seq: agents.seq, changes });
-    stream.last = agents.seq;
-  };
-  const deliverWorkspaces = (stream: DirectoryStream) => {
-    const { workspaces } = hosts;
-    const changes = workspaces.changesSince(stream.lastWorkspaces);
-    if (changes === null)
-      stream.send({
-        type: "workspaces-snapshot",
-        generation: workspaces.generation,
-        seq: workspaces.seq,
-        workspaces: workspaces.snapshot(),
-      });
-    else if (changes.length)
-      stream.send({ type: "workspaces-changes", generation: workspaces.generation, seq: workspaces.seq, changes });
-    stream.lastWorkspaces = workspaces.seq;
-  };
-  hosts.onAgentsChanged(() => {
-    if (disposed || agentFlush || !directoryStreams.size) return;
-    agentFlush = setTimeout(() => {
-      agentFlush = undefined;
-      for (const stream of directoryStreams) deliverAgents(stream);
-    }, AGENT_FLUSH_MS);
-  });
-  hosts.onHostsChanged(() => {
-    if (disposed || hostFlush || !directoryStreams.size) return;
-    hostFlush = setTimeout(() => {
-      hostFlush = undefined;
-      const message: DirectoryMessage = { type: "hosts", hosts: hostStates(), instanceName: instanceName(), version: VERSION };
-      for (const stream of directoryStreams) stream.send(message);
-    }, HOST_FLUSH_MS);
-  });
-  /** Re-checked on heartbeat: a revoked session, or a rotated token, loses its open streams. */
-  const streamValidity = (c: { get: <K extends keyof Env["Variables"]>(key: K) => Env["Variables"][K] }) => {
-    const session = c.get("session"), bearer = c.get("bearer");
-    if (session) return () => auth.stillValid(session.id);
-    return () => !!bearer && !auth.totpEnabled() && auth.checkToken(bearer);
-  };
-  const projectPins = (): Record<string, number> => JSON.parse(store.setting("project-pins") ?? "{}");
-  app.get("/api/project-pins", c => c.json(projectPins()));
-  app.post("/api/project-pins", async c => {
-    const input = z.object({ hostId: z.string().min(1).max(200), projectIds: z.array(z.string().min(1).max(500)).min(1).max(100), pinned: z.boolean() }).parse(await c.req.json());
-    hosts.get(input.hostId);
-    const pins = projectPins();
-    const rank = Math.max(0, ...Object.values(pins)) + 1;
-    for (const id of input.projectIds) {
-      const key = JSON.stringify([input.hostId, id]);
-      if (input.pinned) pins[key] ??= rank; else delete pins[key];
-    }
-    if (Object.keys(pins).length > 2000) return c.json({ error: "Too many pinned projects" }, 400);
-    store.setSetting("project-pins", JSON.stringify(pins));
-    for (const stream of directoryStreams) stream.send({ type: "project-pins", pins });
-    return c.json(pins);
-  });
-  app.put("/api/presence", async c => {
-    const session = c.get("session");
-    if (!session) return c.json({ error: "Browser sign-in required" }, 403);
-    const input = z.object({ tab: z.string().uuid(), seq: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), key: z.string().min(1).max(1024).nullable(), active: z.boolean().optional() }).strict().parse(await c.req.json());
-    presence.update(session.id, input.tab, input.seq, input.key, input.active);
-    return c.json({ ok: true });
-  });
-  /**
-   * A browser's account of a slow conversation open (see timeline_slow for the server's):
-   * together they show whether the time went to the server, the network or the browser.
-   */
-  app.post("/api/diagnostics/timeline-slow", async c => {
-    const ms = z.number().int().nonnegative().max(3_600_000).nullable();
-    const long = z.number().int().nonnegative().max(90 * 86_400_000).nullable();
-    const input = z.object({
-      hostId: z.string().min(1).max(200), agentId: z.string().min(1).max(200),
-      totalMs: ms, connectedMs: ms, rowsMs: ms, renderMs: ms,
-      // Pages before 0.8.1 do not report first bytes.
-      firstByteMs: ms.optional(),
-      // From 0.9.1: the kind of browser (never its user agent), the connection, and how the
-      // stream's body arrived, to tell a held-back response from one that trickled in.
-      via: z.enum(["latest", "stream"]).optional(),
-      engine: z.enum(["webkit", "blink", "gecko", "other"]).optional(),
-      os: z.enum(["ios", "android", "macos", "windows", "linux", "other"]).optional(),
-      standalone: z.boolean().optional(),
-      protocol: z.string().max(20).nullable().optional(),
-      encoding: z.string().max(10).nullable().optional(),
-      chunks: z.number().int().nonnegative().max(1_000_000).optional(),
-      characters: z.number().int().nonnegative().max(1_000_000_000).optional(),
-      lastChunkMs: ms.optional(),
-      maxGapMs: z.number().int().nonnegative().max(3_600_000).optional(),
-      maxGapEndMs: ms.optional(),
-      arrivals: z.array(z.tuple([z.number().int().nonnegative().max(3_600_000), z.number().int().nonnegative().max(1_000_000_000)])).max(10).optional(),
-      attempts: z.number().int().nonnegative().max(1000), hidden: z.boolean(),
-      // A page, and its time in the background, can last days.
-      pageAgeMs: long.optional(), backgroundMs: long.optional(), visibleForMs: ms.optional(),
-      version: z.string().max(40).optional(),
-    }).strict().parse(await c.req.json());
-    logEvent("timeline_slow_client", input);
-    return c.json({ ok: true });
-  });
-  app.get("/api/instance", c => c.json({ name: instanceName() }));
-  app.put("/api/instance", async c => {
-    const input = z.object({ name: z.string().trim().max(64).refine(name => !/[\u0000-\u001f\u007f]/.test(name), "Use a single-line name") }).strict().safeParse(await c.req.json());
-    if (!input.success) return c.json({ error: "Use an instance name of up to 64 characters on a single line." }, 400);
-    store.setSetting("instance-name", input.data.name || null);
-    const message: DirectoryMessage = { type: "hosts", hosts: hostStates(), instanceName: instanceName(), version: VERSION };
-    for (const stream of directoryStreams) stream.send(message);
-    return c.json({ name: instanceName() });
-  });
-  app.get("/api/stream", (c) => {
-    const since = Number(c.req.query("since"));
-    const resumable =
-      c.req.query("generation") === hosts.agents.generation && Number.isInteger(since);
-    const wsince = Number(c.req.query("wsince"));
-    const wresumable =
-      c.req.query("wgeneration") === hosts.workspaces.generation && Number.isInteger(wsince);
-    return eventStream(c.req.raw.signal, (send) => {
-      const stream: DirectoryStream = { last: resumable ? since : -1, lastWorkspaces: wresumable ? wsince : -1, send };
-      send({ type: "hosts", hosts: hostStates(), instanceName: instanceName(), version: VERSION });
-      send({ type: "project-pins", pins: projectPins() });
-      deliverAgents(stream);
-      directoryStreams.add(stream);
-      return () => directoryStreams.delete(stream);
-    }, streamValidity(c), encodingOf(c));
-  });
-  app.post("/api/hosts", async (c) => {
-    const input = z
-      .object({
-        label: z.string().trim().min(1).max(80),
-        connection: z.string().trim().min(1).max(16000),
-      })
-      .parse(await c.req.json());
-    parseHostTarget(input.connection);
-    const host = store.addHost(input.label, input.connection);
-    try {
-      hosts.add(host);
-    } catch (e) {
-      store.removeHost(host.id);
-      throw e;
-    }
-    return c.json({ id: host.id, label: host.label }, 201);
-  });
-  app.delete("/api/hosts/:host", async (c) => {
-    await hosts.remove(c.req.param("host"));
-    store.removeHost(c.req.param("host"));
-    return c.json({ ok: true });
-  });
-  // ---- New sessions ---------------------------------------------------------------------------
-  /** Providers the host can start right now, read from the daemon's provider snapshot. */
-  app.get("/api/hosts/:host/providers", async (c) => {
-    const snapshot = await hosts.get(c.req.param("host")).api.providers.snapshot();
-    const providers: ProviderOption[] = snapshot.entries
-      .filter((entry) => entry.enabled !== false && entry.status !== "unavailable")
-      .map((entry) => ({
-        id: entry.provider,
-        label: entry.label ?? entry.provider,
-        status: entry.status,
-        ...(entry.error ? { error: entry.error } : {}),
-        defaultModeId: entry.defaultModeId ?? null,
-        modes: (entry.modes ?? []).map((m) => ({
-          id: m.id,
-          label: m.label,
-          ...(m.description ? { description: m.description } : {}),
-        })),
-        models: (entry.models ?? [])
-          .filter((m) => m.isSelectable !== false)
-          .map((m) => ({
-            id: m.id,
-            label: m.label,
-            ...(m.description ? { description: m.description } : {}),
-            isDefault: m.isDefault === true,
-            thinking: (m.thinkingOptions ?? []).map((t) => ({ id: t.id, label: t.label })),
-            defaultThinkingId: m.defaultThinkingOptionId ?? null,
-          })),
-      }));
-    return c.json(providers);
-  });
-  /** Projects the daemon knows, as starting points for a new session. */
-  app.get("/api/hosts/:host/projects", async (c) => {
-    const result = await hosts.get(c.req.param("host")).api.projects.list();
-    const projects: ProjectOption[] = result.projects.map((p) => ({
-      key: p.projectKey ?? p.projectId,
-      name: p.projectCustomName || p.projectDisplayName,
-      rootPath: p.projectRootPath,
-      kind: p.projectKind,
-    }));
-    return c.json(projects);
-  });
-  /**
-   * Starts a session. The browser's idempotency key travels to the daemon, so retrying after an
-   * unknown outcome cannot create a second session.
-   */
-  app.post("/api/hosts/:host/agents", async (c) => {
-    const input = z
-      .object({
-        idempotencyKey: z.string().uuid(),
-        cwd: z.string().trim().min(1).max(4096),
-        provider: z.string().trim().min(1).max(200).regex(/^[^/]+$/),
-        model: z.string().trim().min(1).max(300).optional(),
-        modeId: z.string().trim().min(1).max(200).optional(),
-        thinkingOptionId: z.string().trim().min(1).max(200).optional(),
-        featureValues: z.record(z.string(), z.unknown()).optional(),
-        prompt: z.string().max(100000).optional(),
-        worktreeBranch: z.string().trim().min(1).max(200).optional(),
-      })
-      .parse(await c.req.json()) satisfies CreateSessionRequest;
-    const hostId = c.req.param("host");
-    const { api } = hosts.get(hostId);
-    try {
-      let model = input.model;
-      if (!model) {
-        const snapshot = await api.providers.snapshot();
-        const provider = snapshot.entries.find(p => p.provider === input.provider && p.enabled !== false && p.status !== "unavailable");
-        const models = provider?.models?.filter(m => m.isSelectable !== false) ?? [];
-        model = models.find(m => m.isDefault)?.id ?? models[0]?.id;
-        if (!model) return c.json({ error: "No selectable model is available for this provider. Refresh providers and select a model." }, 400);
-      }
-      const agent = await api.agents.create({
-        idempotencyKey: input.idempotencyKey,
-        cwd: input.cwd,
-        config: {
-          provider: `${input.provider}/${model}`,
-          ...(input.featureValues ? { featureValues: input.featureValues } : {}),
-          ...(input.modeId ? { modeId: input.modeId } : {}),
-          ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
-        },
-        ...(input.prompt?.trim() ? { prompt: input.prompt } : {}),
-        ...(input.worktreeBranch
-          ? { worktree: { mode: "branch-off" as const, newBranch: input.worktreeBranch } }
-          : {}),
-      });
-      return c.json({ id: agent.id, key: `${hostId}:${agent.id}` }, 201);
-    } catch (error) {
-      return c.json(
-        {
-          error:
-            error instanceof Error && error.message
-              ? `Could not start the session: ${error.message}`
-              : "Creation outcome unknown. Check the session list before retrying.",
-        },
-        502,
-      );
-    }
-  });
-
-  /** Rows as browsers get them: images the agent sent are served from here. */
-  const enrichRow = (hostId: string, agentId: string) => (row: import("../shared/wire.ts").TimelineRow) =>
-    ({ ...row, item: withMessageImages(store, hostId, agentId, row.item) });
-  /**
-   * The conversation as it is now, to open it: a plain response with an end, which no proxy
-   * holds back the way some held back a long-lived stream's first rows. The stream then resumes
-   * from the snapshot's seq and carries only what changed.
-   */
-  app.get("/api/hosts/:host/agents/:agent/timeline/latest", async (c) => {
-    const hostId = c.req.param("host"), agentId = c.req.param("agent");
-    try {
-      const reset = await hosts.timelineSnapshot(hostId, agentId);
-      return c.json({ ...reset, rows: reset.rows.map(enrichRow(hostId, agentId)) } satisfies TimelineSnapshot);
-    } catch (error) {
-      if (error instanceof TimelineTimeoutError) return c.json({ error: error.message }, 504);
-      throw error;
-    }
-  });
-  app.get("/api/hosts/:host/agents/:agent/timeline/stream", (c) => {
-    hosts.get(c.req.param("host"));
-    // A browser that holds the conversation says how far: it gets only what changed since.
-    const since = z.object({
-      epoch: z.string().min(1).max(200),
-      seq: z.coerce.number().int().nonnegative(),
-      from: z.coerce.number().int().nonnegative(),
-    }).safeParse(c.req.query());
-    return eventStream(c.req.raw.signal, (send) => {
-      const stop = hosts.watchTimeline(c.req.param("host"), c.req.param("agent"), (ops) =>
-        send({ type: "ops", ops: ops.map(op => {
-          const enrich = enrichRow(c.req.param("host"), c.req.param("agent"));
-          return op.type === "reset" ? { ...op, rows: op.rows.map(enrich) } : op.type === "upsert" ? { ...op, row: enrich(op.row) } : op;
-        }) } satisfies TimelineMessage), undefined, since.success ? since.data : undefined);
-      // The agent's provider subagents ride the same stream: no extra connection per chat.
-      // The first list always goes out, so a reconnecting browser drops subagents that are gone.
-      let sent = "";
-      let stopSubagents = () => {};
-      try {
-        stopSubagents = hosts.watchSubagents(c.req.param("host"), c.req.param("agent"), (subagents) => {
-          const text = JSON.stringify(subagents);
-          if (text === sent) return;
-          sent = text;
-          send({ type: "subagents", subagents } satisfies SubagentsMessage);
-        });
-      } catch {
-        // A host without provider subagent support: the conversation still streams.
-      }
-      return () => {
-        stop();
-        stopSubagents();
-      };
-    }, streamValidity(c), encodingOf(c));
-  });
-  /** One provider subagent's conversation, read-only, live like an agent's. */
-  app.get("/api/hosts/:host/agents/:agent/subagents/:subagent/timeline/stream", (c) => {
-    hosts.get(c.req.param("host"));
-    return eventStream(c.req.raw.signal, (send) =>
-      hosts.watchTimeline(c.req.param("host"), c.req.param("agent"), (ops) => send({ type: "ops", ops } satisfies TimelineMessage), c.req.param("subagent")),
-    streamValidity(c), encodingOf(c));
-  });
-  app.get("/api/hosts/:host/agents/:agent/subagents/:subagent/timeline", async (c) => {
-    const cursor = z
-      .object({ epoch: z.string().min(1), seq: z.number().int().nonnegative() })
-      .parse(parseJson(c.req.query("cursor")));
-    const page = await hosts
-      .get(c.req.param("host"))
-      .subagents.timelineDriver(c.req.param("agent"), c.req.param("subagent"))
-      .fetchAgentTimeline(c.req.param("agent"), { direction: "before", cursor, limit: 100 });
-    return c.json({
-      epoch: page.epoch,
-      hasOlder: page.hasOlder,
-      startCursor: page.startCursor,
-      rows: page.entries.map((e) => ({ seqStart: e.seqStart, seqEnd: e.seqEnd, timestamp: e.timestamp, provider: e.provider, item: e.item })),
-    } satisfies TimelinePage);
-  });
-  app.get("/api/hosts/:host/agents/:agent/message-images/:message/:index", (c) => {
-    const index = c.req.param("index");
-    if (!/^[0-3]$/.test(index)) return c.notFound();
-    const image = messageImage(store, c.req.param("host"), c.req.param("agent"), c.req.param("message"), Number(index));
-    if (!image) return c.notFound();
-    return c.body(new Uint8Array(Buffer.from(image.data, "base64")), 200, {
-      "Content-Type": image.mimeType, "Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff",
-    });
-  });
-  /** Bounded history pages; the browser bookmarks boundaries for forward navigation. */
-  app.get("/api/hosts/:host/agents/:agent/timeline", async (c) => {
-    const cursor = z
-      .object({ epoch: z.string().min(1), seq: z.number().int().nonnegative() })
-      .parse(parseJson(c.req.query("cursor")));
-    const page = await hosts.get(c.req.param("host")).driver.fetchAgentTimeline(c.req.param("agent"), {
-      direction: "before",
-      cursor,
-      limit: 100,
-      projection: "projected",
-      wholeTurns: false,
-    });
-    return c.json({
-      epoch: page.epoch,
-      hasOlder: page.hasOlder,
-      startCursor: page.startCursor,
-      rows: page.entries.map((e) => ({
-        seqStart: e.seqStart,
-        seqEnd: e.seqEnd,
-        timestamp: e.timestamp,
-        provider: e.provider,
-        ...(e.turnId ? { turnId: e.turnId } : {}),
-        item: withMessageImages(store, c.req.param("host"), c.req.param("agent"), e.item as TimelineItem),
-      })),
-    } satisfies TimelinePage);
-  });
-  /** The conversation's user prompts (seq + short preview), for the outline rail. */
-  app.get("/api/hosts/:host/agents/:agent/timeline/prompts", async (c) => {
-    const client = hosts.get(c.req.param("host"));
-    try {
-      const page = await client.driver.listAgentTimelinePrompts(c.req.param("agent"), { timeout: 15_000 });
-      return c.json({
-        epoch: page.epoch,
-        prompts: page.prompts.map((p) => ({ seq: p.seq, preview: p.preview.replace(/\s+/g, " ").trim().slice(0, 240) })),
-      } satisfies PromptIndex);
-    } catch (error) {
-      // Older daemons have no prompt index; the rail simply does not appear.
-      return c.json({ error: (error as Error).message || "Prompt index unavailable" }, 501);
-    }
-  });
-  /**
-   * Rewinds to just before a user message: the conversation, the tracked files, or both, as
-   * the provider supports. Cannot be undone; the timeline is replaced (new epoch) on success.
-   */
-  app.post("/api/hosts/:host/agents/:agent/rewind", async (c) => {
-    const { messageId, mode } = z
-      .object({ messageId: z.string().min(1).max(500), mode: z.enum(["conversation", "files", "both"]) })
-      .parse(await c.req.json());
-    const client = hosts.get(c.req.param("host"));
-    const facts = client.directory.facts(c.req.param("agent"));
-    if (!facts) return c.json({ error: "Unknown agent" }, 404);
-    if (!rewindModes(facts.capabilities).includes(mode))
-      return c.json({ error: "This agent cannot rewind that way." }, 400);
-    try {
-      await client.driver.rewindAgent(c.req.param("agent"), messageId, mode);
-      return c.json({ ok: true });
-    } catch (error) {
-      return c.json({ error: (error as Error).message || "Rewind failed" }, 502);
-    }
-  });
-  /**
-   * An image an agent referenced in a message (`![](file:///…)`, an absolute or workspace path).
-   * Workspace files go through the daemon's file API; images the daemon materialized from
-   * provider output live outside the workspace and are read from disk when the daemon is local.
-   */
-  app.get("/api/hosts/:host/agents/:agent/image", async (c) => {
-    const hostId = c.req.param("host");
-    const path = z.string().min(1).max(4096).refine((p) => !p.includes("\0")).parse(c.req.query("path"));
-    const mime = imageMime(path);
-    if (!mime) return c.json({ error: "Not an image" }, 415);
-    const { driver } = hosts.get(hostId);
-    const cwd = hosts.agents.get(`${hostId}:${c.req.param("agent")}`)?.cwd;
-    let bytes: Uint8Array | null = null;
-    if (isMaterializedImagePath(path)) {
-      const host = store.hosts().find((h) => h.id === hostId);
-      if (host && isLocalConnection(host.connection)) bytes = await readMaterializedImage(path);
-    }
-    // Agents show images from anywhere on their machine (another repo, a temp folder), not
-    // only their cwd. The daemon confines a read to the root it is given, so an absolute path
-    // is read from its own folder. Only image files, size-capped, as before.
-    const target = bytes ? null : imageReadTarget(path, cwd);
-    if (target) {
-      try {
-        const file = await driver.readFile(target.root, target.path, undefined, MAX_IMAGE_BYTES);
-        if (file.size <= MAX_IMAGE_BYTES) bytes = file.bytes;
-      } catch {
-        bytes = null;
-      }
-    }
-    if (!bytes) return c.json({ error: "Image unavailable from this host" }, 404);
-    return c.body(bytes as Uint8Array<ArrayBuffer>, 200, {
-      "Content-Type": mime,
-      "Cache-Control": "private, max-age=86400",
-      "Content-Disposition": "inline",
-    });
-  });
-  /**
-   * A project's icon, cached briefly per host. With `project`, the daemon's effective icon (a
-   * custom one if set; `v` is its revision, so a change is a new cache entry); otherwise the
-   * favicon/logo found in `cwd`.
-   */
-  app.get("/api/hosts/:host/project-icon", async (c) => {
-    const hostId = c.req.param("host");
-    const cwd = z.string().min(1).max(4096).parse(c.req.query("cwd"));
-    const project = z.string().max(200).optional().parse(c.req.query("project") || undefined);
-    const version = z.string().max(200).optional().parse(c.req.query("v") || undefined) ?? "";
-    const key = project ? `${hostId}\np:${project}\n${version}` : `${hostId}\n${cwd}`;
-    let icon = projectIcons.get(key);
-    if (icon === undefined) {
-      try {
-        const { driver } = hosts.get(hostId);
-        const result =
-          project && customIcons(hostId)
-            ? await driver.getProjectIcon(project)
-            : await driver.requestProjectIcon(cwd);
-        icon = result.icon && /^image\/(png|jpeg|webp|gif|x-icon|vnd\.microsoft\.icon)$/.test(result.icon.mimeType)
-          ? { data: Buffer.from(result.icon.data, "base64"), mimeType: result.icon.mimeType }
-          : null;
-      } catch (error) {
-        if (error instanceof UnknownHostError) throw error;
-        return c.json({ error: "Icon unavailable" }, 502);
-      }
-      projectIcons.set(key, icon);
-    }
-    if (!icon) return c.body(null, 204, { "Cache-Control": "private, max-age=600" });
-    return c.body(icon.data as Uint8Array<ArrayBuffer>, 200, { "Content-Type": icon.mimeType, "Cache-Control": "private, max-age=600" });
-  });
-  // ---- Composer: model, thinking, mode and provider features ---------------------------------
-  /** What the open agent can switch to. Modes/features come from the live directory (no round trip). */
-  app.get("/api/hosts/:host/agents/:agent/config", async (c) => {
-    const hostId = c.req.param("host");
-    const client = hosts.get(hostId);
-    const facts = client.directory.facts(c.req.param("agent"));
-    if (!facts) return c.json({ error: "Unknown agent" }, 404);
-    const snapshot = await client.api.providers.snapshot();
-    const entry = snapshot.entries.find((p) => p.provider === facts.provider);
-    const options: AgentConfigOptions = {
-      models: (entry?.models ?? [])
-        .filter((m) => m.isSelectable !== false)
-        .map((m) => ({
-          id: m.id,
-          label: m.label,
-          thinking: (m.thinkingOptions ?? []).map((t) => ({ id: t.id, label: t.label })),
-          defaultThinkingId: m.defaultThinkingOptionId ?? null,
-        })),
-      modes: facts.availableModes.map((m) => ({ id: m.id, label: m.label, ...(m.description ? { description: m.description } : {}) })),
-      features: facts.features.map((f): AgentFeatureOption =>
-        f.type === "toggle"
-          ? { type: "toggle", id: f.id, label: f.label, ...(f.tooltip ? { tooltip: f.tooltip } : {}), value: f.value }
-          : {
-              type: "select",
-              id: f.id,
-              label: f.label,
-              ...(f.tooltip ? { tooltip: f.tooltip } : {}),
-              value: f.value,
-              options: f.options.map((o) => ({ id: o.id, label: o.label })),
-            },
-      ),
-    };
-    return c.json(options);
-  });
-  app.post("/api/hosts/:host/agents/:agent/config", async (c) => {
-    const change = z
-      .object({
-        model: z.string().min(1).max(300).optional(),
-        thinkingOptionId: z.string().min(1).max(200).optional(),
-        modeId: z.string().min(1).max(200).optional(),
-        feature: z.object({ id: z.string().min(1).max(200), value: z.union([z.string().max(200), z.boolean()]) }).optional(),
-      })
-      .refine((v) => Object.values(v).filter((x) => x !== undefined).length === 1)
-      .parse(await c.req.json()) satisfies AgentConfigChange;
-    const { driver } = hosts.get(c.req.param("host"));
-    const agent = c.req.param("agent");
-    let notice: unknown = null;
-    if (change.model) await driver.setAgentModel(agent, change.model);
-    else if (change.thinkingOptionId) notice = await driver.setAgentThinkingOption(agent, change.thinkingOptionId);
-    else if (change.modeId) notice = await driver.setAgentMode(agent, change.modeId);
-    else if (change.feature) await driver.setAgentFeature(agent, change.feature.id, change.feature.value);
-    return c.json({ ok: true, notice });
-  });
-
-  // ---- Dictation ------------------------------------------------------------------------------
-  /**
-   * Speech to text through the transcription service configured here, once for every host. The
-   * browser streams PCM over a short-lived socket. The file endpoint remains for older
-   * clients. The API key never leaves the server.
-   */
-  app.get("/api/dictation", (c) => c.json(dictationSettings(store)));
-  app.post("/api/dictation/session", (c) => {
-    const config = dictationConfig(store);
-    if (!config) return c.json({ error: "Voice input is not set up. Add a transcription service in Settings." }, 409);
-    try {
-      return c.json(dictationStreams.issue(config, streamValidity(c)));
-    } catch (error) {
-      return c.json({ error: (error as Error).message }, 429);
-    }
-  });
-  app.put("/api/dictation", async (c) => {
-    try {
-      return c.json(saveDictation(store, await c.req.json()));
-    } catch (error) {
-      const message = error instanceof z.ZodError ? error.issues[0]?.message ?? "Invalid settings" : (error as Error).message;
-      return c.json({ error: message }, 400);
-    }
-  });
-  app.delete("/api/dictation", (c) => {
-    clearDictation(store);
-    return c.json(dictationSettings(store));
-  });
-  app.post("/api/dictation/transcribe", async (c) => {
-    const config = dictationConfig(store);
-    if (!config) return c.json({ error: "Voice input is not set up. Add a transcription service in Settings." }, 409);
-    const format = /^audio\/pcm;rate=(\d{4,6});bits=16$/.exec(c.req.header("x-audio-format") ?? "");
-    if (!format) return c.json({ error: "Unsupported audio format" }, 415);
-    const audio = new Uint8Array(await c.req.arrayBuffer());
-    if (audio.length < 3200 || audio.length % 2) return c.json({ error: "Recording too short" }, 400);
-    try {
-      return c.json({ text: await transcribe(config, audio, Number(format[1]), options.fetch) });
-    } catch (error) {
-      if (error instanceof DictationError) return c.json({ error: error.message }, error.status);
-      throw error;
-    }
-  });
-  const attachmentOwner = (c: { get: (key: "session") => LoginSession | null }) => c.get("session")?.id ?? "bearer";
-  app.get("/api/hosts/:host/agents/:agent/attachments/capabilities", async c =>
-    c.json(await attachments.capabilities(hosts, c.req.param("host"), c.req.param("agent"))));
-  app.post("/api/hosts/:host/agents/:agent/attachments", async c => {
-    hosts.get(c.req.param("host"));
-    try {
-      const name = decodeURIComponent(c.req.header("x-file-name") ?? "");
-      const mime = c.req.header("content-type")?.split(";")[0] ?? "application/octet-stream";
-      return c.json(attachments.put(attachmentOwner(c), c.req.param("host"), c.req.param("agent"), name, mime, Buffer.from(await c.req.arrayBuffer())), 201);
-    } catch (error) { return c.json({ error: (error as Error).message }, 400); }
-  });
-  app.delete("/api/hosts/:host/agents/:agent/attachments/:id", c => {
-    try { attachments.remove(c.req.param("id"), attachmentOwner(c), c.req.param("host"), c.req.param("agent")); }
-    catch { return c.json({ error: "Attachment already expired or unavailable" }, 404); }
-    return c.json({ ok: true });
-  });
-  app.get("/api/queue/stream", c => eventStream(c.req.raw.signal, send => {
-    const publish = () => send(sendQueue.summary());
-    const stop = sendQueue.onChange(publish), stopHosts = hosts.onAgentsChanged(publish);
-    publish(); return () => { stop(); stopHosts(); };
-  }, streamValidity(c), encodingOf(c)));
-  app.get("/api/hosts/:host/agents/:agent/queue/stream", c => eventStream(c.req.raw.signal, send => {
-    const publish = () => send(sendQueue.list(c.req.param("host"), c.req.param("agent")));
-    const stop = sendQueue.onChange(publish); publish(); return stop;
-  }, streamValidity(c), encodingOf(c)));
-  app.post("/api/hosts/:host/agents/:agent/queue/:id/control", async c => {
-    const { action } = z.object({ action: z.enum(["pause", "resume", "up", "check"]) }).parse(await c.req.json());
-    try { await sendQueue.control(c.req.param("host"), c.req.param("agent"), c.req.param("id"), action); }
-    catch (error) { return c.json({ error: (error as Error).message }, 409); }
-    return c.json({ ok: true });
-  });
-  app.get("/api/hosts/:host/agents/:agent/search", async c => {
-    const query = z.string().trim().min(1).max(500).parse(c.req.query("q"));
-    const cursor = z.coerce.number().int().nonnegative().optional().parse(c.req.query("cursor"));
-    const result = await hosts.get(c.req.param("host")).driver.searchAgentTimeline({ agentId: c.req.param("agent"), query, cursor });
-    if (result.error) return c.json({ error: result.error }, 502);
-    return c.json(result);
-  });
-  app.get("/api/hosts/:host/agents/:agent/queue", c =>
-    c.json(sendQueue.list(c.req.param("host"), c.req.param("agent"))));
-  app.post("/api/hosts/:host/agents/:agent/queue", async c => {
-    const input = z.object({ id: z.string().uuid(), text: z.string().trim().max(100000),
-      attachmentIds: z.array(z.string().uuid()).max(4).default([]) })
-      .refine(v => !!v.text || !!v.attachmentIds.length).parse(await c.req.json());
-    const host = c.req.param("host"), agent = c.req.param("agent");
-    hosts.get(host);
-    if (sendQueue.accepted(host, agent, input.id)) return c.json({ ok: true });
-    try {
-      const attachmentNames = input.attachmentIds.map(id => attachments.get(id, attachmentOwner(c), host, agent).name);
-      const prepared = await attachments.prepare(hosts, attachmentOwner(c), host, agent, input.attachmentIds);
-      sendQueue.add({ id: input.id, text: input.text, host, agent, attachmentNames, prepared });
-      attachments.consumed(input.attachmentIds);
-      return c.json({ ok: true }, 201);
-    } catch (error) { return c.json({ error: (error as Error).message }, 400); }
-  });
-  app.delete("/api/hosts/:host/agents/:agent/queue/:id", c => {
-    try { sendQueue.remove(c.req.param("host"), c.req.param("agent"), c.req.param("id")); }
-    catch (error) { return c.json({ error: (error as Error).message }, 409); }
-    return c.json({ ok: true });
-  });
-  app.patch("/api/hosts/:host/agents/:agent/queue/:id", async c => {
-    const { text } = z.object({ text: z.string().max(100000) }).parse(await c.req.json());
-    try { sendQueue.edit(c.req.param("host"), c.req.param("agent"), c.req.param("id"), text); }
-    catch (error) { return c.json({ error: (error as Error).message }, 409); }
-    return c.json({ ok: true });
-  });
-  app.post("/api/hosts/:host/agents/:agent/queue/:id/send", async c => {
-    try { await sendQueue.interrupt(c.req.param("host"), c.req.param("agent"), c.req.param("id")); }
-    catch (error) { return c.json({ error: (error as Error).message }, 409); }
-    return c.json({ ok: true });
-  });
-  app.post("/api/hosts/:host/agents/:agent/messages/status", async c => {
-    const { messageIds } = z.object({ messageIds: z.array(z.string().uuid()).min(1).max(20) }).parse(await c.req.json());
-    const { driver } = hosts.get(c.req.param("host"));
-    return c.json({ confirmed: await confirmedMessages(driver, c.req.param("agent"), messageIds) });
-  });
-  app.post("/api/hosts/:host/agents/:agent/messages", async (c) => {
-    const input = z
-      .object({
-        text: z.string().trim().max(100000),
-        attachmentIds: z.array(z.string().uuid()).max(4).refine(ids => new Set(ids).size === ids.length).default([]),
-        messageId: z.string().uuid(),
-        behavior: z.enum(["send", "steer", "interrupt"]),
-      })
-      .refine(input => !!input.text || input.attachmentIds.length > 0)
-      .parse(await c.req.json());
-    if (input.behavior === "steer") {
-      const provider = hosts.get(c.req.param("host")).directory.facts(c.req.param("agent"))?.provider;
-      if (!provider || !messageDeliveryModes(provider).includes("steer"))
-        return c.json({ error: "Steer is unavailable for this provider. Your message was not sent. Choose Queue or Interrupt.", delivery: "not-sent" }, 409);
-      const summary = hosts.agents.get(`${c.req.param("host")}:${c.req.param("agent")}`);
-      const active = summary && summary.status !== "initializing" &&
-        (summary.turnActive === true || (summary.turnActive === undefined && summary.status === "running"));
-      if (!active)
-        return c.json({ error: "There is no active turn to steer. Your message was not sent. Wait for the agent or send a new message.", delivery: "not-sent" }, 409);
-    }
-    if (input.behavior === "send") {
-      const summary = hosts.agents.get(`${c.req.param("host")}:${c.req.param("agent")}`);
-      const idle = summary && (summary.turnActive === false ||
-        (summary.turnActive === undefined && summary.status !== "running" && summary.status !== "initializing"));
-      if (!idle)
-        return c.json({ error: "The agent is no longer idle. Your message was not sent. Choose Queue or Interrupt.", delivery: "not-sent" }, 409);
-    }
-    let prepared;
-    try {
-      prepared = await attachments.prepare(hosts, attachmentOwner(c), c.req.param("host"), c.req.param("agent"), input.attachmentIds);
-      saveMessageImages(store, c.req.param("host"), c.req.param("agent"), input.messageId, prepared.images);
-    }
-    catch (error) { return c.json({ error: (error as Error).message, delivery: "not-sent" }, 400); }
-    try {
-      await hosts
-        .get(c.req.param("host"))
-        .api.agents.ref(c.req.param("agent"))
-        .send(input.text, { messageId: input.messageId, activeTurnBehavior: input.behavior === "send" ? "steer" : input.behavior,
-          ...(prepared.images.length ? { images: prepared.images } : {}),
-          ...(prepared.attachments.length ? { attachments: prepared.attachments } : {}),
-        });
-      attachments.consumed(input.attachmentIds);
-      return c.json({ status: "acknowledged", messageId: input.messageId });
-    } catch {
-      return c.json(
-        {
-          error: "Delivery outcome unknown. Refresh the conversation before retrying.",
-          messageId: input.messageId,
-        },
-        502,
-      );
-    }
-  });
-  app.post("/api/hosts/:host/agents/:agent/stop", async (c) => {
-    await hosts.get(c.req.param("host")).driver.cancelAgent(c.req.param("agent"));
-    return c.json({ status: "acknowledged" });
-  });
-  app.post("/api/hosts/:host/agents/:agent/permissions/:permission", async (c) => {
-    const response = AgentPermissionResponseSchema.parse(await c.req.json());
-    const agent = hosts.get(c.req.param("host")).api.agents.ref(c.req.param("agent"));
-    await agent.refresh();
-    if (!agent.pendingPermissions?.some((p) => p.id === c.req.param("permission")))
-      return c.json({ error: "Permission no longer pending. Refresh the conversation." }, 409);
-    await agent.respondToPermission({ requestId: c.req.param("permission"), response });
-    return c.json({ status: "acknowledged" });
-  });
-  // ---- Task board actions ----------------------------------------------------------------------
-  /** Marks a settled turn as seen (Paseo's attention flag), moving it out of "review". */
-  app.post("/api/hosts/:host/agents/:agent/read", async (c) => {
-    await hosts.get(c.req.param("host")).driver.clearAgentAttention(c.req.param("agent"));
-    return c.json({ ok: true });
-  });
-  app.post("/api/hosts/:host/agents/:agent/archive", async (c) => {
-    await hosts.get(c.req.param("host")).api.agents.ref(c.req.param("agent")).archive();
-    return c.json({ ok: true });
-  });
-
-  // ---- Workspace (thread) actions: the same daemon operations Paseo's sidebar uses ------------------
-  const workspace = (c: { req: { param: (name: string) => string } }) => ({
-    driver: hosts.get(c.req.param("host")).driver,
-    id: c.req.param("workspace"),
-  });
-  /** Rename; null resets to the name derived from the branch or directory. */
-  app.post("/api/hosts/:host/workspaces/:workspace/title", async (c) => {
-    const { title } = z
-      .object({ title: z.string().trim().max(200).nullable() })
-      .parse(await c.req.json());
-    const { driver, id } = workspace(c);
-    await driver.setWorkspaceTitle(id, title ? title : null);
-    return c.json({ ok: true });
-  });
-  app.post("/api/hosts/:host/workspaces/:workspace/pin", async (c) => {
-    const { pinned } = z.object({ pinned: z.boolean() }).parse(await c.req.json());
-    const { driver, id } = workspace(c);
-    await driver.setWorkspacePinned(id, pinned);
-    return c.json({ ok: true });
-  });
-  app.post("/api/hosts/:host/workspaces/:workspace/unread", async (c) => {
-    const { driver, id } = workspace(c);
-    await driver.markWorkspaceUnread(id);
-    return c.json({ ok: true });
-  });
-  app.post("/api/hosts/:host/workspaces/:workspace/read", async (c) => {
-    const { driver, id } = workspace(c);
-    await driver.clearWorkspaceAttention(id);
-    return c.json({ ok: true });
-  });
-  app.post("/api/hosts/:host/workspaces/:workspace/archive", async (c) => {
-    const { driver, id } = workspace(c);
-    await driver.archiveWorkspace(id);
-    return c.json({ ok: true });
-  });
-
-  // ---- Project actions: Paseo's project menu (settings, remove) -------------------------------------
-  /** Removes the project from the daemon; its threads are archived (history stays on the host). */
-  app.delete("/api/hosts/:host/projects/:project", async (c) => {
-    const result = await hosts.get(c.req.param("host")).driver.removeProject(c.req.param("project"));
-    return c.json({ ok: true, removedWorkspaceIds: result.removedWorkspaceIds });
-  });
-  /**
-   * Paseo's project edit: name and icon, decided together and saved once. Icon bytes are acquired
-   * first (the step most likely to fail), then rename, then icon; a retry repeats the same calls.
-   * A failure names the field it belongs to.
-   */
-  app.post("/api/hosts/:host/projects/:project/edit", async (c) => {
-    const input = z
-      .object({
-        rename: z.object({ customName: z.string().trim().max(200).nullable() }).nullable(),
-        icon: z
-          .discriminatedUnion("type", [
-            z.object({ type: z.literal("automatic") }),
-            z.object({ type: z.literal("upload"), data: z.string().min(1).max(Math.ceil((MAX_ICON_BYTES * 4) / 3) + 4) }),
-            z.object({ type: z.literal("url"), url: z.string().trim().min(1).max(4096) }),
-          ])
-          .nullable(),
-      })
-      .parse(await c.req.json());
-    const hostId = c.req.param("host");
-    const projectId = c.req.param("project");
-    const { driver } = hosts.get(hostId);
-    if (input.icon && !customIcons(hostId))
-      return c.json({ error: "Update Paseo on this host to set project icons.", scope: "icon" }, 409);
-    const failed = (scope: "name" | "icon", error: unknown) =>
-      c.json({ error: (error as Error)?.message || "Request failed", scope }, 422);
-    let source: { type: "automatic" } | { type: "upload"; data: string } | null = null;
-    if (input.icon) {
-      try {
-        source = input.icon.type === "url" ? { type: "upload", data: await importProjectIcon(input.icon.url) } : input.icon;
-      } catch (error) {
-        return failed("icon", error);
-      }
-    }
-    if (input.rename) {
-      try {
-        await driver.renameProject(projectId, input.rename.customName || null);
-      } catch (error) {
-        return failed("name", error);
-      }
-    }
-    if (source) {
-      try {
-        await driver.setProjectIcon(projectId, source);
-      } catch (error) {
-        return failed("icon", error);
-      }
-    }
-    return c.json({ ok: true });
-  });
-  const configErrors: Record<string, [string, 404 | 409 | 422 | 502]> = {
-    project_not_found: ["The selected host has no record of this project.", 404],
-    invalid_project_config: ["paseo.json couldn’t be parsed. Fix the file on disk, then reload.", 422],
-    stale_project_config: ["Config changed on disk. Reload to fetch the latest paseo.json before saving.", 409],
-    write_failed: ["Couldn’t save paseo.json. Try again, or reload the latest version from disk.", 502],
-  };
-  const configState = (
-    payload: { ok: true; repoRoot: string; config: unknown; revision: ProjectConfigState["revision"]; hasUncommittedWorktreeSetupChanges?: boolean },
-  ): ProjectConfigState => ({
-    rootPath: payload.repoRoot,
-    config: (payload.config as Record<string, unknown> | null) ?? null,
-    revision: payload.revision,
-    ...(payload.hasUncommittedWorktreeSetupChanges ? { uncommittedSetup: true } : {}),
-  });
-  /** The project's paseo.json (worktree setup/teardown, scripts, generation prompts). */
-  app.get("/api/hosts/:host/project-config", async (c) => {
-    const root = z.string().min(1).max(4096).parse(c.req.query("root"));
-    const payload = await hosts.get(c.req.param("host")).driver.readProjectConfig(root);
-    if (!payload.ok) {
-      const [error, status] = configErrors[payload.error.code] ?? ["Could not read paseo.json.", 502];
-      return c.json({ error, code: payload.error.code }, status);
-    }
-    return c.json(configState(payload));
-  });
-  app.put("/api/hosts/:host/project-config", async (c) => {
-    const input = z
-      .object({
-        root: z.string().min(1).max(4096),
-        config: z.record(z.string(), z.unknown()),
-        revision: z.object({ mtimeMs: z.number(), size: z.number() }).nullable(),
-      })
-      .parse(await c.req.json());
-    if (JSON.stringify(input.config).length > 256_000) return c.json({ error: "paseo.json is too large." }, 413);
-    const payload = await hosts.get(c.req.param("host")).driver.writeProjectConfig({
-      repoRoot: input.root,
-      config: input.config as never,
-      expectedRevision: input.revision,
-    });
-    if (!payload.ok) {
-      const [error, status] =
-        payload.error.code === "invalid_project_config"
-          ? ["The host rejected this config: it does not match the paseo.json format.", 422 as const]
-          : (configErrors[payload.error.code] ?? ["Could not write paseo.json.", 502 as const]);
-      return c.json({ error, code: payload.error.code }, status);
-    }
-    return c.json(configState(payload));
-  });
-
-  // ---- Plugins whose daemon side LitePaseo drives ------------------------------------------------
-  /**
-   * next-input: the daemon appends a placeholder row after a completed turn; prediction runs only
-   * when a client that shows the row asks. Only this one plugin method is reachable from here.
-   */
-  app.post("/api/hosts/:host/agents/:agent/suggestion", async (c) => {
-    const { token } = z.object({ token: z.string().min(1).max(200) }).parse(await c.req.json());
-    try {
-      const output = (await hosts
-        .get(c.req.param("host"))
-        .driver.invokePluginRpc("next-input", "suggestions.predict", { agentId: c.req.param("agent"), token })) as {
-        status?: string;
-        text?: string;
-      };
-      return c.json({ status: String(output?.status ?? "error"), text: String(output?.text ?? "") });
-    } catch (error) {
-      if (error instanceof UnknownHostError) throw error;
-      return c.json({ status: "unavailable", text: "" });
-    }
-  });
-
-  // ---- Usage across hosts ------------------------------------------------------------------------
-  registerHostSettings(app, hosts);
-  registerWorkspaceRoutes(app, hosts, store, (c) => streamValidity(c), encodingOf);
+  registerAuthRoutes(app, ctx, { notifier, presence, instanceName: () => instanceName(store) });
+  const directory = registerDirectoryRoutes(app, ctx);
+  registerAgentRoutes(app, ctx);
+  registerTimelineRoutes(app, ctx);
+  registerMessageRoutes(app, ctx);
+  registerProjectRoutes(app, ctx);
+  registerDictationRoutes(app, ctx, dictationStreams);
+  const stopHostSettings = registerHostSettings(app, hosts);
+  registerWorkspaceRoutes(app, ctx);
   app.get("/api/usage", async (c) => c.json(await usage.report(c.req.query("refresh") === "1")));
-
-  app.get("/api/board", (c) => c.json(store.board()));
-  app.put("/api/board", async (c) => {
-    const b = z
-      .object({ revision: z.number().int().nonnegative(), cards: z.array(card).max(1000) })
-      .parse(await c.req.json());
-    if (new Set(b.cards.map((c) => c.id)).size !== b.cards.length)
-      return c.json({ error: "Duplicate card ID" }, 400);
-    if (!store.saveBoard(b.revision, b.cards))
-      return c.json({ error: "Board changed. Reload before editing." }, 409);
-    return c.json(store.board());
-  });
-  // Per-card edits apply to the board as it is now, so two tabs editing different fields
-  // (or adding comments) never overwrite each other. Each returns the whole board.
-  const cardEdit = (id: string, change: Parameters<Store["updateCard"]>[1]) =>
-    store.updateCard(id, change) ? store.board() : null;
-  app.patch("/api/board/cards/:id", async (c) => {
-    const p = cardPatch.parse(await c.req.json());
-    const board = cardEdit(c.req.param("id"), (card) => ({
-      ...card,
-      ...(p.title !== undefined ? { title: p.title } : {}),
-      ...(p.column !== undefined ? { column: p.column } : {}),
-      ...(p.description !== undefined ? { description: p.description } : {}),
-      ...(p.link !== undefined ? { hostId: p.link?.hostId ?? null, agentId: p.link?.agentId ?? null } : {}),
-      updatedAt: Date.now(),
-    }));
-    return board ? c.json(board) : c.json({ error: "Task not found" }, 404);
-  });
-  app.post("/api/board/cards/:id/comments", async (c) => {
-    const { text } = z.object({ text: z.string().trim().min(1).max(CARD_COMMENT_MAX) }).parse(await c.req.json());
-    let full = false;
-    const board = cardEdit(c.req.param("id"), (card) => {
-      const comments = card.comments ?? [];
-      if (comments.length >= CARD_COMMENTS_MAX) return (full = true), null;
-      return { ...card, comments: [...comments, { id: randomUUID(), text, at: Date.now() }], updatedAt: Date.now() };
-    });
-    if (full) return c.json({ error: `A task holds up to ${CARD_COMMENTS_MAX} comments.` }, 400);
-    return board ? c.json(board, 201) : c.json({ error: "Task not found" }, 404);
-  });
-  app.delete("/api/board/cards/:id/comments/:comment", (c) => {
-    const board = cardEdit(c.req.param("id"), (card) => ({
-      ...card,
-      comments: (card.comments ?? []).filter((m) => m.id !== c.req.param("comment")),
-      updatedAt: Date.now(),
-    }));
-    return board ? c.json(board) : c.json({ error: "Task not found" }, 404);
-  });
+  registerBoardRoutes(app, ctx);
   app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));
-  // The service worker and manifest need exact types and must never be cached stale.
+
+  // ---- The web app ----------------------------------------------------------------------------
+  // The service worker and manifest need exact types and must never be cached stale. They are
+  // read per request (asynchronously): a rebuilt web root is served at once, without a restart.
   for (const [file, type] of [
     ["sw.js", "text/javascript; charset=utf-8"],
     ["manifest.webmanifest", "application/manifest+json"],
   ] as const)
-    app.get("/" + file, (c) => {
+    app.get("/" + file, async (c) => {
       try {
-        return c.body(readFileSync(join(webRoot, file)), 200, { "Content-Type": type, "Cache-Control": "no-cache" });
+        return c.body(await readFile(join(webRoot, file)), 200, { "Content-Type": type, "Cache-Control": "no-cache" });
       } catch {
         return c.notFound();
       }
@@ -1294,15 +170,16 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     if (c.res.headers.get("Content-Type")?.startsWith("text/html")) c.header("Cache-Control", "no-cache");
   });
   app.use("/*", serveStatic({ root: webRoot, precompressed: true }));
+
   return Object.assign(app, {
     dictationStreams,
     /** Open directory streams; lets tests prove that disconnects release them. */
-    openStreams: () => directoryStreams.size,
+    openStreams: directory.openStreams,
     dispose: () => {
-      disposed = true;
-      clearTimeout(agentFlush);
-      clearTimeout(hostFlush);
-      agentFlush = hostFlush = undefined;
+      directory.dispose();
+      stopHostSettings();
+      stopNotifying();
+      notifier.dispose();
       sendQueue.close();
       attachments.close();
       dictationStreams.close();

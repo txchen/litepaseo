@@ -109,3 +109,47 @@ for (const encoding of ["br", "gzip"] as const) {
     }
   });
 }
+
+test("a stream whose request was already aborted opens nothing and ends at once", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let opened = 0;
+  const stream = recorder(eventStream(controller.signal, () => (opened++, () => {})));
+  await stream.done;
+  assert.equal(opened, 0);
+  assert.equal(stream.text(), "");
+});
+
+test("a stream whose open() throws releases its heartbeat and compressor and passes the error on", () => {
+  const controller = new AbortController();
+  const listeners: unknown[] = [];
+  const signal = controller.signal;
+  const add = signal.addEventListener.bind(signal);
+  signal.addEventListener = ((type: string, listener: unknown) => (listeners.push(listener), add(type, listener as never))) as never;
+  const removed: unknown[] = [];
+  const remove = signal.removeEventListener.bind(signal);
+  signal.removeEventListener = ((type: string, listener: unknown) => (removed.push(listener), remove(type, listener as never))) as never;
+  assert.throws(() => eventStream(signal, () => {
+    throw new Error("no host");
+  }, () => true, "gzip"), /no host/);
+  assert.deepEqual(removed, listeners, "the abort listener is gone with the stream");
+});
+
+test("a stream releases its source once, however it stops", async () => {
+  const controller = new AbortController();
+  let released = 0;
+  const response = eventStream(controller.signal, () => () => void released++);
+  await response.body!.cancel();
+  controller.abort();
+  assert.equal(released, 1);
+});
+
+test("a client that stops reading is dropped instead of buffering without bound", async () => {
+  const controller = new AbortController();
+  let send!: (data: unknown) => void, released = 0;
+  const response = eventStream(controller.signal, (s) => ((send = s), () => void released++));
+  const chunk = "x".repeat(1024 * 1024);
+  for (let i = 0; i < 20; i++) send({ chunk });
+  assert.equal(released, 1, "the stalled stream let go of its source");
+  await assert.rejects(response.body!.getReader().read(), /not reading/);
+});

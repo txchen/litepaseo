@@ -40,3 +40,26 @@ test('project pin API persists stable host/project identities and unpin is idemp
     assert.equal((await request({...body,projectIds:[]})).status,400);
   } finally {app.dispose();store.close();rmSync(dir,{recursive:true,force:true});}
 });
+test('removing a host forgets its pins and message images, and only its own', async () => {
+  const dir=mkdtempSync(join(tmpdir(),'lp-pins-')), store=new Store(dir), hosts=new Hosts();
+  hosts.clients.set('h', {} as never);
+  hosts.clients.set('other', {} as never);
+  hosts.remove = async (id: string) => { hosts.clients.delete(id); };
+  const app=createApp(store,hosts,'test-token','/missing');
+  const call=(path: string, method='GET', body?: unknown) => app.request(path,{method,headers:{authorization:'Bearer test-token','content-type':'application/json'},body:body?JSON.stringify(body):undefined});
+  try {
+    await call('/api/project-pins','POST',{hostId:'h',projectIds:['a'],pinned:true});
+    await call('/api/project-pins','POST',{hostId:'other',projectIds:['b'],pinned:true});
+    const { saveMessageImages, messageImage } = await import('../src/server/message-images.ts');
+    const image = { data: 'aGk=', mimeType: 'image/png' };
+    saveMessageImages(store, 'h', 'agent', 'm1', [image]);
+    saveMessageImages(store, 'other', 'agent', 'm2', [image]);
+    saveMessageImages(store, 'h2', 'agent', 'm3', [image]);
+    assert.equal((await call('/api/hosts/h','DELETE')).status,200);
+    assert.deepEqual(Object.keys(await (await call('/api/project-pins')).json()),[JSON.stringify(['other','b'])]);
+    assert.equal(messageImage(store,'h','agent','m1',0),null);
+    assert.equal(store.setting(`message-images:${JSON.stringify(['h','agent','m1'])}`),null);
+    assert.deepEqual(messageImage(store,'other','agent','m2',0),image);
+    assert.deepEqual(messageImage(store,'h2','agent','m3',0),image,'a host whose ID merely starts the same is kept');
+  } finally {app.dispose();store.close();rmSync(dir,{recursive:true,force:true});}
+});

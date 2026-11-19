@@ -2,6 +2,9 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import type { HostState, ProjectOption, ProviderOption } from "../shared/wire.ts";
 import Icon from "./Icon.vue";
+import { useDialog } from "./use-dialog.ts";
+import { newId } from "./id.ts";
+import { safeGetItem, safeSetItem } from "./safe-storage.ts";
 
 const props = defineProps<{
   hosts: HostState[];
@@ -18,7 +21,7 @@ const PREFS = "litepaseo-new-session";
 type Prefs = Record<string, { provider?: string; model?: string; thinking?: string; mode?: string }>;
 const prefs: Prefs = (() => {
   try {
-    return JSON.parse(localStorage.getItem(PREFS) ?? "{}") as Prefs;
+    return JSON.parse(safeGetItem(PREFS) ?? "{}") as Prefs;
   } catch {
     return {};
   }
@@ -66,7 +69,7 @@ const busy = ref(false);
 const error = ref("");
 const promptElement = ref<HTMLTextAreaElement | null>(null);
 /** Reused for retries of the same request; any edit makes a new request with a new key. */
-let idempotencyKey = crypto.randomUUID();
+let idempotencyKey = newId();
 
 const selectedProvider = computed(() => providers.value?.find((p) => p.id === provider.value));
 const models = computed(() => selectedProvider.value?.models ?? []);
@@ -148,7 +151,7 @@ watch(model, () => {
   if (m && !m.thinking.some((t) => t.id === thinking.value)) thinking.value = m.defaultThinkingId ?? "";
 });
 watch([hostId, project, customPath, provider, model, thinking, mode, featureValues, useWorktree, branch, prompt], () => {
-  if (error.value) idempotencyKey = crypto.randomUUID();
+  if (error.value) idempotencyKey = newId();
   error.value = "";
 });
 
@@ -174,7 +177,8 @@ async function create() {
       120_000,
     );
     prefs[hostId.value] = { provider: provider.value, model: model.value, thinking: thinking.value, mode: mode.value };
-    localStorage.setItem(PREFS, JSON.stringify(prefs));
+    // Preferences are a convenience: a full or blocked storage must not fail a created session.
+    safeSetItem(PREFS, JSON.stringify(prefs));
     emit("created", result.key);
   } catch (e) {
     // Keep the key: retrying the identical request is deduplicated by the daemon.
@@ -184,8 +188,9 @@ async function create() {
   }
 }
 
+const sheet = ref<HTMLElement | null>(null);
+useDialog(sheet, () => !busy.value && emit("close"));
 function onKey(event: KeyboardEvent) {
-  if (event.key === "Escape" && !busy.value) emit("close");
   if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
     event.preventDefault();
     void create();
@@ -201,7 +206,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 
 <template>
   <div class="overlay" @mousedown.self="!busy && emit('close')">
-    <form class="sheet" role="dialog" aria-modal="true" aria-label="New session" @submit.prevent="create">
+    <form ref="sheet" class="sheet" role="dialog" aria-modal="true" aria-label="New session" tabindex="-1" @submit.prevent="create">
       <header class="sheet-head">
         <h2>New session</h2>
         <button type="button" class="icon-btn" aria-label="Close" :disabled="busy" @click="emit('close')">

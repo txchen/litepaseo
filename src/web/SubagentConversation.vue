@@ -37,7 +37,11 @@ const element = ref<HTMLElement | null>(null);
 const rows = computed(() => {
   version.value;
   store.value.membership.value;
-  return older.value.length ? [...older.value, ...store.value.rows] : store.value.rows;
+  const live = store.value.rows;
+  if (!older.value.length) return live;
+  // Paged-in rows the live window has since caught up with (a reset, a reconnect) show once.
+  const first = live[0]?.seqStart ?? Infinity;
+  return [...older.value.filter((r) => r.seqStart < first), ...live];
 });
 const hasOlder = computed(() => {
   version.value;
@@ -59,15 +63,16 @@ const stream = openStream({
   url: () => "/api" + props.base + "/timeline/stream",
   onMessage: (data) => {
     const message = data as TimelineMessage;
-    if (message.type !== "ops") return;
+    if (message.type !== "ops" || !Array.isArray(message.ops)) return;
     const current = store.value;
     const stick = nearBottom() || !current.ready;
     const failure = message.ops.find((op) => op.type === "error");
     notice.value = failure?.type === "error" ? failure.message : "";
-    const epoch = current.epoch;
+    const epoch = current.epoch, membership = current.membership.value, ready = current.ready;
     current.apply(message.ops);
     if (epoch && epoch !== current.epoch) older.value = [];
-    version.value++;
+    // Text appends re-render only their row (its own ref); the list changes with membership.
+    if (membership !== current.membership.value || ready !== current.ready || epoch !== current.epoch) version.value++;
     if (stick) toBottom();
   },
 });

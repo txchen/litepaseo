@@ -61,6 +61,26 @@ test("token login issues a revocable, sliding session; failures are rate limited
   });
 });
 
+test("a flood of clients fills the shared overflow entry only until their failures expire", () => {
+  withStore((store) => {
+    const auth = new Auth(store, "secret-token");
+    const t0 = 1_000_000;
+    // 10,000 distinct clients each fail once; the next ones share the overflow entry.
+    for (let i = 0; i < 10_000; i++) auth.bearer("nope", `flood-${i}`, t0);
+    for (let i = 0; i < 10; i++) auth.bearer("nope", `late-${i}`, t0);
+    const shared = auth.bearer("secret-token", "newcomer", t0);
+    assert.ok(!shared.ok && shared.status === 429, "while the flood is fresh, new clients share one limit");
+    assert.ok(auth.bearer("secret-token", "flood-1", t0).ok, "tracked clients keep their own entry");
+
+    const later = t0 + 16 * 60_000;
+    assert.ok(auth.bearer("secret-token", "newcomer", later).ok, "expired entries are pruned instead of overflowing forever");
+    for (let i = 0; i < 10; i++) auth.bearer("nope", "guesser", later);
+    const own = auth.bearer("secret-token", "guesser", later);
+    assert.ok(!own.ok && own.status === 429, "a pruned table tracks each client separately again");
+    assert.ok(auth.bearer("secret-token", "bystander", later).ok, "and other clients are unaffected");
+  });
+});
+
 test("authenticator enrollment, single-use codes and disabling", () => {
   withStore((store) => {
     const auth = new Auth(store, "t");

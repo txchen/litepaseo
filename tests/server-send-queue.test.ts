@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { Store } from "../src/server/store.ts";
 import { Hosts } from "../src/server/hosts.ts";
 import { createApp } from "../src/server/app.ts";
+import { AWAIT_TURN_MS } from "../src/server/send-queue.ts";
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
 function fixture(provider = "codex") {
@@ -288,5 +289,53 @@ test("steering rejects idle, initializing and unknown turn states without dispat
       assert.equal((await response.json()).delivery, "not-sent");
       assert.equal(f.sends.length, 0);
     }
+  } finally { f.close(); }
+});
+
+test("a delivered message whose turn is never seen running holds the queue only for a bounded wait", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture();
+  try {
+    await f.enqueue("/compact"); await f.enqueue("second");
+    f.update(false); await settle();
+    assert.deepEqual(f.sends.map(s => s.text), ["/compact"]);
+    f.update(false); await settle();
+    assert.equal(f.sends.length, 1, "an idle agent right after delivery may not have started yet");
+    t.mock.timers.tick(AWAIT_TURN_MS); await settle();
+    assert.deepEqual(f.sends.map(s => s.text), ["/compact", "second"], "the turn finished unobserved: the queue moves on");
+  } finally { f.close(); }
+});
+
+test("a removed agent stops waiting for its turn", async () => {
+  const f = fixture();
+  try {
+    await f.enqueue("first"); await f.enqueue("second");
+    f.update(false); await settle();
+    assert.equal(f.sends.length, 1);
+    const listeners = (f.hosts as any).transitionListeners as Set<(previous: unknown, next: unknown) => void>;
+    const agent = f.hosts.agents.get("h:a");
+    for (const listener of listeners) listener(agent, null);
+    for (const listener of listeners) listener(null, agent);
+    await settle();
+    assert.deepEqual(f.sends.map(s => s.text), ["first", "second"]);
+  } finally { f.close(); }
+});
+
+test("a message that fails before it is sent is paused, not marked as an uncertain delivery", async () => {
+  const f = fixture();
+  try {
+    const id = randomUUID();
+    await f.enqueue("first", id);
+    const client = f.hosts.clients.get("h")!;
+    const api = client.api;
+    (client as any).api = { agents: { ref: () => { throw new Error("no agent API"); } } };
+    f.update(false); await settle();
+    const [row] = await (await f.request("queue")).json();
+    assert.equal(row.error, undefined);
+    assert.equal(row.paused, true);
+    assert.equal(f.sends.length, 0);
+    (client as any).api = api;
+    assert.equal((await f.request(`queue/${id}/control`, "POST", { action: "resume" })).status, 200); await settle();
+    assert.deepEqual(f.sends.map(s => s.text), ["first"]);
   } finally { f.close(); }
 });

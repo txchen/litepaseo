@@ -1,4 +1,5 @@
 import { reactive, ref } from "vue";
+import { newId } from "./id.ts";
 
 type StoragePort = Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "length">;
 export interface PendingMessage { messageId: string; text: string; attachmentIds?: string[]; attachmentNames?: string[] }
@@ -24,7 +25,7 @@ export class ComposerStore {
   generation = 0;
   private readonly drafts = reactive(new Map<string, { text: string; source?: string; sourceValue?: string; restoredFrom?: string }>());
   private readonly pending = reactive(new Map<string, PendingMessage[]>());
-  private readonly owner = crypto.randomUUID();
+  private readonly owner = newId();
   private storage: StoragePort | null;
   /** conversation key -> slot -> saved draft (with the raw value, for compare-and-delete). */
   private readonly savedIndex = new Map<string, Map<string, SavedDraft & { raw: string }>>();
@@ -156,7 +157,7 @@ export class ComposerStore {
     // Keep the current draft as another recovery choice before replacing it.
     const current = this.state(key).text;
     if (current && current !== saved.text) this.attempt(() => {
-      this.write(`${DRAFT}${crypto.randomUUID()}:${encodeURIComponent(key)}`, JSON.stringify({ key, text: current, updated: Date.now() }));
+      this.write(`${DRAFT}${newId()}:${encodeURIComponent(key)}`, JSON.stringify({ key, text: current, updated: Date.now() }));
       for (const old of this.excess(key)) this.remove(old);
       return true;
     }, false);

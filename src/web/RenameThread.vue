@@ -2,12 +2,15 @@
 import { nextTick, onMounted, ref } from "vue";
 import type { WorkspaceSummary } from "../shared/wire.ts";
 import Icon from "./Icon.vue";
+import { useDialog } from "./use-dialog.ts";
 
 const props = defineProps<{ thread: WorkspaceSummary; busy: boolean }>();
 /** null resets to the name Paseo derives from the branch or directory. */
 const emit = defineEmits<{ close: []; save: [title: string | null] }>();
 const value = ref(props.thread.title ?? props.thread.name);
 const input = ref<HTMLInputElement | null>(null);
+const sheet = ref<HTMLElement | null>(null);
+useDialog(sheet, () => emit("close"));
 onMounted(() =>
   nextTick(() => {
     input.value?.focus();
@@ -21,8 +24,8 @@ function save() {
 </script>
 
 <template>
-  <div class="overlay" @mousedown.self="!busy && emit('close')" @keydown.esc="emit('close')">
-    <form class="sheet sheet-small" role="dialog" aria-modal="true" aria-label="Rename thread" @submit.prevent="save">
+  <div class="overlay" @mousedown.self="!busy && emit('close')">
+    <form ref="sheet" class="sheet sheet-small" role="dialog" aria-modal="true" aria-label="Rename thread" tabindex="-1" @submit.prevent="save">
       <header class="sheet-head">
         <h2>Rename thread</h2>
         <button type="button" class="icon-btn" aria-label="Close" @click="emit('close')"><Icon name="close" :size="16" /></button>

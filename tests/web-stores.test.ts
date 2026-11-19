@@ -145,3 +145,54 @@ test("renderMarkdown escapes all input and only emits safe links", async () => {
   assert.ok(html.includes('class="check done"'));
   assert.ok(html.includes("<th>a</th>") && html.includes("<td>2</td>"));
 });
+
+test("renderMarkdown keeps links and images intact through later formatting", async () => {
+  const { renderMarkdown } = await import("../src/web/markdown.ts");
+  const p = (html: string) => html.replace(/^<p>|<\/p>$/g, "");
+  const ext = 'target="_blank" rel="noopener noreferrer"';
+
+  // URLs with emphasis markers are not mangled, in links or as bare autolinks.
+  assert.equal(p(renderMarkdown("[init](https://example.com/__init__/x~~y~~)")), `<a href="https://example.com/__init__/x~~y~~" ${ext}>init</a>`);
+  assert.equal(p(renderMarkdown("see https://example.com/__init__.py and *this*")), `see <a href="https://example.com/__init__.py" ${ext}>https://example.com/__init__.py</a> and <em>this</em>`);
+  assert.equal(p(renderMarkdown("https://x.dev/a_b_c*d*")), `<a href="https://x.dev/a_b_c*d*" ${ext}>https://x.dev/a_b_c*d*</a>`);
+
+  // A URL in a title, alt text or label never becomes markup inside the tag.
+  const titled = p(renderMarkdown('[docs](https://a.dev "x https://evil.dev/ onmouseover=alert(1)")'));
+  assert.equal(titled, `<a href="https://a.dev" title="x https://evil.dev/ onmouseover=alert(1)" ${ext}>docs</a>`);
+  const image = p(renderMarkdown("![shot https://evil.dev/ __x__](/api/hosts/h/image?path=a.png)"));
+  assert.equal(image, '<img src="/api/hosts/h/image?path=a.png" alt="shot https://evil.dev/ __x__" loading="lazy" decoding="async">');
+  assert.equal(p(renderMarkdown("[see https://b.dev](https://a.dev)")), `<a href="https://a.dev" ${ext}>see https://b.dev</a>`, "no anchor nested in an anchor");
+  // Labels still take emphasis, and an image may be a link.
+  assert.equal(p(renderMarkdown("[**bold** _it_](https://a.dev)")), `<a href="https://a.dev" ${ext}><strong>bold</strong> <em>it</em></a>`);
+  assert.match(renderMarkdown("[![a](/api/hosts/h/i.png)](https://a.dev)"), /<a href="https:\/\/a.dev"[^>]*><img src="\/api\/hosts\/h\/i.png"/);
+  // Emphasis around a link wraps the whole element.
+  assert.equal(p(renderMarkdown("**[a](https://a.dev)**")), `<strong><a href="https://a.dev" ${ext}>a</a></strong>`);
+
+  // Entities in hrefs are escaped once, not twice.
+  assert.equal(p(renderMarkdown("[q](https://a.dev/?a=1&b='x')")), `<a href="https://a.dev/?a=1&amp;b=&#39;x&#39;" ${ext}>q</a>`);
+
+  // Forged placeholders and attribute breakouts stay inert text.
+  for (const attack of ["\u00000\u0000 [a](https://a.dev)", '[x](https://a.dev"onmouseover="alert(1))', "[x](javascript:alert(1)) <script>", '![x" onerror="alert(1)](/api/hosts/h/a.png)']) {
+    const html = renderMarkdown(attack);
+    assert.doesNotMatch(html, /\u0000|<script|href="javascript|" onerror=|"onmouseover=/, attack);
+    for (const tag of html.match(/<[^>]+>/g) ?? []) assert.match(tag, /^<\/?[a-z]+(\s[a-z-]+="[^"<>]*")*\s*\/?>$/, `well-formed tag in ${attack}: ${tag}`);
+  }
+});
+
+test("newId returns RFC 4122 v4 UUIDs, also where randomUUID is missing (plain-http LAN)", async () => {
+  const { newId } = await import("../src/web/id.ts");
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  assert.match(newId(), UUID);
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto")!;
+  const real = globalThis.crypto;
+  try {
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: { getRandomValues: real.getRandomValues.bind(real) } });
+    const ids = new Set(Array.from({ length: 200 }, () => newId()));
+    assert.equal(ids.size, 200);
+    for (const id of ids) assert.match(id, UUID);
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+    assert.match(newId(), UUID);
+  } finally {
+    Object.defineProperty(globalThis, "crypto", descriptor);
+  }
+});

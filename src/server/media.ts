@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, normalize } from "node:path";
@@ -58,13 +59,34 @@ export function isLocalConnection(connection: string) {
  * The daemon's file API is confined to the workspace, so these are read from disk, and only when
  * the daemon shares this machine. The name pattern admits nothing but those materialized files.
  */
+let roots: { tmp: string; list: string[] } | undefined;
+/**
+ * The temp folders, as named and resolved: on macOS `/tmp` is `/private/tmp` and `tmpdir()` is
+ * under `/var`, which is `/private/var`, so a realpath never matches the names alone.
+ */
+function tempRoots() {
+  const tmp = tmpdir();
+  if (roots?.tmp !== tmp) {
+    const list = new Set([tmp, "/tmp"]);
+    for (const root of [...list]) {
+      try {
+        list.add(realpathSync(root));
+      } catch {
+        // A missing root simply admits nothing.
+      }
+    }
+    roots = { tmp, list: [...list] };
+  }
+  return roots.list;
+}
+
 export function isMaterializedImagePath(path: string) {
   if (!isAbsolute(path) || normalize(path) !== path || !imageMime(path)) return false;
   const directory = dirname(path);
   return (
     /^[a-f0-9]{64}\.[a-z0-9]+$/.test(basename(path)) &&
     /^paseo-attachments-[A-Za-z0-9_-]{1,32}$/.test(basename(directory)) &&
-    [tmpdir(), "/tmp"].includes(dirname(directory))
+    tempRoots().includes(dirname(directory))
   );
 }
 

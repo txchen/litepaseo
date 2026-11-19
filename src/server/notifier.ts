@@ -84,6 +84,8 @@ export function webPushSender(store: Store, subject: string): PushSender {
 
 const projectTag = (agent: AgentSummary) => `project:${agent.hostId}:${agent.projectKey ?? agent.project}`;
 const prefFor = (kind: NotificationKind): keyof PushPrefs => (kind === "attention" ? "attention" : "turns");
+/** A turn is under way: the daemon's own flag when known, else the status. */
+const turnActive = (agent: AgentSummary) => agent.turnActive ?? agent.status === "running";
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
 /**
@@ -106,6 +108,9 @@ export class Notifier {
   private readonly now: () => number;
   private readonly schedule: (run: () => void, ms: number) => () => void;
   private readonly replyPreview?: (agent: AgentSummary, previous: AgentSummary) => Promise<string | null>;
+  /** Events still preparing their reply preview, per conversation; settle() and forget() call them off. */
+  private readonly preparing = new Map<string, Set<{ kind: NotificationKind; cancelled: boolean }>>();
+  private closed = false;
 
   constructor(options: {
     store: Store;
@@ -142,8 +147,18 @@ export class Notifier {
     return this.waiting.size;
   }
 
+  /** Stops all pending pushes; events still in flight are dropped. Call before closing the store. */
+  dispose() {
+    this.closed = true;
+    for (const digest of this.digests.values()) digest.cancel?.();
+    this.digests.clear();
+    for (const events of this.preparing.values()) for (const event of events) event.cancelled = true;
+    this.preparing.clear();
+  }
+
   /** Feed every summary transition here (HostDirectory → Hosts.onTransition). */
   transition(previous: AgentSummary | null, next: AgentSummary | null) {
+    if (this.closed) return;
     const key = next?.key ?? previous!.key;
     if (next?.attention) this.waiting.add(key);
     else this.waiting.delete(key);
@@ -163,11 +178,13 @@ export class Notifier {
           ? `asks: ${permission.title || permission.name}`
           : `wants to ${midSentence(permission.title || permission.name)}`
         : "is waiting for you";
-      void this.emit("attention", next, permission ? `The agent ${what}` : "The agent is waiting for your input.", permission ? undefined : previous);
-    } else if (previous.status === "running" && next.status !== "running") {
+      this.emitSafely("attention", next, permission ? `The agent ${what}` : "The agent is waiting for your input.", permission ? undefined : previous);
+    } else if (turnActive(previous) && !turnActive(next)) {
       if (this.now() - next.activityAt > STALE_MS) return;
       const failed = next.status === "error";
-      void this.emit(
+      // An agent that finished starting up without a turn has nothing to announce; one that failed to start does.
+      if (!failed && previous.status === "initializing") return;
+      this.emitSafely(
         failed ? "turn-failed" : "turn-done",
         next,
         failed ? next.lastError || "The agent could not finish this turn." : "The agent finished this turn.",
@@ -195,20 +212,37 @@ export class Notifier {
 
   /** The user dealt with a conversation (opened it, answered, or started a new turn): drop its news. */
   private settle(previous: AgentSummary, next: AgentSummary) {
-    const digest = this.digests.get(projectTag(next));
-    const entry = digest?.entries.get(next.key);
-    if (!digest || !entry) return;
     const seen = previous.unread && !next.unread;
     const resumed = previous.status !== "running" && next.status === "running";
-    const answered = entry.kind === "attention" && previous.attention && !next.attention;
-    if (seen || resumed || answered) digest.entries.delete(next.key);
+    const answered = previous.attention && !next.attention;
+    const dealt = (kind: NotificationKind) => seen || resumed || (answered && kind === "attention");
+    for (const event of this.preparing.get(next.key) ?? []) if (dealt(event.kind)) event.cancelled = true;
+    const entry = this.digests.get(projectTag(next))?.entries.get(next.key);
+    if (entry && dealt(entry.kind)) this.drop(next);
   }
 
+  /** The conversation is gone (archived or deleted). */
   private forget(agent: AgentSummary) {
-    this.digests.get(projectTag(agent))?.entries.delete(agent.key);
+    for (const event of this.preparing.get(agent.key) ?? []) event.cancelled = true;
+    this.drop(agent);
+  }
+
+  /** Removes a conversation's digest entry; an emptied digest is rescheduled to be let go. */
+  private drop(agent: AgentSummary) {
+    const tag = projectTag(agent);
+    const digest = this.digests.get(tag);
+    if (digest?.entries.delete(agent.key) && !digest.entries.size) this.flush(tag);
+  }
+
+  /** Notifications run detached from the transition that caused them: no failure may escape. */
+  private emitSafely(kind: NotificationKind, agent: AgentSummary, body: string, previous?: AgentSummary) {
+    this.emit(kind, agent, body, previous).catch((error) => {
+      if (!this.closed) console.warn(JSON.stringify({ event: "push_notify_failed", message: (error as Error)?.message }));
+    });
   }
 
   private async emit(kind: NotificationKind, agent: AgentSummary, body: string, previous?: AgentSummary) {
+    if (this.closed) return;
     const dedupeKey = `${kind}:${agent.key}`;
     const now = this.now();
     if (now - (this.recent.get(dedupeKey) ?? -Infinity) < DEDUPE_MS) return;
@@ -216,6 +250,12 @@ export class Notifier {
     if (this.recent.size > 5000) this.recent.clear();
     const pref = prefFor(kind);
     if (this.isViewing(agent.key) || !this.store.pushSubscriptions().some((s) => s.prefs[pref])) return;
+    // When the event happened, not when its preview was ready: a look meanwhile counts as seen.
+    const at = this.now();
+    const event = { kind, cancelled: false };
+    let events = this.preparing.get(agent.key);
+    if (!events) this.preparing.set(agent.key, (events = new Set()));
+    events.add(event);
     if (previous && this.replyPreview) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -227,11 +267,12 @@ export class Notifier {
       } catch { /* A missing timeline must not suppress the notification. */ }
       finally { clearTimeout(timer); }
     }
-    if (this.isViewing(agent.key)) return;
+    events.delete(event);
+    if (!events.size && this.preparing.get(agent.key) === events) this.preparing.delete(agent.key);
+    if (this.closed || event.cancelled || this.isViewing(agent.key) || this.viewedSince(agent.key, at)) return;
     const tag = projectTag(agent);
     let digest = this.digests.get(tag);
     if (!digest) this.digests.set(tag, (digest = { entries: new Map(), lastSent: -Infinity }));
-    const at = this.now();
     // Re-insert so the map stays oldest → newest.
     digest.entries.delete(agent.key);
     digest.entries.set(agent.key, { kind, agent, detail: body, at, due: this.deviceActive() ? at + ACTIVE_GRACE_MS[kind] : 0, sent: false });
@@ -266,7 +307,7 @@ export class Notifier {
           messages.set(prefs, mine.some((e) => released.has(e)) ? this.compose(tag, mine) : null);
         }
         const message = messages.get(prefs);
-        if (message) void this.deliver(subscription, message);
+        if (message) void this.deliver(subscription, message).catch(() => {});
       }
       for (const entry of released) entry.sent = true;
     }
@@ -274,7 +315,14 @@ export class Notifier {
     if (pending.length) {
       const next = Math.min(...pending.map((e) => this.releaseAt(digest, e)));
       digest.cancel = this.schedule(() => this.flush(tag), Math.max(0, next - now));
-    } else if (!digest.entries.size) this.digests.delete(tag);
+    } else if (digest.entries.size) {
+      // Only sent entries are left: look again once the oldest expires, so they do not stay forever.
+      const oldest = Math.min(...entries.map((e) => e.at));
+      digest.cancel = this.schedule(() => this.flush(tag), Math.max(0, oldest + DIGEST_TTL_MS + 1 - now));
+    } else if (now - digest.lastSent < PROJECT_COOLDOWN_MS) {
+      // Empty, but its cooldown still holds the project's next finished turn back.
+      digest.cancel = this.schedule(() => this.flush(tag), digest.lastSent + PROJECT_COOLDOWN_MS - now);
+    } else this.digests.delete(tag);
   }
 
   /** One notification for a project's unseen events, newest first. */
@@ -304,6 +352,7 @@ export class Notifier {
   }
 
   private async deliver(subscription: PushSubscriptionRecord, message: PushMessage) {
+    if (this.closed) return;
     const session = this.store.sessionById(subscription.sessionId);
     if (!session || session.expires <= this.now()) {
       this.store.removePushSubscription(subscription.endpoint, subscription.sessionId);
@@ -312,6 +361,7 @@ export class Notifier {
     try {
       await this.sender.send(subscription, JSON.stringify(message));
     } catch (error) {
+      if (this.closed) return;
       const status = (error as { statusCode?: number }).statusCode;
       // The device unsubscribed or the subscription expired: forget it.
       if (status === 404 || status === 410) this.store.removePushSubscription(subscription.endpoint);

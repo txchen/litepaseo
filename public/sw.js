@@ -17,7 +17,7 @@ self.addEventListener("push", (event) => {
       if (typeof message.badge === "number" && self.navigator.setAppBadge) {
         await (message.badge > 0 ? self.navigator.setAppBadge(message.badge) : self.navigator.clearAppBadge()).catch(() => {});
       }
-      await self.registration.showNotification(message.title, {
+      await self.registration.showNotification(typeof message.title === "string" && message.title ? message.title : "LitePaseo", {
         body: message.body,
         tag: message.tag,
         renotify: true,
@@ -32,7 +32,14 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const url = new URL(event.notification.data?.url || "/", self.location.origin);
+  let url;
+  try {
+    url = new URL(event.notification.data?.url || "/", self.location.origin);
+  } catch {
+    url = new URL("/", self.location.origin);
+  }
+  // Only ever open this console: a notification must not be able to send the reader elsewhere.
+  if (url.origin !== self.location.origin) url = new URL("/", self.location.origin);
   const key = url.searchParams.get("session");
   event.waitUntil(
     (async () => {

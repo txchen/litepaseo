@@ -4,6 +4,9 @@ import type { ProjectConfigState } from "../shared/wire.ts";
 import Icon from "./Icon.vue";
 import ProjectIcon from "./ProjectIcon.vue";
 import ProjectEdit from "./ProjectEdit.vue";
+import { confirmAction } from "./confirm.ts";
+import { tildeHome } from "./format.ts";
+import { useDialog } from "./use-dialog.ts";
 import {
   configToDraft,
   draftToConfig,
@@ -54,7 +57,6 @@ const state = ref<ProjectConfigState | null>(null);
 const draft = ref<ConfigDraft>(configToDraft(null));
 const baseline = ref("");
 const base = computed(() => `/hosts/${encodeURIComponent(props.hostId)}/project-config`);
-const home = (path: string) => path.replace(/^\/(home|Users)\/[^/]+(?=\/|$)/, "~");
 
 const output = computed(() => JSON.stringify(draftToConfig(draft.value, state.value?.config)));
 const dirty = computed(() => !!state.value && output.value !== baseline.value);
@@ -98,11 +100,12 @@ async function save() {
     saving.value = false;
   }
 }
-function close() {
+async function close() {
   if (saving.value) return;
+  if (scriptMenu.value) return void (scriptMenu.value = null);
   if (editingProject.value) return void (editingProject.value = false);
   if (editing.value) return closeScript();
-  if (dirty.value && !confirm("Discard your unsaved project settings?")) return;
+  if (dirty.value && !(await confirmAction({ title: "Discard your unsaved project settings?", confirmLabel: "Discard", danger: true }))) return;
   emit("close");
 }
 
@@ -148,9 +151,9 @@ function doneScript() {
   }
   editing.value = null;
 }
-function removeScript(script: ScriptDraft) {
+async function removeScript(script: ScriptDraft) {
   scriptMenu.value = null;
-  if (!confirm(`Remove ${script.name || "this script"}?`)) return;
+  if (!(await confirmAction({ title: `Remove ${script.name || "this script"}?`, confirmLabel: "Remove", danger: true }))) return;
   draft.value.scripts = draft.value.scripts.filter((s) => s.id !== script.id);
 }
 function toggleService(event: Event) {
@@ -163,11 +166,14 @@ function onKey(event: KeyboardEvent) {
   }
 }
 onMounted(load);
+// The script editor is a dialog over this one: the keyboard stays inside whichever is on top.
+const sheet = ref<HTMLElement | null>(null), scriptSheet = ref<HTMLElement | null>(null);
+useDialog(() => (editing.value ? scriptSheet.value : sheet.value), () => void close());
 </script>
 
 <template>
-  <div class="overlay" @mousedown.self="close" @keydown.esc="close" @keydown="onKey">
-    <form class="sheet project-settings" role="dialog" aria-modal="true" aria-label="Project settings" @submit.prevent="save">
+  <div class="overlay" @mousedown.self="close" @keydown="onKey">
+    <form ref="sheet" class="sheet project-settings" role="dialog" aria-modal="true" aria-label="Project settings" tabindex="-1" @submit.prevent="save">
       <header class="sheet-head">
         <div class="ps-title">
           <div class="ps-title-row">
@@ -188,7 +194,7 @@ onMounted(load);
               <Icon name="edit" :size="14" />
             </button>
           </div>
-          <p class="path-hint"><Icon name="server" :size="12" />{{ hostLabel }} · {{ home(rootPath) }}</p>
+          <p class="path-hint"><Icon name="server" :size="12" />{{ hostLabel }} · {{ tildeHome(rootPath) }}</p>
         </div>
         <button type="button" class="icon-btn" aria-label="Close" @click="close"><Icon name="close" :size="16" /></button>
       </header>
@@ -299,8 +305,8 @@ onMounted(load);
       @saved="(projectUpdated = true), (saved = false)"
       @close="editingProject = false"
     />
-    <div v-if="editing" class="overlay ps-script-overlay" @mousedown.self="closeScript" @keydown.esc.stop="closeScript">
-      <form class="sheet sheet-small" role="dialog" aria-modal="true" :aria-label="editing.name ? 'Edit ' + editing.name : 'New script'" @submit.prevent="doneScript">
+    <div v-if="editing" class="overlay ps-script-overlay" @mousedown.self="closeScript">
+      <form ref="scriptSheet" class="sheet sheet-small" role="dialog" tabindex="-1" aria-modal="true" :aria-label="editing.name ? 'Edit ' + editing.name : 'New script'" @submit.prevent="doneScript">
         <header class="sheet-head">
           <h2>{{ editing.name.trim() ? "Edit " + editing.name.trim() : "New script" }}</h2>
           <button type="button" class="icon-btn" aria-label="Close" @click="closeScript"><Icon name="close" :size="16" /></button>

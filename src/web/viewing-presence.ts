@@ -1,4 +1,5 @@
 import { watch, onUnmounted } from "vue";
+import { newId } from "./id.ts";
 
 /** Input within this long counts as someone using the page (a focused window alone does not). */
 const IDLE_MS = 2 * 60_000;
@@ -11,15 +12,17 @@ const INPUT_EVENTS = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
  * input in the last 2 minutes), so pushes to other devices wait briefly while you are here.
  */
 export function trackViewingPresence(key: () => string | null, signedIn: () => boolean) {
-  const tab = crypto.randomUUID();
+  const tab = newId();
   let seq = 0, lastKey: string | null = null, lastActive = false;
   let lastInput = Date.now();
-  let timer: ReturnType<typeof setInterval> | undefined;
+  // One pending heartbeat at most: each report replaces it.
+  let timer: ReturnType<typeof setTimeout> | undefined;
   function report(leaving = false) {
     const foreground = !leaving && !document.hidden && document.hasFocus();
     const current = foreground ? key() : null;
     const active = foreground && Date.now() - lastInput < IDLE_MS;
-    clearInterval(timer);
+    clearTimeout(timer);
+    timer = undefined;
     if (!signedIn()) { lastKey = null; lastActive = false; return; }
     if (current || lastKey || active || lastActive) {
       void fetch('/api/presence', {
@@ -31,7 +34,7 @@ export function trackViewingPresence(key: () => string | null, signedIn: () => b
     }
     lastKey = current;
     lastActive = active;
-    if (current || active) timer = setInterval(report, HEARTBEAT_MS);
+    if (current || active) timer = setTimeout(() => report(), HEARTBEAT_MS);
   }
   const changed = () => report();
   const leaving = () => report(true);
@@ -40,7 +43,8 @@ export function trackViewingPresence(key: () => string | null, signedIn: () => b
     lastInput = Date.now();
     if (!lastActive) report();
   };
-  watch(key, changed, { immediate: true, flush: 'post' });
+  // Signing in reports at once: the page may be in use before any conversation is open.
+  watch([key, signedIn], changed, { immediate: true, flush: 'post' });
   document.addEventListener('visibilitychange', changed);
   window.addEventListener('resize', changed);
   window.addEventListener('focus', changed);
@@ -49,7 +53,7 @@ export function trackViewingPresence(key: () => string | null, signedIn: () => b
   window.addEventListener('pageshow', changed);
   for (const name of INPUT_EVENTS) window.addEventListener(name, input, { passive: true, capture: true });
   onUnmounted(() => {
-    leaving(); clearInterval(timer);
+    leaving(); clearTimeout(timer);
     document.removeEventListener('visibilitychange', changed);
     window.removeEventListener('resize', changed);
     window.removeEventListener('focus', changed); window.removeEventListener('blur', changed);

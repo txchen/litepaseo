@@ -1,3 +1,4 @@
+import { notifyListeners } from "./listeners.ts";
 import { connectionProblem } from "./diagnostics.ts";
 import { createHostClient } from "@getpaseo/client/node";
 import { createPaseoApi } from "@getpaseo/client";
@@ -63,6 +64,7 @@ export class Hosts {
   private readonly transitionListeners = new Set<Transition<AgentSummary>>();
 
   add(host: Host) {
+    this.assertDetached(host.id);
     const driver = createHostClient(host.connection, {
       clientId: `litepaseo-${host.id}`,
       clientType: "cli",
@@ -81,14 +83,13 @@ export class Hosts {
 
   /** Wires a connected-or-connecting driver; separate from `add` so tests can inject doubles. */
   attach(hostId: string, driver: Driver, api: Api) {
+    this.assertDetached(hostId);
     const directory = new HostDirectory(
       hostId,
       driver as unknown as DirectoryDriver,
       this.agents,
       () => this.emit(this.agentListeners),
-      (previous, next) => {
-        for (const listener of this.transitionListeners) listener(previous, next);
-      },
+      (previous, next) => notifyListeners(this.transitionListeners, previous, next),
     );
     const workspaces = new HostWorkspaces(hostId, driver as unknown as DirectoryDriver, this.workspaces, () =>
       this.emit(this.agentListeners),
@@ -120,6 +121,14 @@ export class Hosts {
     this.emit(this.hostListeners);
   }
 
+  /**
+   * A host is wired once: attaching over a live client would leak its connection, directory
+   * subscriptions and status listener. Replacing one means `await remove(id)` first.
+   */
+  private assertDetached(hostId: string) {
+    if (this.clients.has(hostId)) throw new Error(`Host ${hostId} is already attached; remove it first`);
+  }
+
   get(id: string) {
     const c = this.clients.get(id);
     if (!c) throw new UnknownHostError();
@@ -149,15 +158,23 @@ export class Hosts {
         releases.push(entry.view.dispose());
         this.timelines.delete(key);
       }
-    if (c) {
-      await Promise.all([...releases, c.directory.dispose(), c.workspaces.dispose(), c.subagents.dispose()]);
-      c.stopStatus();
-      await c.api.dispose();
-      await c.driver.close();
+    try {
+      if (c) {
+        // No status change may reconnect or report on a host that is going away.
+        c.stopStatus();
+        const settled = [
+          ...(await Promise.allSettled([...releases, c.directory.dispose(), c.workspaces.dispose(), c.subagents.dispose()])),
+          ...(await Promise.allSettled([c.api.dispose()])),
+          ...(await Promise.allSettled([c.driver.close()])),
+        ];
+        for (const result of settled)
+          if (result.status === "rejected") logEvent("host_dispose_failed", { hostId: id, message: (result.reason as Error)?.message });
+      } else await Promise.allSettled(releases);
+    } finally {
+      this.diagnostics.delete(id);
+      this.labels.delete(id);
+      this.emit(this.hostListeners);
     }
-    this.diagnostics.delete(id);
-    this.labels.delete(id);
-    this.emit(this.hostListeners);
   }
 
   async close() {
@@ -283,21 +300,27 @@ export class Hosts {
         reject(new TimelineTimeoutError());
       }, timeoutMs);
       timer.unref?.();
-      stop = this.watchTimeline(hostId, agentId, (ops) => {
-        // Errors are the view retrying; keep waiting for its rows.
-        const reset = ops.find((op) => op.type === "reset");
-        if (done || !reset) return;
+      try {
+        stop = this.watchTimeline(hostId, agentId, (ops) => {
+          // Errors are the view retrying; keep waiting for its rows.
+          const reset = ops.find((op) => op.type === "reset");
+          if (done || !reset) return;
+          done = true;
+          clearTimeout(timer);
+          resolve(reset);
+          queueMicrotask(release);
+        });
+      } catch (error) {
         done = true;
         clearTimeout(timer);
-        resolve(reset);
-        queueMicrotask(release);
-      });
+        return reject(error);
+      }
       // A live view answered before `stop` was known.
       if (done) release();
     });
   }
 
   private emit(listeners: Set<() => void>) {
-    for (const listener of listeners) listener();
+    notifyListeners(listeners);
   }
 }

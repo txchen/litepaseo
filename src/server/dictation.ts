@@ -55,7 +55,16 @@ const baseUrl = z
     } catch {
       return false;
     }
-  }, "Base URL must be an http(s) address");
+  }, "Base URL must be an http(s) address")
+  // Paths are appended to it, and a stored key is sent in a header, never in the URL.
+  .refine((v) => {
+    try {
+      const url = new URL(v);
+      return !url.username && !url.password && !url.search && !url.hash && !/[?#]/.test(v);
+    } catch {
+      return true;
+    }
+  }, "Base URL cannot contain credentials, a query or a fragment");
 const languageCode = z
   .string()
   .trim()
@@ -102,11 +111,20 @@ export function dictationSettings(store: Store): DictationSettings {
 }
 export function saveDictation(store: Store, input: unknown): DictationSettings {
   const update = DictationUpdate.parse(input);
-  const apiKey = update.apiKey || dictationConfig(store)?.apiKey;
-  if (!apiKey) throw new Error("An API key is required");
+  const saved = dictationConfig(store);
+  // The saved key only ever goes back to the service it was entered for.
+  const apiKey = update.apiKey || (saved && sameOrigin(saved.baseUrl, update.baseUrl) ? saved.apiKey : undefined);
+  if (!apiKey) throw new Error(saved ? "An API key is required when changing the transcription service" : "An API key is required");
   const config: DictationConfig = { baseUrl: update.baseUrl, apiKey, model: update.model, languages: update.languages, keywords: update.keywords };
   store.setSetting(SETTING, JSON.stringify(config));
   return dictationSettings(store);
+}
+function sameOrigin(a: string, b: string) {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
 }
 export function clearDictation(store: Store) {
   store.setSetting(SETTING, null);
@@ -170,6 +188,39 @@ export class DictationError extends Error {
 
 interface Attempt { ok: boolean; status: number; text?: string; detail: string }
 
+/** A transcript of five minutes is a few KB; anything this large is not a transcription answer. */
+const MAX_RESPONSE_BYTES = 1024 * 1024;
+
+/** The response body as text, refusing to buffer more than `max` bytes of it. */
+async function boundedText(response: Response, max: number) {
+  const tooLarge = () => new DictationError("The transcription service sent an unexpectedly large response", 502);
+  if (Number(response.headers.get("content-length") ?? 0) > max) {
+    await response.body?.cancel().catch(() => {});
+    throw tooLarge();
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > max) {
+        await reader.cancel().catch(() => {});
+        throw tooLarge();
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (error instanceof DictationError) throw error;
+    const timeout = (error as Error).name === "TimeoutError";
+    throw new DictationError(timeout ? "The transcription service did not answer in time" : "The transcription service response was interrupted", timeout ? 504 : 502);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 async function send(config: DictationConfig, file: Blob, shape: RequestShape, fetchImpl: typeof fetch, signal?: AbortSignal): Promise<Attempt> {
   const form = new FormData();
   form.append("file", file, "dictation.wav");
@@ -186,7 +237,7 @@ async function send(config: DictationConfig, file: Blob, shape: RequestShape, fe
     const timeout = (error as Error).name === "TimeoutError";
     throw new DictationError(timeout ? "The transcription service did not answer in time" : `Could not reach the transcription service: ${(error as Error).message}`.slice(0, 300), timeout ? 504 : 502);
   }
-  const body = await response.text();
+  const body = await boundedText(response, MAX_RESPONSE_BYTES);
   let data: { text?: unknown; error?: { message?: unknown } | string } = {};
   try {
     data = JSON.parse(body);

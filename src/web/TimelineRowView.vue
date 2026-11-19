@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, ref, type ShallowRef } from "vue";
+import { computed, inject, onBeforeUnmount, ref, type ShallowRef } from "vue";
 import type { TimelineRow } from "../shared/wire.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { loadMarkstream, markstream } from "./markstream-loader.ts";
@@ -105,12 +105,19 @@ const rewindModes = computed(() =>
   item.value.type === "user_message" && typeof item.value.messageId === "string" ? context?.value.rewindModes ?? [] : []);
 const rewindBusy = computed(() => !!context?.value.rewinding?.value);
 const rewind = (mode: RewindMode) => context?.value.rewind?.(String(item.value.messageId), String(item.value.text ?? ""), mode);
+/** Attached images: same-origin paths (the server's image routes) or web links, never javascript:, data: or protocol-relative URLs. */
+const SAFE_IMAGE_URL = /^(\/(?![/\\])|https?:\/\/)/i;
+const userImages = computed<string[]>(() =>
+  Array.isArray(item.value.imageUrls) ? item.value.imageUrls.filter((url: unknown): url is string => typeof url === "string" && SAFE_IMAGE_URL.test(url)) : []);
 const copied = ref(false);
+let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+onBeforeUnmount(() => clearTimeout(copiedTimer));
 async function copyMessage() {
   try {
     await navigator.clipboard.writeText(String(item.value.text ?? ""));
     copied.value = true;
-    setTimeout(() => (copied.value = false), 1500);
+    clearTimeout(copiedTimer);
+    copiedTimer = setTimeout(() => (copied.value = false), 1500);
   } catch {
     /* clipboard denied */
   }
@@ -119,8 +126,8 @@ async function copyMessage() {
 
 <template>
   <div v-if="item.type === 'user_message'" class="row row-user">
-    <div class="bubble" tabindex="-1"><div v-if="item.imageUrls?.length" class="user-images">
-      <a v-for="(url, index) in item.imageUrls" :key="url" :href="url" target="_blank" rel="noopener" >
+    <div class="bubble" tabindex="-1"><div v-if="userImages.length" class="user-images">
+      <a v-for="(url, index) in userImages" :key="url" :href="url" target="_blank" rel="noopener noreferrer" >
         <img :src="url" :alt="`Attached image ${Number(index) + 1}`" loading="lazy" />
       </a>
     </div>{{ item.text }}</div>

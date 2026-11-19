@@ -37,9 +37,10 @@ const props = defineProps<{
 const emit = defineEmits<{
   /** A failed history read or jump, for the app's error line. */
   error: [message: string];
-  subagents: [subagents: ProviderSubagent[]];
+  /** Both carry the agent key: a cached conversation's late event must not act for the open one. */
+  subagents: [key: string, subagents: ProviderSubagent[]];
   /** The first rows arrived (read marking waits for them). */
-  ready: [];
+  ready: [key: string];
   /** A click in the timeline (images open full size, local links open in the app). */
   timelineClick: [event: MouseEvent];
   unauthorized: [];
@@ -224,18 +225,22 @@ function receive(data: unknown) {
   const message = data as TimelineStreamMessage;
   if (message.type === "subagents") {
     subagents.value = message.subagents;
-    emit("subagents", message.subagents);
+    if (inView) emit("subagents", props.agent.key, message.subagents);
     return;
   }
+  const ops = (data as TimelineMessage).ops;
+  // Not understood (another server version, a proxy's message): ignore it rather than throw,
+  // which would close the stream and reconnect into the same message over and over.
+  if (!Array.isArray(ops)) return;
   opening.message(message);
   const stick = !historyRows.value && (nearBottom() || !s.ready);
-  const ops = (data as TimelineMessage).ops;
   const failure = ops.find((op) => op.type === "error");
   timelineNotice.value = failure?.type === "error" ? failure.message : "";
   const epoch = s.epoch;
   const wasReady = s.ready;
   s.apply(ops);
-  if (!wasReady && s.ready) emit("ready");
+  // Rows that land while cached out of view report ready when the conversation comes back.
+  if (!wasReady && s.ready && inView) emit("ready", props.agent.key);
   if (s.epoch && s.epoch !== promptEpoch) void loadPrompts(s);
   if (epoch && epoch !== s.epoch) {
     historyRows.value = null;
@@ -669,8 +674,8 @@ onActivated(() => {
   if (el) {
     setScrollTop(el, followLatest && !historyRows.value ? el.scrollHeight : savedTop);
   }
-  if (store.value.ready) emit("ready");
-  if (subagents.value.length) emit("subagents", subagents.value);
+  if (store.value.ready) emit("ready", props.agent.key);
+  if (subagents.value.length) emit("subagents", props.agent.key, subagents.value);
   // Still opening: the first rows connect the stream when they land.
   if (!loadingLatest) stream = connect();
   syncElapsedClock();

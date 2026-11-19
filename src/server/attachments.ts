@@ -37,7 +37,8 @@ export class Attachments {
   }
   put(owner: string, host: string, agent: string, name: string, mime: string, bytes: Buffer) {
     this.prune();
-    if (!name || name.length > 200 || /[\x00-\x1f/\\]/.test(name)) throw new Error("Use a file name without path separators.");
+    if (!name || name.length > 200 || name === "." || name === ".." || /[\x00-\x1f/\\]/.test(name)) throw new Error("Use a file name without path separators.");
+    mime = mime.trim().toLowerCase();
     if (!bytes.length || bytes.length > MAX_FILE_BYTES) throw new Error("Files must be between 1 byte and 8 MiB.");
     const own = this.owners.get(owner) ?? { bytes: 0, files: 0 };
     if (this.totalBytes + bytes.length > MAX_TOTAL || own.bytes + bytes.length > 24 * 1024 * 1024

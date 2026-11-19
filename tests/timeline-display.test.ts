@@ -17,7 +17,10 @@ import {
   turnFooters,
 } from "../src/web/timeline-display.ts";
 import { renderMarkdown } from "../src/web/markdown.ts";
-import { isLocalConnection, isMaterializedImagePath } from "../src/server/media.ts";
+import { isLocalConnection, isMaterializedImagePath, readMaterializedImage } from "../src/server/media.ts";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { TimelineRow } from "../src/shared/wire.ts";
 
 test("tool calls read as Paseo's verb + subject, relative to the workspace", () => {
@@ -88,6 +91,31 @@ test("local image references point at the host image endpoint; remote ones are u
   assert.equal(rewriteImageSources("![s](docs/shot.jpg)", base), `![s](${base}/image?path=docs%2Fshot.jpg)`);
   assert.equal(rewriteImageSources("![r](https://x.y/a.png)", base), "![r](https://x.y/a.png)");
   assert.equal(rewriteImageSources("![f](/etc/passwd)", base), "![f](/etc/passwd)");
+});
+
+test("materialized images are read through a symlinked temp folder (macOS /tmp, /var)", async () => {
+  const hash = "b".repeat(64);
+  const sandbox = realpathSync(mkdtempSync(join(tmpdir(), "litepaseo-media-")));
+  const saved = process.env.TMPDIR;
+  try {
+    const real = join(sandbox, "private-tmp");
+    mkdirSync(join(real, "paseo-attachments-Xy12"), { recursive: true });
+    writeFileSync(join(real, "paseo-attachments-Xy12", `${hash}.png`), "png");
+    symlinkSync(real, join(sandbox, "tmp"));
+    process.env.TMPDIR = join(sandbox, "tmp");
+    assert.equal(String(await readMaterializedImage(join(sandbox, "tmp", "paseo-attachments-Xy12", `${hash}.png`))), "png");
+    assert.equal(String(await readMaterializedImage(join(real, "paseo-attachments-Xy12", `${hash}.png`))), "png", "the resolved name is accepted too");
+
+    // A materialized-looking directory that links elsewhere is still refused.
+    mkdirSync(join(sandbox, "elsewhere"));
+    writeFileSync(join(sandbox, "elsewhere", `${hash}.png`), "secret");
+    symlinkSync(join(sandbox, "elsewhere"), join(real, "paseo-attachments-Link"));
+    assert.equal(await readMaterializedImage(join(sandbox, "tmp", "paseo-attachments-Link", `${hash}.png`)), null);
+  } finally {
+    if (saved === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = saved;
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 test("only daemon-materialized images are read from disk, and only for local daemons", () => {

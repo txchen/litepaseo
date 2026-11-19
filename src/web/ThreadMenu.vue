@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref } from "vue";
+import { ref } from "vue";
 import type { WorkspaceSummary } from "../shared/wire.ts";
 import Icon from "./Icon.vue";
+import { useMenu } from "./use-menu.ts";
 
 // The thread actions Paseo's sidebar offers: rename, pin, unread/read, archive.
 const props = defineProps<{ thread: WorkspaceSummary; x: number; y: number }>();
@@ -14,37 +15,12 @@ const emit = defineEmits<{
   archive: [thread: WorkspaceSummary];
 }>();
 const element = ref<HTMLElement | null>(null);
-const position = ref({ left: props.x, top: props.y });
 
 function pick(fn: () => void) {
   fn();
   emit("close");
 }
-function onKey(event: KeyboardEvent) {
-  if (event.key === "Escape") emit("close");
-}
-function onOutside(event: PointerEvent) {
-  if (element.value && !element.value.contains(event.target as Node)) emit("close");
-}
-onMounted(() => {
-  // Keep the menu on screen near the pointer.
-  void nextTick(() => {
-    const el = element.value;
-    if (!el) return;
-    const { width, height } = el.getBoundingClientRect();
-    position.value = {
-      left: Math.max(8, Math.min(props.x, innerWidth - width - 8)),
-      top: Math.max(8, Math.min(props.y, innerHeight - height - 8)),
-    };
-    el.querySelector("button")?.focus();
-  });
-  window.addEventListener("keydown", onKey);
-  setTimeout(() => window.addEventListener("pointerdown", onOutside), 0);
-});
-onUnmounted(() => {
-  window.removeEventListener("keydown", onKey);
-  window.removeEventListener("pointerdown", onOutside);
-});
+const { position } = useMenu(element, { x: props.x, y: props.y }, () => emit("close"));
 </script>
 
 <template>

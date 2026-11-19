@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref } from "vue";
 import Icon from "./Icon.vue";
 import ProjectIcon from "./ProjectIcon.vue";
+import { useDialog } from "./use-dialog.ts";
 
 /**
  * Paseo's "Edit project" sheet: the name and the icon, decided together and saved once. A blank
@@ -104,12 +105,14 @@ async function save() {
 function close() {
   if (!saving.value) emit("close");
 }
+const sheet = ref<HTMLElement | null>(null);
+useDialog(sheet, close);
 onMounted(() => nextTick(() => nameInput.value?.focus()));
 </script>
 
 <template>
-  <div class="overlay ps-script-overlay" @mousedown.self="close" @keydown.esc.stop="close">
-    <form class="sheet sheet-small" role="dialog" aria-modal="true" aria-label="Edit project" @submit.prevent="save">
+  <div class="overlay ps-script-overlay" @mousedown.self="close">
+    <form ref="sheet" class="sheet sheet-small" role="dialog" aria-modal="true" aria-label="Edit project" tabindex="-1" @submit.prevent="save">
       <header class="sheet-head">
         <h2>Edit project</h2>
         <button type="button" class="icon-btn" aria-label="Close" @click="close"><Icon name="close" :size="16" /></button>

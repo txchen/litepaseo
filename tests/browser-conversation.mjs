@@ -471,7 +471,7 @@ try {
   await page.getByRole('button', { name: 'Search conversation', exact: true }).click();
   await page.getByRole('searchbox', { name: 'Search conversation content' }).fill('question');
   await page.locator('.conversation-search').getByRole('button', { name: 'Search', exact: true }).click();
-  await page.locator('.conversation-search .result').waitFor();
+  await page.locator('.conversation-search .search-result').waitFor();
   await page.getByRole('button', { name: 'Close panel', exact: true }).click();
 
   // 3. Scrolling up loads earlier pages by itself; scrolling down pages forward and back to live.
@@ -571,17 +571,17 @@ try {
   await page.getByRole('searchbox', { name: 'Search conversation content' }).fill('question');
   await page.locator('.conversation-search').getByRole('button', { name: 'Search', exact: true }).click();
   await page.getByRole('button', { name: 'More results', exact: true }).click();
-  await page.locator('.conversation-search .result', { hasText: '#21 ' }).click();
+  await page.locator('.conversation-search .search-result', { hasText: '#21 ' }).click();
   await page.getByRole('button', { name: 'Close panel', exact: true }).click();
   await page.locator('.timeline [data-seq-start="21"]').waitFor();
   await page.getByRole('button', {name: 'Search conversation', exact: true}).click();
   await page.getByRole('searchbox', {name: 'Search conversation content'}).fill('question');
   await page.locator('.conversation-search').getByRole('button', {name: 'Search', exact: true}).click();
-  await page.locator('.conversation-search .result').waitFor();
+  await page.locator('.conversation-search .search-result').waitFor();
   await page.getByRole('searchbox', {name: 'Search conversation content'}).fill('merged');
-  assert.equal(await page.locator('.conversation-search .result').count(), 0);
+  assert.equal(await page.locator('.conversation-search .search-result').count(), 0);
   await page.locator('.conversation-search').getByRole('button', {name: 'Search', exact: true}).click();
-  await page.locator('.conversation-search .result').click();
+  await page.locator('.conversation-search .search-result').click();
   await page.getByRole('button', {name: 'Close panel', exact: true}).click();
   await page.locator('.timeline [data-seq-start="400"]').waitFor();
   assert.equal(await page.locator('.timeline [data-seq-start="401"]').count(), 0, 'search hit within merged reply opens the containing row');

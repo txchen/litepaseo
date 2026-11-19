@@ -69,7 +69,8 @@ function fail(message: string) {
 function flush() {
   if (!ready || socket?.readyState !== WebSocket.OPEN) return;
   if (socket.bufferedAmount > RATE * 2 * 10) { fail("Voice upload cannot keep up with recording. Please try again."); return; }
-  for (const chunk of pending) socket.send(chunk.buffer as ArrayBuffer);
+  // The view itself: a chunk cut at the time limit is a subarray of a larger buffer.
+  for (const chunk of pending) if (chunk.length) socket.send(chunk);
   pending = [];
   pendingSamples = 0;
   if (state.value === "transcribing") socket.send(JSON.stringify({ type: "stop" }));
@@ -112,9 +113,10 @@ async function start() {
     deadline = setTimeout(() => { if (run === generation) fail("Could not connect to the transcription service."); }, 12_000);
     request = new AbortController();
     const response = await fetch("/api/dictation/session", { method: "POST", headers: { "x-litepaseo": "1" }, signal: request.signal });
-    const data = await response.json();
+    // A proxy error page is not JSON; report the status instead of a parse error.
+    const data = await response.json().catch(() => ({})) as { error?: string; ticket?: string };
     if (run !== generation) return;
-    if (!response.ok) throw new Error(data.error ?? "Could not start voice input.");
+    if (!response.ok || !data.ticket) throw new Error(data.error ?? `Could not start voice input (${response.status}).`);
     const url = new URL("/api/dictation/stream", location.href);
     url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
     url.searchParams.set("ticket", data.ticket);

@@ -104,6 +104,8 @@ test("cookie sign-in, CSRF header, revocation, and a daemon update becoming a pu
     const otherSubscribe = { ...subscribe, cookie: otherCookie, csrf: true,
       body: { subscription: { ...subscription, endpoint: "https://push.example/desktop" }, prefs: { attention: true, turns: true } } };
     await call("/push/subscribe", otherSubscribe);
+    await call("/push/unsubscribe", { method: "POST", cookie: otherCookie, csrf: true, body: { endpoint: subscription.endpoint } });
+    assert.ok(store.pushSubscriptions().some((s) => s.endpoint === subscription.endpoint), "another session cannot drop this device's pushes");
     const originalWatch = hosts.watchTimeline;
     hosts.watchTimeline = () => () => {};
     const desktopStream = await call(`/hosts/${host.id}/agents/a1/timeline/stream`, { cookie: otherCookie });

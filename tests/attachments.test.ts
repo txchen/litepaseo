@@ -143,3 +143,14 @@ test("message images survive restart, scope IDs and preserve the original on ret
     assert.equal(withMessageImages(store, "host", "agent", { type: "assistant_message", messageId: "id" }).imageUrls, undefined);
   } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
 });
+
+test("an image type in any case or spacing is still checked against its content; dot names are refused", () => {
+  const store = new Attachments();
+  try {
+    for (const mime of ["IMAGE/PNG", " image/png ", "Image/Jpeg"])
+      assert.throws(() => store.put("o", "h", "a", "fake.png", mime, Buffer.from("not an image")), /content/, mime);
+    for (const name of [".", ".."]) assert.throws(() => store.put("o", "h", "a", name, "text/plain", Buffer.from("x")), /path/);
+    const png = store.put("o", "h", "a", "ok.png", "IMAGE/PNG", Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    assert.equal(png.mimeType, "image/png");
+  } finally { store.close(); }
+});

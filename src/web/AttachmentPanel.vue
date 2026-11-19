@@ -128,6 +128,7 @@ defineExpose({ addFiles, pick, available, hint });
   flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; color: var(--fg-muted);
 }
 .attachment-action:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
+@media (pointer: coarse) { .attachment-action { width: 32px; height: 32px; } }
 .attachment-error { display: flex; align-items: center; gap: 6px; width: 100%; margin: 0; font-size: 12.5px; color: var(--danger); }
 .attachment-retry { margin-left: 4px; color: var(--link); font-size: 12.5px; }
 </style>

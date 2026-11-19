@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import Icon from "./Icon.vue";
+import { confirmAction } from "./confirm.ts";
 import { PALETTES, applyPalette, applyTheme, palette, theme } from "./theme.ts";
 import {
   currentSubscription,
@@ -74,7 +75,7 @@ const saveVoice = () =>
   });
 const removeVoice = () =>
   voiceAction(async () => {
-    if (!confirm("Remove the transcription service? Voice input turns off on every device.")) return;
+    if (!(await confirmAction({ title: "Remove the transcription service?", message: "Voice input turns off on every device.", confirmLabel: "Remove", danger: true }))) return;
     showVoice(await props.request("/dictation", "DELETE"));
     voiceEditing.value = false;
   });
@@ -186,13 +187,13 @@ const disableTotp = () =>
   });
 const revoke = (device: Device) =>
   securityAction(async () => {
-    await props.request("/sessions/" + device.id, "DELETE");
+    await props.request("/sessions/" + encodeURIComponent(device.id), "DELETE");
     if (device.current) emit("signedOut");
     else await loadDevices();
   });
 const signOutEverywhere = () =>
   securityAction(async () => {
-    if (!confirm("Sign out every device, including this one? Their notifications stop too.")) return;
+    if (!(await confirmAction({ title: "Sign out every device, including this one?", message: "Their notifications stop too.", confirmLabel: "Sign out everywhere", danger: true }))) return;
     await props.request("/sessions/revoke-all", "POST", {});
     emit("signedOut");
   });
@@ -305,8 +306,8 @@ onMounted(() => {
           </div>
         </template>
       </div>
-      <p v-if="pushMessage" class="setting-note">{{ pushMessage }}</p>
-      <p v-if="pushError" class="setting-note is-error">{{ pushError }}</p>
+      <p v-if="pushMessage" class="setting-note" role="status">{{ pushMessage }}</p>
+      <p v-if="pushError" class="setting-note is-error" role="alert">{{ pushError }}</p>
 
       <h2 class="section-label">Voice input</h2>
       <div class="card">
@@ -358,8 +359,8 @@ onMounted(() => {
           </div>
         </form>
       </div>
-      <p v-if="voiceMessage" class="setting-note">{{ voiceMessage }}</p>
-      <p v-if="voiceError" class="setting-note is-error">{{ voiceError }}</p>
+      <p v-if="voiceMessage" class="setting-note" role="status">{{ voiceMessage }}</p>
+      <p v-if="voiceError" class="setting-note is-error" role="alert">{{ voiceError }}</p>
 
       <h2 class="section-label">App</h2>
       <div class="card">
@@ -409,7 +410,7 @@ onMounted(() => {
           </form>
         </div>
       </div>
-      <p v-if="securityError" class="setting-note is-error">{{ securityError }}</p>
+      <p v-if="securityError" class="setting-note is-error" role="alert">{{ securityError }}</p>
 
       <h2 class="section-label">Signed-in devices</h2>
       <div class="card">

@@ -84,25 +84,32 @@ watch(() => props.visible, async (visible) => {
 });
 watch(isDark, (dark) => term.value && (term.value.options.theme = dark ? THEMES.dark : THEMES.light));
 
-// Input: keystrokes within one request round trip are sent together, in order.
-let queued = "";
+// Input: keystrokes within one request round trip are sent together, in order. Each batch keeps
+// the terminal it was typed into, so switching terminals (or workspaces) while a request is in
+// flight cannot deliver earlier keystrokes to the newly shown terminal, or later ones to the old.
+let queued: { url: string; data: string }[] = [];
 let sending = false;
 function queueInput(data: string) {
-  queued += data;
+  if (!current.value) return;
+  const url = `${base()}/${current.value}/input`;
+  const last = queued[queued.length - 1];
+  if (last?.url === url) last.data += data;
+  else queued.push({ url, data });
   void drain();
 }
 async function drain() {
-  if (sending || !queued || !current.value) return;
+  if (sending) return;
   sending = true;
-  const id = current.value;
-  while (queued) {
-    const data = queued.slice(0, 32 * 1024);
-    queued = queued.slice(data.length);
+  while (queued.length) {
+    const head = queued[0]!;
+    const data = head.data.slice(0, 32 * 1024);
+    head.data = head.data.slice(data.length);
+    if (!head.data) queued.shift();
     try {
-      await props.api(`${base()}/${id}/input`, "POST", { data });
+      await props.api(head.url, "POST", { data });
     } catch (e) {
       error.value = (e as Error).message;
-      queued = "";
+      queued = queued.filter((q) => q.url !== head.url);
     }
   }
   sending = false;
@@ -126,7 +133,12 @@ function attach(id: string) {
     onMessage: (message) => {
       const m = message as { t: string; d?: string };
       if (m.t === "reset") term.value?.reset();
-      else if (m.t === "o" && m.d) term.value?.write(Uint8Array.from(atob(m.d), (c) => c.charCodeAt(0)));
+      else if (m.t === "o" && m.d) {
+        let bytes: Uint8Array;
+        try { bytes = Uint8Array.from(atob(m.d), (c) => c.charCodeAt(0)); }
+        catch { return; } // a malformed chunk is dropped rather than breaking the stream
+        term.value?.write(bytes);
+      }
       else if (m.t === "exit") {
         term.value?.write("\r\n\x1b[2m[process exited]\x1b[0m\r\n");
         void refresh();
@@ -137,19 +149,25 @@ function attach(id: string) {
   term.value?.focus();
 }
 
+const listUrl = () => `${base()}?cwd=${encodeURIComponent(props.cwd)}`;
 async function refresh() {
+  const url = listUrl();
   try {
-    terminals.value = await props.api(`${base()}?cwd=${encodeURIComponent(props.cwd)}`);
+    const list = await props.api(url);
+    if (url !== listUrl()) return; // the workspace changed meanwhile
+    terminals.value = list;
     error.value = "";
   } catch (e) {
-    error.value = (e as Error).message;
+    if (url === listUrl()) error.value = (e as Error).message;
   }
 }
 async function create() {
   starting.value = true;
   try {
     await ensureTerminal();
+    const url = listUrl();
     const created = (await props.api(base(), "POST", { cwd: props.cwd, ...(profileId.value ? { profileId: profileId.value } : {}), rows: term.value?.rows ?? 24, cols: term.value?.cols ?? 80 })) as Term;
+    if (url !== listUrl()) return; // created in the previous workspace; it lists there
     terminals.value = [...terminals.value, created];
     attach(created.id);
   } catch (e) {
@@ -174,17 +192,21 @@ async function kill(id: string) {
   }
 }
 
+/** Each workspace switch restarts init; an older run stops at its next await. */
+let initGeneration = 0;
 async function init() {
-  profiles.value = []; profileId.value = "";
+  const generation = ++initGeneration;
+  profiles.value = []; profileId.value = ""; terminals.value = [];
   const host = props.hostId;
   void props.api(`/hosts/${encodeURIComponent(host)}/settings`).then(r => { if (host === props.hostId) profiles.value = r.config.terminalProfiles ?? []; }).catch(() => {});
   stream?.close();
   stream = null;
   current.value = null;
   await refresh();
+  if (generation !== initGeneration) return;
   await nextTick();
   await ensureTerminal();
-  if (disposed) return;
+  if (disposed || generation !== initGeneration) return;
   if (terminals.value[0]) attach(terminals.value[0].id);
 }
 onMounted(() => { void init().catch((e) => { error.value = (e as Error).message; }); });
@@ -201,17 +223,12 @@ onUnmounted(() => {
 <template>
   <div class="terminals">
     <div class="term-tabs">
-      <button
-        v-for="(t, i) in terminals"
-        :key="t.id"
-        class="term-tab"
-        :class="{ chosen: t.id === current }"
-        :title="t.title || t.name"
-        @click="attach(t.id)"
-      >
-        <Icon name="terminal" :size="12" /><span>{{ t.title || t.name || `Terminal ${i + 1}` }}</span>
-        <span class="term-close" role="button" :aria-label="'Close ' + (t.title || t.name)" @click.stop="kill(t.id)"><Icon name="close" :size="11" /></span>
-      </button>
+      <div v-for="(t, i) in terminals" :key="t.id" class="term-tab" :class="{ chosen: t.id === current }">
+        <button type="button" class="term-open" :title="t.title || t.name" :aria-current="t.id === current ? 'true' : undefined" @click="attach(t.id)">
+          <Icon name="terminal" :size="12" /><span>{{ t.title || t.name || `Terminal ${i + 1}` }}</span>
+        </button>
+        <button type="button" class="term-close" :aria-label="'Close ' + (t.title || t.name || `Terminal ${i + 1}`)" @click="kill(t.id)"><Icon name="close" :size="11" /></button>
+      </div>
       <select v-if="profiles.length" v-model="profileId" aria-label="New terminal profile" style="max-width: 150px"><option value="">Default shell</option><option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }}</option></select>
       <button class="icon-btn term-new" title="New terminal" aria-label="New terminal" :disabled="starting" @click="create">
         <Icon name="plus" :size="14" />
@@ -231,11 +248,14 @@ onUnmounted(() => {
 <style scoped>
 .terminals { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .term-tabs { flex: none; display: flex; align-items: center; gap: 2px; height: 36px; padding: 0 6px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
-.term-tab { flex: none; display: inline-flex; align-items: center; gap: 6px; max-width: 180px; height: 26px; padding: 0 6px 0 8px; border-radius: 6px; font-size: 12px; color: var(--fg-muted); }
-.term-tab span:not(.term-close) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term-tab { flex: none; display: inline-flex; align-items: center; gap: 2px; max-width: 180px; height: 26px; padding: 0 4px 0 0; border-radius: 6px; font-size: 12px; color: var(--fg-muted); }
+.term-open { display: inline-flex; align-items: center; gap: 6px; min-width: 0; height: 100%; padding: 0 2px 0 8px; border-radius: 6px; }
+.term-open span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .term-tab.chosen { background: var(--selected); color: var(--fg); }
-.term-close { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; opacity: 0.6; }
+.term-close { flex: none; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; opacity: 0.6; }
+.term-close:focus-visible { opacity: 1; }
 .term-close:hover { background: var(--hover); opacity: 1; }
+@media (pointer: coarse) { .term-tabs { height: 42px; } .term-tab { height: 34px; } .term-close { width: 30px; height: 30px; } }
 .term-new { width: 26px; height: 26px; }
 .term-error { display: flex; gap: 6px; align-items: center; margin: 6px 10px; font-size: 12.5px; color: var(--danger); }
 .term-body { position: relative; flex: 1; min-height: 0; }

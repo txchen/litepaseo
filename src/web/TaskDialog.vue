@@ -4,6 +4,8 @@ import type { BoardCard, CardPatch } from "../shared/wire.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { formatMessageTimestamp } from "./timeline-display.ts";
 import Icon from "./Icon.vue";
+import { confirmAction, confirmDeleteTask } from "./confirm.ts";
+import { useDialog } from "./use-dialog.ts";
 
 /**
  * One task: title, column, linked conversation, a Markdown description and comments. Every
@@ -106,23 +108,25 @@ const stamp = computed(() => {
 });
 
 /** Closing keeps work: an edited description is saved; a written comment asks first. */
-function close() {
+async function close() {
   saveTitle();
   if (dirty.value) saveDescription();
-  if (comment.value.trim() && !confirm("Discard the comment you started?")) return;
+  if (comment.value.trim() && !(await confirmAction({ title: "Discard the comment you started?", confirmLabel: "Discard", danger: true }))) return;
   emit("close");
 }
-function remove() {
-  if (confirm(`Delete “${props.card.title}”? Its description and comments are deleted too.`)) emit("remove");
+async function remove() {
+  if (await confirmDeleteTask(props.card.title)) emit("remove");
 }
-function deleteComment(id: string) {
-  if (confirm("Delete this comment?")) emit("uncomment", id);
+async function deleteComment(id: string) {
+  if (await confirmAction({ title: "Delete this comment?", confirmLabel: "Delete", danger: true })) emit("uncomment", id);
 }
+const sheet = ref<HTMLElement | null>(null);
+useDialog(sheet, () => void close());
 </script>
 
 <template>
-  <div class="overlay" @mousedown.self="close" @keydown.esc="close">
-    <section class="sheet task-sheet" role="dialog" aria-modal="true" :aria-label="'Task: ' + card.title">
+  <div class="overlay" @mousedown.self="close">
+    <section ref="sheet" class="sheet task-sheet" role="dialog" aria-modal="true" :aria-label="'Task: ' + card.title" tabindex="-1">
       <header class="sheet-head task-head">
         <input
           v-model="title"
@@ -174,7 +178,7 @@ function deleteComment(id: string) {
           <button v-else-if="!card.description" type="button" class="task-empty" @click="editDescription">Add a description…</button>
           <div v-else class="prose task-description" role="button" tabindex="0" title="Click to edit"
             @click="($event.target as HTMLElement).closest('a') || editDescription()"
-            @keydown.enter="editDescription" v-html="descriptionHtml"></div>
+            @keydown.enter.self.prevent="editDescription" @keydown.space.self.prevent="editDescription" v-html="descriptionHtml"></div>
         </section>
 
         <section class="task-section">

@@ -33,3 +33,9 @@ export function withMessageImages(store: Store, host: string, agent: string, ite
   }
   return item;
 }
+/** Forgets every image sent to a host's agents, when the host itself is removed. */
+export function deleteHostMessageImages(store: Store, host: string) {
+  // The key's JSON array starts with the host; compared as a prefix, so no LIKE escaping applies.
+  const prefix = `message-images:${JSON.stringify([host]).slice(0, -1)},`;
+  store.db.prepare("DELETE FROM settings WHERE substr(key, 1, length(?)) = ?").run(prefix, prefix);
+}

@@ -110,9 +110,14 @@ const patchSchema = MutableDaemonConfigPatchSchema.pick(
     true
   >,
 ).strict();
+/** Registers the host settings routes; the returned function stops watching hosts (on dispose). */
 export function registerHostSettings<E extends Env>(app: Hono<E>, hosts: Hosts) {
   const jobs = new Map<string, LifecycleJob>();
   const writers = new Map<string, Promise<void>>();
+  // A removed host's finished job is unreachable (a host added again gets a new ID): drop it.
+  const stopPruning = hosts.onHostsChanged(() => {
+    for (const [host, job] of jobs) if (job.state !== "running" && !hosts.clients.has(host)) jobs.delete(host);
+  });
   app.use("/api/hosts/:host/settings", async (c, next) => {
     if (c.req.method !== "PATCH") return next();
     const host = c.req.param("host"),
@@ -173,7 +178,8 @@ export function registerHostSettings<E extends Env>(app: Hono<E>, hosts: Hosts) 
     if (
       patch.providers &&
       Object.values(patch.providers).some((p) =>
-        Object.keys(p).some((k) => !providerKeys.includes(k)),
+        // The schema rejects non-object entries; stay safe should that ever loosen.
+        !p || typeof p !== "object" || Object.keys(p).some((k) => !providerKeys.includes(k)),
       )
     )
       return c.json({ error: "Unsupported provider field" }, 400);
@@ -369,4 +375,5 @@ export function registerHostSettings<E extends Env>(app: Hono<E>, hosts: Hosts) 
     void runLifecycle(hosts, host, job);
     return c.json(job, 202);
   });
+  return stopPruning;
 }

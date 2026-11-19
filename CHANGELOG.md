@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.2
+
+- Open conversations with a plain request instead of the live stream. On an iPhone web app behind a Cloudflare Tunnel, the stream's first 16 KB arrived at once but the rest of a conversation was held back until the stream's next heartbeat, about 20 seconds later. A plain response has an end, so nothing waits for more data. The live stream then resumes from those rows and carries only what changes. Servers or proxies that do not offer the new request (`GET …/timeline/latest`) still get the rows from the stream, as before.
+- While a conversation opened this way is still loading after 3 seconds, the page says "Still loading this conversation": the request answers only with the whole conversation, so it cannot tell which layer is waiting. Slow-open reports say which way the rows came (`via`).
+
 ## 0.9.1
 
 - Compress live streams and larger API responses (1 KB and up) with brotli or gzip, as the browser accepts. A conversation's first rows usually shrink 3-6 times, for example 157 KB to 27 KB, which saves mobile data. Every stream event is flushed as it is written, so compression never holds one back. Turn it off with `litepaseo config set compression off` if a proxy in between mishandles compressed streams.

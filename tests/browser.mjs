@@ -175,6 +175,37 @@ try {
   let hostConfig = { appendSystemPrompt: "Original host instructions", mcp: { injectIntoAgents: true }, browserTools: { enabled: false }, agentProfiles: [], terminalProfiles: [], metadataGeneration: { providers: [] }, providers: { codex: { enabled: true } } };
   const hostSettingsWrites = [];
   const providerRefreshes = [];
+  /** What a conversation holds (the plain request and the stream send the same). */
+  const timelineReset = (host) => ({
+    type: "reset",
+    epoch: host,
+    hasOlder: false,
+    startCursor: null,
+    rows: [
+      {
+        seqStart: 1,
+        seqEnd: 1,
+        timestamp: "t",
+        provider: "codex",
+        item: { type: "assistant_message", text: markdownOverride ?? `Hello from ${host}\n\nHeading ${host}\n===\n\n[reference][dest]\n\n[dest]: https://example.com/${host}\n\n<script>window.markdownUnsafe = true</script>\n\n\`\`\`ts\nconst safe = "中文";\n\`\`\`` },
+      },
+      {
+        seqStart: 2,
+        seqEnd: 2,
+        timestamp: "t",
+        provider: "codex",
+        item: { type: "plugin", pluginId: "turn-speed", id: "turn-1", kind: "turn-speed", version: 1, data: { provider: "codex", outputTokens: 12345, generationMs: 41200, requests: 6, tokensPerSecond: 87.2 } },
+      },
+      {
+        seqStart: 3,
+        seqEnd: 3,
+        timestamp: "t",
+        provider: "codex",
+        item: { type: "plugin", pluginId: "next-input", id: "suggestion-tok", kind: "next-input", version: 1, data: { agentId: "shared-id", workspaceId: "w", token: "tok-" + host, status: "idle", text: "" } },
+      },
+    ].filter(row => markdownOverride === null || row.seqStart === 1),
+  });
+  const latestOpens = [];
   await page.route("**/api/hosts**", async (route) => {
     const p = new URL(route.request().url()).pathname;
     const host = p.split("/")[3];
@@ -230,44 +261,15 @@ try {
       creations.push({ host, ...route.request().postDataJSON() });
       return route.fulfill({ status: 201, json: { id: "new-1", key: `${host}:new-1` } });
     }
+    // alpha opens through the plain request; beta has none (an older server), so its stream
+    // carries the rows as before.
+    if (p.endsWith("/timeline/latest") && host === "alpha") {
+      latestOpens.push(host);
+      return route.fulfill({ json: timelineReset(host) });
+    }
     if (p.endsWith("/timeline/stream")) {
       timelineOpens.push(host);
-      return route.fulfill(
-        sse({
-          type: "ops",
-          ops: [
-            {
-              type: "reset",
-              epoch: host,
-              hasOlder: false,
-              startCursor: null,
-              rows: [
-                {
-                  seqStart: 1,
-                  seqEnd: 1,
-                  timestamp: "t",
-                  provider: "codex",
-                  item: { type: "assistant_message", text: markdownOverride ?? `Hello from ${host}\n\nHeading ${host}\n===\n\n[reference][dest]\n\n[dest]: https://example.com/${host}\n\n<script>window.markdownUnsafe = true</script>\n\n\`\`\`ts\nconst safe = "中文";\n\`\`\`` },
-                },
-                {
-                  seqStart: 2,
-                  seqEnd: 2,
-                  timestamp: "t",
-                  provider: "codex",
-                  item: { type: "plugin", pluginId: "turn-speed", id: "turn-1", kind: "turn-speed", version: 1, data: { provider: "codex", outputTokens: 12345, generationMs: 41200, requests: 6, tokensPerSecond: 87.2 } },
-                },
-                {
-                  seqStart: 3,
-                  seqEnd: 3,
-                  timestamp: "t",
-                  provider: "codex",
-                  item: { type: "plugin", pluginId: "next-input", id: "suggestion-tok", kind: "next-input", version: 1, data: { agentId: "shared-id", workspaceId: "w", token: "tok-" + host, status: "idle", text: "" } },
-                },
-              ].filter(row => markdownOverride === null || row.seqStart === 1),
-            },
-          ],
-        }),
-      );
+      return route.fulfill(sse({ type: "ops", ops: [timelineReset(host)] }));
     }
     if (p.includes("/workspaces/")) {
       threadActions.push({ host, action: p.split("/").pop(), ...(route.request().postDataJSON() ?? {}) });
@@ -678,6 +680,8 @@ try {
   await page.evaluate(() => { document.querySelector(".timeline [data-seq-start=\"1\"]").dataset.cachedMark = "kept"; });
   await page.locator("button.session", { hasText: "beta conversation" }).click();
   await page.getByText("Hello from beta").waitFor();
+  assert.ok(latestOpens.includes("alpha"), "a conversation opens through the plain request");
+  const alphaLatest = latestOpens.length;
   const alphaOpens = timelineOpens.filter((h) => h === "alpha").length;
   await page.waitForTimeout(2500); // the open conversation reconnects in this window; alpha must not
   assert.equal(timelineOpens.filter((h) => h === "alpha").length, alphaOpens, "a conversation out of view keeps no stream");
@@ -688,6 +692,7 @@ try {
   for (let i = 0; i < 50 && timelineOpens.filter((h) => h === "alpha").length === alphaOpens; i++) await page.waitForTimeout(50);
   assert.ok(timelineOpens.filter((h) => h === "alpha").length > alphaOpens, "back in view, it reconnects");
   assert.equal(await page.locator(".timeline [data-seq-start=\"1\"]").getAttribute("data-cached-mark"), "kept", "an unchanged reset keeps the rendered rows");
+  assert.equal(latestOpens.length, alphaLatest, "a cached conversation is not fetched again");
 
   // Host settings: real form, explicit host scope, sparse patches and profile creation.
   await page.getByRole('button', {name:/Hosts, /}).click();

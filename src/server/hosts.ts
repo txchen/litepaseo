@@ -2,7 +2,7 @@ import { connectionProblem } from "./diagnostics.ts";
 import { createHostClient } from "@getpaseo/client/node";
 import { createPaseoApi } from "@getpaseo/client";
 import type { Host } from "./store.ts";
-import type { AgentSummary, WorkspaceSummary, HostDiagnostic } from "../shared/wire.ts";
+import type { AgentSummary, WorkspaceSummary, HostDiagnostic, TimelineOp } from "../shared/wire.ts";
 import { VersionedCollection } from "./versioned-collection.ts";
 import { HostDirectory, HostWorkspaces, type DirectoryDriver, type Transition } from "./host-directory.ts";
 import { TimelineView, type TimelineDriver, type TimelineResume } from "./timeline-view.ts";
@@ -39,6 +39,14 @@ const TIMELINE_GRACE_MS = 5 * 60_000;
 const SLOW_TIMELINE_MS = 3000;
 /** A viewer still without rows after this long has the daemon checked for a silent connection. */
 const LIVENESS_CHECK_MS = 2000;
+/** How long a conversation snapshot waits for the host before giving up. */
+const SNAPSHOT_TIMEOUT_MS = 45_000;
+
+export class TimelineTimeoutError extends Error {
+  constructor() {
+    super("The host did not load this conversation in time.");
+  }
+}
 
 export class Hosts {
   readonly agents = new VersionedCollection<AgentSummary>();
@@ -253,6 +261,40 @@ export class Hosts {
       }, TIMELINE_GRACE_MS);
       current.idle.unref?.();
     };
+  }
+
+  /**
+   * The conversation as it is now, for a plain request that opens it: the shared view's reset
+   * (loaded first if nobody watched it). Its seq lets the browser's stream resume from there.
+   */
+  timelineSnapshot(hostId: string, agentId: string, timeoutMs = SNAPSHOT_TIMEOUT_MS) {
+    return new Promise<Extract<TimelineOp, { type: "reset" }>>((resolve, reject) => {
+      let stop: (() => void) | null = null, done = false, released = false;
+      // Leaving starts the view's idle grace, so the stream that follows finds it live.
+      const release = () => {
+        if (released || !stop) return;
+        released = true;
+        stop();
+      };
+      const timer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        release();
+        reject(new TimelineTimeoutError());
+      }, timeoutMs);
+      timer.unref?.();
+      stop = this.watchTimeline(hostId, agentId, (ops) => {
+        // Errors are the view retrying; keep waiting for its rows.
+        const reset = ops.find((op) => op.type === "reset");
+        if (done || !reset) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(reset);
+        queueMicrotask(release);
+      });
+      // A live view answered before `stop` was known.
+      if (done) release();
+    });
   }
 
   private emit(listeners: Set<() => void>) {

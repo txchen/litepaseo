@@ -176,6 +176,9 @@ export type TimelineOp =
   | { type: "append"; seqStart: number; seqEnd: number; timestamp: string; text: string }
   | { type: "error"; message: string };
 
+/** A conversation as it is now (GET …/timeline/latest): the reset its stream would send. */
+export type TimelineSnapshot = Extract<TimelineOp, { type: "reset" }>;
+
 export interface TimelineMessage {
   type: "ops";
   ops: TimelineOp[];

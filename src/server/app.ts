@@ -30,7 +30,7 @@ import { Notifier, vapidKeys, webPushSender, type PushSender } from "./notifier.
 import { UsageService } from "./usage.ts";
 import { MAX_DICTATION_BYTES, DictationError, clearDictation, dictationConfig, dictationSettings, saveDictation, transcribe } from "./dictation.ts";
 import { DictationStreams } from "./dictation-stream.ts";
-import { Hosts, UnknownHostError } from "./hosts.ts";
+import { Hosts, TimelineTimeoutError, UnknownHostError } from "./hosts.ts";
 import { rewindModes } from "./host-directory.ts";
 import type {
   CreateSessionRequest,
@@ -41,6 +41,7 @@ import type {
   ProviderOption,
   TimelineItem,
   TimelineMessage,
+  TimelineSnapshot,
   TimelinePage,
   SubagentsMessage,
   PromptIndex,
@@ -434,6 +435,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
       firstByteMs: ms.optional(),
       // From 0.9.1: the kind of browser (never its user agent), the connection, and how the
       // stream's body arrived, to tell a held-back response from one that trickled in.
+      via: z.enum(["latest", "stream"]).optional(),
       engine: z.enum(["webkit", "blink", "gecko", "other"]).optional(),
       os: z.enum(["ios", "android", "macos", "windows", "linux", "other"]).optional(),
       standalone: z.boolean().optional(),
@@ -598,6 +600,24 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     }
   });
 
+  /** Rows as browsers get them: images the agent sent are served from here. */
+  const enrichRow = (hostId: string, agentId: string) => (row: import("../shared/wire.ts").TimelineRow) =>
+    ({ ...row, item: withMessageImages(store, hostId, agentId, row.item) });
+  /**
+   * The conversation as it is now, to open it: a plain response with an end, which no proxy
+   * holds back the way some held back a long-lived stream's first rows. The stream then resumes
+   * from the snapshot's seq and carries only what changed.
+   */
+  app.get("/api/hosts/:host/agents/:agent/timeline/latest", async (c) => {
+    const hostId = c.req.param("host"), agentId = c.req.param("agent");
+    try {
+      const reset = await hosts.timelineSnapshot(hostId, agentId);
+      return c.json({ ...reset, rows: reset.rows.map(enrichRow(hostId, agentId)) } satisfies TimelineSnapshot);
+    } catch (error) {
+      if (error instanceof TimelineTimeoutError) return c.json({ error: error.message }, 504);
+      throw error;
+    }
+  });
   app.get("/api/hosts/:host/agents/:agent/timeline/stream", (c) => {
     hosts.get(c.req.param("host"));
     // A browser that holds the conversation says how far: it gets only what changed since.
@@ -609,7 +629,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     return eventStream(c.req.raw.signal, (send) => {
       const stop = hosts.watchTimeline(c.req.param("host"), c.req.param("agent"), (ops) =>
         send({ type: "ops", ops: ops.map(op => {
-          const enrich = (row: import("../shared/wire.ts").TimelineRow) => ({ ...row, item: withMessageImages(store, c.req.param("host"), c.req.param("agent"), row.item) });
+          const enrich = enrichRow(c.req.param("host"), c.req.param("agent"));
           return op.type === "reset" ? { ...op, rows: op.rows.map(enrich) } : op.type === "upsert" ? { ...op, row: enrich(op.row) } : op;
         }) } satisfies TimelineMessage), undefined, since.success ? since.data : undefined);
       // The agent's provider subagents ride the same stream: no extra connection per chat.

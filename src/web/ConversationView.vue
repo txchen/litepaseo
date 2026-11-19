@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onActivated, onDeactivated, onUnmounted, provide, ref, shallowRef, watch } from "vue";
 import { SUGGESTIONS } from "./suggestions.ts";
-import type { AgentSummary, PromptIndex, PromptMarker, ProviderSubagent, TimelineMessage, TimelinePage, TimelineRow, TimelineStreamMessage } from "../shared/wire.ts";
+import type { AgentSummary, PromptIndex, PromptMarker, ProviderSubagent, TimelineMessage, TimelinePage, TimelineRow, TimelineSnapshot, TimelineStreamMessage } from "../shared/wire.ts";
 import { TimelineStore, type RowRef } from "./timeline-store.ts";
 import { PAGE_STEP, pageHistory, RENDER_WINDOW } from "./timeline-window.ts";
 import { openStream } from "./event-stream.ts";
@@ -152,54 +152,97 @@ function syncElapsedClock() {
 watch(turnStartedAt, syncElapsedClock, { immediate: true });
 document.addEventListener("visibilitychange", syncElapsedClock);
 
-// ---- Live stream ------------------------------------------------------------------------------
+// ---- Opening, then the live stream --------------------------------------------------------------
 /** Times the first open only: a cached conversation coming back already shows its rows. */
 const opening = trackTimelineOpen(
   props.agent,
   (report) => void props.api("/diagnostics/timeline-slow", "POST", report).catch(() => {}),
   (wait) => (timelineWait.value = wait),
 );
-let stream = connect();
+let stream: { close(): void } | null = null;
+/** The first rows are on their way through a plain request; the stream waits for them. */
+let loadingLatest = true;
+const latestAbort = new AbortController();
+void open();
+/**
+ * The first rows come through a plain request, which has an end: no proxy holds its tail back
+ * the way some held back a long-lived stream's first rows (seen on an iPhone web app behind a
+ * Cloudflare Tunnel). The stream then resumes from those rows and only pushes what changes.
+ * Should the request fail (an older server, say), the stream sends the rows itself, as before.
+ */
+async function open() {
+  await loadLatest();
+  loadingLatest = false;
+  if (!disposed && inView && !stream) stream = connect();
+}
+async function loadLatest() {
+  opening.via("latest");
+  try {
+    const response = await fetch("/api" + base() + "/timeline/latest", {
+      // The custom header marks same-origin script (CSRF guard), as for every API call.
+      headers: { "x-litepaseo": "1" },
+      signal: AbortSignal.any([latestAbort.signal, AbortSignal.timeout(60_000)]),
+    });
+    if (response.status === 401) return emit("unauthorized");
+    if (!response.ok || !response.body) return opening.via("stream");
+    opening.response(response);
+    // Read as it arrives, so a slow open can be told apart from a held-back one.
+    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+    let text = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!text) opening.state("live");
+      opening.chunk(value.length);
+      text += value;
+    }
+    if (!disposed) receive({ type: "ops", ops: [JSON.parse(text) as TimelineSnapshot] });
+  } catch {
+    // Aborted, offline or not understood: the stream carries the rows instead.
+    opening.via("stream");
+  }
+}
 function connect() {
   return openStream({
-  // Evaluated on every (re)connect: holding the conversation, ask only for what changed since.
-  url: () => {
-    const at = store.value.resumePoint();
-    const query = at ? `?epoch=${encodeURIComponent(at.epoch)}&seq=${at.seq}&from=${at.from}` : "";
-    return "/api" + base() + "/timeline/stream" + query;
-  },
-  onResponse: (response) => opening.response(response),
-  onChunk: (size) => opening.chunk(size),
-  onState: (state) => {
-    if (state === "unauthorized") emit("unauthorized");
-    opening.state(state);
-  },
-  onMessage: (data) => {
-    const s = store.value;
-    const message = data as TimelineStreamMessage;
-    if (message.type === "subagents") {
-      subagents.value = message.subagents;
-      emit("subagents", message.subagents);
-      return;
-    }
-    opening.message(message);
-    const stick = !historyRows.value && (nearBottom() || !s.ready);
-    const ops = (data as TimelineMessage).ops;
-    const failure = ops.find((op) => op.type === "error");
-    timelineNotice.value = failure?.type === "error" ? failure.message : "";
-    const epoch = s.epoch;
-    const wasReady = s.ready;
-    s.apply(ops);
-    if (!wasReady && s.ready) emit("ready");
-    if (s.epoch && s.epoch !== promptEpoch) void loadPrompts(s);
-    if (epoch && epoch !== s.epoch) {
-      historyRows.value = null;
-      historyNewer.value = [];
-      scrollToBottom();
-    }
-    if (stick) scrollToBottom();
-  },
+    // Evaluated on every (re)connect: holding the conversation, ask only for what changed since.
+    url: () => {
+      const at = store.value.resumePoint();
+      const query = at ? `?epoch=${encodeURIComponent(at.epoch)}&seq=${at.seq}&from=${at.from}` : "";
+      return "/api" + base() + "/timeline/stream" + query;
+    },
+    onResponse: (response) => opening.response(response),
+    onChunk: (size) => opening.chunk(size),
+    onState: (state) => {
+      if (state === "unauthorized") emit("unauthorized");
+      opening.state(state);
+    },
+    onMessage: receive,
   });
+}
+function receive(data: unknown) {
+  const s = store.value;
+  const message = data as TimelineStreamMessage;
+  if (message.type === "subagents") {
+    subagents.value = message.subagents;
+    emit("subagents", message.subagents);
+    return;
+  }
+  opening.message(message);
+  const stick = !historyRows.value && (nearBottom() || !s.ready);
+  const ops = (data as TimelineMessage).ops;
+  const failure = ops.find((op) => op.type === "error");
+  timelineNotice.value = failure?.type === "error" ? failure.message : "";
+  const epoch = s.epoch;
+  const wasReady = s.ready;
+  s.apply(ops);
+  if (!wasReady && s.ready) emit("ready");
+  if (s.epoch && s.epoch !== promptEpoch) void loadPrompts(s);
+  if (epoch && epoch !== s.epoch) {
+    historyRows.value = null;
+    historyNewer.value = [];
+    scrollToBottom();
+  }
+  if (stick) scrollToBottom();
 }
 
 // ---- Scrolling --------------------------------------------------------------------------------
@@ -612,7 +655,8 @@ async function jumpToPrompt(seq: number, exact = false) {
 onDeactivated(() => {
   inView = false;
   opening.abandon();
-  stream.close();
+  stream?.close();
+  stream = null;
   clearTimeout(elapsedTimer);
   cancelAnimationFrame(activeFrame);
   activeFrame = 0;
@@ -627,7 +671,8 @@ onActivated(() => {
   }
   if (store.value.ready) emit("ready");
   if (subagents.value.length) emit("subagents", subagents.value);
-  stream = connect();
+  // Still opening: the first rows connect the stream when they land.
+  if (!loadingLatest) stream = connect();
   syncElapsedClock();
   scheduleActivePrompt();
 });
@@ -635,7 +680,8 @@ onActivated(() => {
 onUnmounted(() => {
   disposed = true;
   opening.abandon();
-  stream.close();
+  latestAbort.abort();
+  stream?.close();
   clearTimeout(elapsedTimer);
   clearTimeout(copiedTimer);
   cancelAnimationFrame(activeFrame);
@@ -696,7 +742,7 @@ defineExpose({
         </div>
         <div v-if="!visibleRows.length" class="timeline-empty">
           <span v-if="!store.ready" class="spinner"></span>
-          {{ store.ready ? "No messages yet." : timelineWait === "server" ? "Still connecting to LitePaseo…" : timelineWait === "network" ? "Connected, waiting for the network to deliver data…" : timelineWait === "host" ? `Waiting for ${hostLabel || "the host"} to load this conversation…` : "Loading conversation…" }}
+          {{ store.ready ? "No messages yet." : timelineWait === "server" ? "Still connecting to LitePaseo…" : timelineWait === "network" ? "Connected, waiting for the network to deliver data…" : timelineWait === "loading" ? "Still loading this conversation…" : timelineWait === "host" ? `Waiting for ${hostLabel || "the host"} to load this conversation…` : "Loading conversation…" }}
         </div>
       </div>
     </div>

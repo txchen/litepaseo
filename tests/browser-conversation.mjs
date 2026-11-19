@@ -69,12 +69,20 @@ try {
   await page.route("**/api/hosts**", async (route) => {
     const url = new URL(route.request().url());
     const p = url.pathname;
-    if (p.endsWith("/timeline/stream")) {
-      if (timelineDelay) await new Promise((r) => setTimeout(r, timelineDelay));
+    // The latest rows: through a plain request first (the page opens with it), and from the
+    // stream when the browser does not hold them.
+    const latest = () => {
       const rows = [];
       for (let s = TOTAL - LIVE + 1; s <= TOTAL; s++) rows.push(row(s));
-      return route.fulfill(sse({ type: "ops", ops: [{ type: "reset", epoch: "e1", hasOlder: true,
-        startCursor: { epoch: "e1", seq: TOTAL - LIVE + 1 }, rows }] }));
+      return { type: "reset", epoch: "e1", hasOlder: true, startCursor: { epoch: "e1", seq: TOTAL - LIVE + 1 }, rows, seq: TOTAL };
+    };
+    if (p.endsWith("/timeline/latest")) {
+      if (timelineDelay) await new Promise((r) => setTimeout(r, timelineDelay));
+      return route.fulfill({ json: latest() });
+    }
+    if (p.endsWith("/timeline/stream")) {
+      if (timelineDelay) await new Promise((r) => setTimeout(r, timelineDelay));
+      return route.fulfill(sse({ type: "ops", ops: [latest()] }));
     }
     if (p.endsWith("/timeline/prompts")) {
       const prompts = [];
@@ -590,7 +598,8 @@ try {
   const slowReport = page.waitForRequest((r) => r.url().endsWith("/api/diagnostics/timeline-slow"));
   await page.goto(`http://127.0.0.1:${port}/?session=alpha%3Aa1`);
   // Past 3 s the spinner says what it waits for: here the stream has not even connected.
-  await page.locator(".timeline-empty", { hasText: "Still connecting to LitePaseo" }).waitFor();
+  // Its headers come only with the whole snapshot, so it cannot say which layer waits.
+  await page.locator(".timeline-empty", { hasText: "Still loading this conversation" }).waitFor();
   const report = (await slowReport).postDataJSON();
   timelineDelay = 0;
   assert.equal(typeof report.pageAgeMs, "number");
@@ -598,7 +607,7 @@ try {
   assert.equal(report.hostId, "alpha");
   assert.equal(report.agentId, "a1");
   assert.ok(report.totalMs >= 3000 && report.connectedMs >= 3000 && report.firstByteMs >= report.connectedMs && report.rowsMs >= report.firstByteMs, JSON.stringify(report));
-  assert.equal(report.attempts, 1);
+  assert.equal(report.via, "latest", "the first rows came through the plain request");
   // The kind of browser and how the body arrived, for telling held-back responses apart.
   assert.deepEqual([report.engine, report.os, report.standalone], ["blink", "linux", false]);
   assert.ok(report.chunks >= 1 && report.characters > 1000 && report.arrivals.length >= 1, JSON.stringify(report));

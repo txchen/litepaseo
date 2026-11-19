@@ -8,9 +8,10 @@ export const SLOW_OPEN_MS = 3000;
 /**
  * What a conversation still loading after SLOW_OPEN_MS waits for: the LitePaseo server (no
  * stream response yet), the network (headers but no bytes: a proxy holding data) or the host's
- * daemon (the stream is flowing, rows are not).
+ * daemon (the stream is flowing, rows are not). "loading": the plain request that opens it is still
+ * out; its headers only come with the whole snapshot, so which layer waits cannot be told.
  */
-export type OpenWait = "server" | "network" | "host" | null;
+export type OpenWait = "server" | "network" | "host" | "loading" | null;
 
 /** Page lifetime and the last time it was in the background, for slow-open reports. */
 const pageStarted = performance.now();
@@ -58,6 +59,8 @@ export function trackTimelineOpen(
   const since = () => Math.round(performance.now() - started);
   let connectedMs: number | null = null, firstByteMs: number | null = null, rowsMs: number | null = null;
   let attempts = 0, hidden = document.hidden, done = false, wait: OpenWait = null;
+  /** Which request brought the first rows: the plain one ("latest") or the stream. */
+  let via: "latest" | "stream" = "stream";
   // How the body arrived: in pieces as sent, or held somewhere and delivered late in one go.
   let encoding: string | null = null, chunks = 0, characters = 0, lastChunkMs: number | null = null;
   let maxGapMs = 0, maxGapEndMs: number | null = null;
@@ -75,7 +78,7 @@ export function trackTimelineOpen(
   document.addEventListener("visibilitychange", onVisibility);
   setWait(null);
   const slow = setTimeout(() => {
-    if (!done) setWait(connectedMs === null ? "server" : firstByteMs === null ? "network" : "host");
+    if (!done) setWait(via === "latest" && firstByteMs === null ? "loading" : connectedMs === null ? "server" : firstByteMs === null ? "network" : "host");
   }, SLOW_OPEN_MS);
   const finish = () => {
     done = true;
@@ -89,7 +92,7 @@ export function trackTimelineOpen(
       hostId: agent.hostId, agentId: agent.id, totalMs, connectedMs, firstByteMs, rowsMs,
       renderMs: rowsMs === null ? null : totalMs - rowsMs, attempts, hidden,
       pageAgeMs, ...background, version: WEB_VERSION,
-      ...clientKind(), protocol: apiProtocol(), encoding, chunks, characters, lastChunkMs, maxGapMs, maxGapEndMs, arrivals,
+      via, ...clientKind(), protocol: apiProtocol(), encoding, chunks, characters, lastChunkMs, maxGapMs, maxGapEndMs, arrivals,
     });
   };
   return {
@@ -99,12 +102,16 @@ export function trackTimelineOpen(
       finish();
       report(since());
     },
+    /** Which request is bringing the first rows: the plain one, or the stream after it failed. */
+    via(kind: "latest" | "stream") {
+      via = kind;
+    },
     /** Stream headers arrived. */
     response(response?: Response) {
       if (done) return;
       connectedMs ??= since();
       encoding = response?.headers.get("content-encoding")?.slice(0, 10) ?? null;
-      if (wait === "server") setWait("network");
+      if (wait === "server" || wait === "loading") setWait("network");
     },
     /** A piece of the body arrived (until the first rows). */
     chunk(size: number) {

@@ -294,9 +294,15 @@ pieces), `lastChunkMs`, and the longest silence between pieces (`maxGapMs`, endi
 the way rather than slow to send. Find them with
 `litepaseo logs -n 2000 | grep timeline_slow`.
 
-While a conversation is still loading after 3 seconds, the page says whether it is still
-connecting to LitePaseo, waiting for the network to deliver data, or waiting for the host.
-After an upgrade, open pages offer a reload so they run the installed version.
+A conversation opens with a plain request (`GET …/timeline/latest`) for its latest rows;
+its live stream then resumes from them and carries only changes. A plain response has an
+end, so no proxy holds its tail back the way some hold back a long-lived stream. Reports
+say which way the first rows came (`via`: `latest`, or `stream` when the request failed).
+
+While a conversation is still loading after 3 seconds, the page says what it waits for:
+the plain request ("Still loading this conversation"), or, when the stream carries the
+rows, the connection to LitePaseo, the network, or the host. After an upgrade, open pages
+offer a reload so they run the installed version.
 
 Live streams and larger API responses (1 KB and up) are compressed with brotli or gzip
 for browsers that accept it: a conversation's first rows usually shrink 3-6 times. Each

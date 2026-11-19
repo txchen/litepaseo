@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.10.0
+
+- Security hardening:
+  - Tie stored voice-input API keys to their transcription service's origin so changing the base URL requires entering a key again, and reject credentials, query strings, or fragments in the base URL.
+  - Block local, private, and link-local addresses (including across DNS lookups, redirects, and page `<link>` tags) when importing project icons by URL.
+  - Prune expired sign-in rate-limit entries so a flood of clients cannot permanently lock new logins into the shared overflow bucket, and trust forwarding headers only from loopback proxies.
+  - Guard WebSocket upgrade URL parsing against malformed targets, restrict service-worker notification clicks to same-origin URLs, and protect emitted links/images in the fallback Markdown renderer from formatting corruption.
+- Stability, concurrency & resource cleanup:
+  - Fix materialized message images on macOS (where `/tmp` and `tmpdir()` resolve through `/private`), and add a UUIDv4 fallback so plain-HTTP LAN connections work without `crypto.randomUUID`.
+  - Fix KeepAlive conversation switching so a late load from a backgrounded conversation never marks the newly opened conversation as read, and fix the tab/app waiting badge tracking the wrong store.
+  - Fix race conditions across the terminal (input batches stay with the terminal they were typed into), file browser, file viewer, agent controls, attachment retries, and schedule editor (editing a schedule no longer resets a non-default model).
+  - Add byte-based backpressure and cleanup to SSE streams, graceful shutdown and preview-window cancellation to push notifications, a timeout and lower memory footprint to the server send queue, and full cleanup of message images, pins, and queued messages when removing a host.
+  - Fix subagent event retry loops, HostMirror paged-snapshot overwrites, TimelineView catch-up edge cases, and frontend menu/KeepAlive listener leaks.
+- UI, accessibility & mobile polish:
+  - Replace native browser `confirm()` prompts with a theme-aware confirmation dialog and shared keyboard/focus-trap handling across dialogs and menus.
+  - Eliminate theme flash on load with a CSP-hashed inline script, sync the PWA `theme-color` with the active sidebar color, and raise faint/warning text contrast to meet WCAG AA.
+  - Fix styling in conversation search, composer notices, and header panel active states; improve mobile touch targets, landscape safe areas, and narrow header layout.
+- Codebase modularization:
+  - Split the server (`app.ts`), web shell (`App.vue`, `HostSettings.vue`), and stylesheet (`style.css`) into focused modules, lazy-loading the Kanban board and shrinking both the main JS and CSS bundles.
+
 ## 0.9.2
 
 - Open conversations with a plain request instead of the live stream. On an iPhone web app behind a Cloudflare Tunnel, the stream's first 16 KB arrived at once but the rest of a conversation was held back until the stream's next heartbeat, about 20 seconds later. A plain response has an end, so nothing waits for more data. The live stream then resumes from those rows and carries only what changes. Servers or proxies that do not offer the new request (`GET …/timeline/latest`) still get the rows from the stream, as before.

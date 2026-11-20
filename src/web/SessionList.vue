@@ -39,9 +39,9 @@ const height = ref(600);
 let frame = 0;
 let observer: ResizeObserver | undefined;
 
-const total = computed(() => {
+const hasRows = computed(() => {
   props.store.version.value;
-  return props.store.size;
+  return props.mode === "projects" ? props.store.projectCount > 0 : props.store.size > 0;
 });
 const listHeight = computed(() => {
   props.store.version.value;
@@ -95,7 +95,14 @@ const groupHostsTitle = (g: ProjectGroup<WorkspaceSummary>) =>
   [...g.hosts.keys()].map((id) => props.hostLabels.get(id) ?? "Unknown host").join(", ");
 
 // Project icons come from the daemon (custom, or favicon/logo in the project root); a letter tile otherwise.
-const groupIconSource = (g: ProjectGroup<WorkspaceSummary>) => g.items.at(0) ?? null;
+const groupIconSource = (g: ProjectGroup<WorkspaceSummary>) => {
+  const item = g.items.at(0);
+  if (item) return item;
+  const empty = g.emptyProjects?.values().next().value;
+  return empty
+    ? { hostId: empty.hostId, rootPath: empty.rootPath, projectId: empty.projectId, projectIconRevision: empty.iconRevision }
+    : null;
+};
 
 // Hover card with the details a single-line row leaves out (Paseo's thread tooltip).
 const canHover = matchMedia("(hover: hover) and (pointer: fine)").matches;
@@ -190,19 +197,19 @@ onUnmounted(() => {
         <div
           v-if="row.kind === 'group'"
           class="group-row"
-          :class="{ collapsed: row.collapsed }"
+          :class="{ collapsed: row.collapsed, 'is-empty': !row.group.items.size }"
           :style="{ transform: `translateY(${row.top}px)`, height: GROUP_PITCH - 4 + 'px' }"
         >
           <button
             class="group-toggle"
-            :aria-expanded="!row.collapsed"
-            @click="store.toggleGroup(row.group.key)"
+            :aria-expanded="row.group.items.size ? !row.collapsed : undefined"
+            @click="row.group.items.size ? store.toggleGroup(row.group.key) : emit('new', row.group)"
             @contextmenu.prevent="emit('projectMenu', row.group, $event.clientX, $event.clientY)"
           >
             <!-- Paseo's lead slot: the project icon, swapped for the fold chevron on hover. -->
             <span class="group-lead">
               <ProjectIcon :name="row.group.name" :source="groupIconSource(row.group)" />
-              <Icon name="chevron" :size="14" class="group-chevron" />
+              <Icon v-if="row.group.items.size" name="chevron" :size="14" class="group-chevron" />
             </span>
             <span class="group-name"><span class="group-name-text">{{ row.group.name }}</span><Icon v-if="row.group.pinnedAt" name="pin" :size="11" class="project-pin" title="Pinned project" /></span>
             <span class="group-host" :title="groupHostsTitle(row.group)">{{ groupHosts(row.group) }}</span>
@@ -214,7 +221,7 @@ onUnmounted(() => {
               <span v-if="row.group.running" class="status-dot is-running"></span>
               <span v-if="row.group.unread" class="status-dot is-unread"></span>
             </span>
-            <span v-if="row.collapsed" class="group-count">{{ row.group.items.size }}</span>
+            <span v-if="row.collapsed && row.group.items.size" class="group-count">{{ row.group.items.size }}</span>
           </button>
           <button
             class="group-add"
@@ -287,7 +294,7 @@ onUnmounted(() => {
         <p><Icon name="folder" :size="14" />{{ tildeHome(card.thread.directory || card.thread.rootPath) }}</p>
       </div>
     </Teleport>
-    <div v-if="!total" class="list-empty">
+    <div v-if="!hasRows" class="list-empty">
       {{ searching ? "No threads match." : "No threads yet. Add a host to get started." }}
     </div>
   </div>

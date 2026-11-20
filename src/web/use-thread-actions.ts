@@ -102,24 +102,35 @@ export function useThreadActions({ api, action, directory, selectedThread, selec
     const target = projectSettings.value;
     if (!target) return null;
     const thread = target.threadKeys.map((key) => directory.get(key)).find(Boolean);
+    if (thread) {
+      return {
+        projectId: thread.projectId ?? target.projectIds[0] ?? "",
+        name: thread.project ?? target.name,
+        customName: thread.projectCustomName ?? null,
+        iconRevision: thread.projectIconRevision ?? null,
+      };
+    }
+    const empty = target.projectIds.map((id) => directory.getEmptyProject(`${target.hostId}:${id}`)).find(Boolean);
     return {
-      projectId: thread?.projectId ?? target.projectIds[0] ?? "",
-      name: thread?.project ?? target.name,
-      customName: thread?.projectCustomName ?? null,
-      iconRevision: thread?.projectIconRevision ?? null,
+      projectId: empty?.projectId ?? target.projectIds[0] ?? "",
+      name: empty?.name ?? target.name,
+      customName: empty?.customName ?? null,
+      iconRevision: empty?.iconRevision ?? null,
     };
   });
   function openProjectMenu(group: ProjectGroup<WorkspaceSummary>, x: number, y: number) {
     const items = group.items.range(0, group.items.size);
+    const empties = group.emptyProjects ? [...group.emptyProjects.values()] : [];
     const first = items[0];
-    if (!first) return;
+    const firstEmpty = empties[0];
+    if (!first && !firstEmpty) return;
     projectMenu.value = {
       project: {
         name: group.name,
-        hostId: first.hostId,
-        rootPath: first.rootPath,
+        hostId: first?.hostId ?? firstEmpty!.hostId,
+        rootPath: first?.rootPath ?? firstEmpty!.rootPath,
         // A row groups by name, so it may hold more than one daemon project; removal covers them all.
-        projectIds: [...new Set(items.map((t) => t.projectId).filter(Boolean))],
+        projectIds: [...new Set([...items.map((t) => t.projectId), ...empties.map((p) => p.projectId)].filter(Boolean))],
         threadKeys: items.map((t) => t.key),
       },
       x,
@@ -132,7 +143,9 @@ export function useThreadActions({ api, action, directory, selectedThread, selec
     const ok = await confirmAction({
       title: `Remove “${project.name}” from ${host}?`,
       message:
-        `Its ${threads === 1 ? "thread is" : `${threads} threads are`} archived and the project leaves the sidebar. ` +
+        (threads
+          ? `Its ${threads === 1 ? "thread is" : `${threads} threads are`} archived and the project leaves the sidebar. `
+          : "The project leaves the sidebar. ") +
         "Files on disk are not touched; the host keeps the history.",
       confirmLabel: "Remove project",
       danger: true,

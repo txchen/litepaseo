@@ -9,7 +9,7 @@ import { Store } from "../src/server/store.ts";
 import { Hosts } from "../src/server/hosts.ts";
 import { createApp } from "../src/server/app.ts";
 import { DirectoryStore, comparePinnedFirst } from "../src/web/directory-store.ts";
-import type { AgentSummary, WorkspaceSummary } from "../src/shared/wire.ts";
+import type { AgentSummary, EmptyProjectSummary, WorkspaceSummary } from "../src/shared/wire.ts";
 
 const t = (s: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, s)).toISOString();
 const ws = (id: string, extra: Partial<WorkspaceDescriptor> = {}): WorkspaceDescriptor => ({
@@ -317,4 +317,118 @@ test("project edit: rename and icon go to the daemon in Paseo's order; failures 
     store.close();
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("HostWorkspaces mirrors emptyProjects from snapshots, archive transitions, project updates, and disposes cleanly", () => {
+  let observer: any;
+  const driver: DirectoryDriver = {
+    getConnectionState: () => ({ status: "connected" }),
+    subscribeConnectionStatus: () => () => {},
+    getLastServerInfoMessage: () => ({ features: { directorySync: true } }),
+    observeAgents: () => { throw new Error("not used"); },
+    fetchAgents: async () => { throw new Error("not used"); },
+    observeWorkspaces: () => ({ subscribe: (o) => ((observer = o), () => {}), release: async () => {} }),
+    fetchWorkspaces: async () => ({ entries: [], pageInfo: { hasMore: false, nextCursor: null } }),
+  };
+  const workspacesCol = new VersionedCollection<WorkspaceSummary>();
+  const emptyCol = new VersionedCollection<EmptyProjectSummary>();
+  const mirror = new HostWorkspaces("h", driver, workspacesCol, () => {}, emptyCol);
+  mirror.start();
+
+  // Initial snapshot with one active workspace (p1) and one empty project (p2).
+  observer.snapshot({
+    entries: [ws("w1", { projectId: "p1", projectDisplayName: "active-proj" })],
+    emptyProjects: [
+      { projectId: "p2", projectKey: "k2", projectDisplayName: "empty-proj", projectRootPath: "/code/empty", projectKind: "git" },
+    ],
+    pageInfo: { hasMore: false, nextCursor: null },
+    sync: { generation: "g", headSeq: 1, mode: "snapshot", removals: [] },
+  });
+  assert.deepEqual(emptyCol.snapshot().map((p) => [p.key, p.name]), [["h:p2", "empty-proj"]]);
+
+  // Archiving the last workspace of p1 surfaces p1 as an empty project.
+  observer.update({
+    type: "workspace_update",
+    payload: {
+      kind: "remove",
+      id: "w1",
+      emptyProject: { projectId: "p1", projectDisplayName: "active-proj", projectRootPath: "/code/active", projectKind: "git" },
+      generation: "g",
+      seq: 2,
+    },
+  });
+  assert.deepEqual(emptyCol.snapshot().map((p) => p.projectId).sort(), ["p1", "p2"]);
+
+  // Creating a workspace in p2 removes p2 from emptyProjects.
+  observer.update({
+    type: "workspace_update",
+    payload: { kind: "upsert", workspace: ws("w2", { projectId: "p2", projectDisplayName: "empty-proj" }), generation: "g", seq: 3 },
+  });
+  assert.deepEqual(emptyCol.snapshot().map((p) => p.projectId), ["p1"]);
+
+  // Renaming an empty project via project.update updates its name; removing it deletes it.
+  mirror.onProjectUpdate({
+    kind: "upsert",
+    project: { projectId: "p1", projectDisplayName: "active-proj", projectCustomName: "Renamed", projectRootPath: "/code/active", projectKind: "git" },
+  });
+  assert.equal(emptyCol.get("h:p1")?.name, "Renamed");
+  mirror.onProjectUpdate({ kind: "remove", projectId: "p1" });
+  assert.equal(emptyCol.snapshot().length, 0);
+
+  // Adding an empty project then disposing removes it cleanly.
+  mirror.onProjectUpdate({
+    kind: "upsert",
+    project: { projectId: "p3", projectDisplayName: "fresh", projectRootPath: "/code/fresh", projectKind: "git" },
+  });
+  assert.equal(emptyCol.snapshot().length, 1);
+  void mirror.dispose();
+  assert.equal(emptyCol.snapshot().length, 0);
+});
+
+test("DirectoryStore renders empty projects, supports pinning, host/search filters, and workspace transitions", () => {
+  const store = new DirectoryStore<WorkspaceSummary>({ compare: comparePinnedFirst });
+  const wsItem = (id: string, project: string, projectId: string, activityAt: number, hostId = "h"): WorkspaceSummary => ({
+    key: `${hostId}:${id}`, hostId, id, name: id, title: null, project, projectKey: projectId, projectId,
+    projectCustomName: null, projectIconRevision: null, rootPath: "/" + project, directory: "/" + project,
+    kind: "git", branch: "main", pinnedAt: 0, activityAt, state: "done", attention: false, unread: false,
+  });
+  const emptyProj = (projectId: string, name: string, hostId = "h"): EmptyProjectSummary => ({
+    key: `${hostId}:${projectId}`, hostId, projectId, projectKey: projectId, name, customName: null, iconRevision: null, rootPath: "/" + name, kind: "git",
+  });
+
+  store.applyCollection({ type: "snapshot", generation: "g", seq: 1, items: [wsItem("w1", "Alpha", "p1", 100)] });
+  store.applyEmptyProjects({ type: "snapshot", generation: "eg", seq: 1, items: [emptyProj("p2", "Beta"), emptyProj("p3", "Gamma", "h2")] });
+
+  assert.equal(store.size, 1, "workspace count excludes empty projects");
+  assert.equal(store.projectCount, 3, "project count includes empty projects");
+  assert.deepEqual(
+    store.groupedRows(0, 10_000).map((r) => (r.kind === "group" ? `[${r.group.name}]` : r.item.id)),
+    ["[Alpha]", "w1", "[Beta]", "[Gamma]"],
+  );
+
+  // Pinning an empty project moves it to the top.
+  store.setProjectPins({ [JSON.stringify(["h", "p2"])]: 1 });
+  assert.deepEqual(
+    store.groupedRows(0, 10_000).filter((r) => r.kind === "group").map((r) => r.group.name),
+    ["Beta", "Alpha", "Gamma"],
+  );
+
+  // Host filter scopes empty projects too.
+  store.setHost("h2");
+  assert.deepEqual(
+    store.groupedRows(0, 10_000).filter((r) => r.kind === "group").map((r) => r.group.name),
+    ["Gamma"],
+  );
+  store.setHost(null);
+
+  // Search filter matches empty projects when emptyPredicate is given.
+  store.setFilter(
+    (w) => w.project.toLowerCase().includes("bet"),
+    (p) => p.name.toLowerCase().includes("bet"),
+  );
+  assert.deepEqual(
+    store.groupedRows(0, 10_000).filter((r) => r.kind === "group").map((r) => r.group.name),
+    ["Beta"],
+  );
+  store.setFilter(null);
 });

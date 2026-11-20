@@ -347,14 +347,14 @@
 .group-row.collapsed .group-chevron {
   transform: none;
 }
-.group-toggle:focus-visible .group-icon {
+.group-row:not(.is-empty) .group-toggle:focus-visible .group-icon {
   visibility: hidden;
 }
 .group-toggle:focus-visible .group-chevron {
   opacity: 1;
 }
 @media (hover: hover) {
-  .group-row:hover .group-icon {
+  .group-row:not(.is-empty):hover .group-icon {
     visibility: hidden;
   }
   .group-row:hover .group-chevron {

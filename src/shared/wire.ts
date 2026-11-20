@@ -110,6 +110,19 @@ export interface WorkspaceSummary {
   unread: boolean;
 }
 
+/** A project with zero active workspaces, kept in the sidebar after its last thread is archived. */
+export interface EmptyProjectSummary {
+  key: string;
+  hostId: string;
+  projectId: string;
+  projectKey: string | null;
+  name: string;
+  customName: string | null;
+  iconRevision: string | null;
+  rootPath: string;
+  kind: string;
+}
+
 export interface HostDiagnostic {
   lastConnectedAt?: string;
   nextRetryAt?: string;
@@ -138,6 +151,8 @@ export type DirectoryMessage =
   | { type: "changes"; generation: string; seq: number; changes: Change<AgentSummary>[] }
   | { type: "workspaces-snapshot"; generation: string; seq: number; workspaces: WorkspaceSummary[] }
   | { type: "workspaces-changes"; generation: string; seq: number; changes: Change<WorkspaceSummary>[] }
+  | { type: "empty-projects-snapshot"; generation: string; seq: number; projects: EmptyProjectSummary[] }
+  | { type: "empty-projects-changes"; generation: string; seq: number; changes: Change<EmptyProjectSummary>[] }
   /** `version`: the server's LitePaseo version; a page built for another one offers a reload. */
   | { type: "hosts"; hosts: HostState[]; instanceName?: string; version?: string };
 

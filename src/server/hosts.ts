@@ -3,9 +3,9 @@ import { connectionProblem } from "./diagnostics.ts";
 import { createHostClient } from "@getpaseo/client/node";
 import { createPaseoApi } from "@getpaseo/client";
 import type { Host } from "./store.ts";
-import type { AgentSummary, WorkspaceSummary, HostDiagnostic, TimelineOp } from "../shared/wire.ts";
+import type { AgentSummary, EmptyProjectSummary, WorkspaceSummary, HostDiagnostic, TimelineOp } from "../shared/wire.ts";
 import { VersionedCollection } from "./versioned-collection.ts";
-import { HostDirectory, HostWorkspaces, type DirectoryDriver, type Transition } from "./host-directory.ts";
+import { HostDirectory, HostWorkspaces, type DirectoryDriver, type ProjectUpdatePayload, type Transition } from "./host-directory.ts";
 import { TimelineView, type TimelineDriver, type TimelineResume } from "./timeline-view.ts";
 import { HostSubagents, type SubagentDriver } from "./subagents.ts";
 import type { ProviderSubagent } from "../shared/wire.ts";
@@ -28,6 +28,7 @@ interface Client {
   subagents: HostSubagents;
   liveness?: HostLiveness;
   stopStatus: () => void;
+  stopProjects?: () => void;
 }
 
 /**
@@ -52,6 +53,7 @@ export class TimelineTimeoutError extends Error {
 export class Hosts {
   readonly agents = new VersionedCollection<AgentSummary>();
   readonly workspaces = new VersionedCollection<WorkspaceSummary>();
+  readonly emptyProjects = new VersionedCollection<EmptyProjectSummary>();
   readonly clients = new Map<string, Client>();
   private readonly diagnostics = new Map<string, HostDiagnostic>();
   private readonly labels = new Map<string, string>();
@@ -91,8 +93,12 @@ export class Hosts {
       () => this.emit(this.agentListeners),
       (previous, next) => notifyListeners(this.transitionListeners, previous, next),
     );
-    const workspaces = new HostWorkspaces(hostId, driver as unknown as DirectoryDriver, this.workspaces, () =>
-      this.emit(this.agentListeners),
+    const workspaces = new HostWorkspaces(
+      hostId,
+      driver as unknown as DirectoryDriver,
+      this.workspaces,
+      () => this.emit(this.agentListeners),
+      this.emptyProjects,
     );
     const update = (state: ReturnType<Driver["getConnectionState"]>) => {
       const previous = this.diagnostics.get(hostId) ?? {};
@@ -114,7 +120,10 @@ export class Hosts {
     const liveness = typeof (driver as unknown as Partial<LivenessDriver>).ping === "function"
       ? new HostLiveness(driver as unknown as LivenessDriver, hostId, () => forceReconnect(driver))
       : undefined;
-    this.clients.set(hostId, { driver, api, directory, workspaces, subagents, liveness, stopStatus });
+    const stopProjects = typeof api.projects?.subscribe === "function"
+      ? api.projects.subscribe((payload) => workspaces.onProjectUpdate(payload as ProjectUpdatePayload))
+      : undefined;
+    this.clients.set(hostId, { driver, api, directory, workspaces, subagents, liveness, stopStatus, stopProjects });
     directory.start();
     // Daemons that predate workspaces simply have none; agents still list.
     if ((driver as unknown as DirectoryDriver).observeWorkspaces) workspaces.start();
@@ -162,6 +171,7 @@ export class Hosts {
       if (c) {
         // No status change may reconnect or report on a host that is going away.
         c.stopStatus();
+        c.stopProjects?.();
         const settled = [
           ...(await Promise.allSettled([...releases, c.directory.dispose(), c.workspaces.dispose(), c.subagents.dispose()])),
           ...(await Promise.allSettled([c.api.dispose()])),

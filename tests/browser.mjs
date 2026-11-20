@@ -607,20 +607,28 @@ try {
   assert.equal(permissions[0].host, "beta");
   assert.deepEqual(permissions[0].updatedInput, { answers: { Strategy: "Incremental", Checks: "Unit tests, Browser tests", Notes: "Keep changes small" } });
   assert.ok(resumes.length > 0 && resumes.every((since) => since === "1" || since === "2"));
-  // New session from the litepaseo project's "+": host and project come from the group,
-  // model and thinking from the host's defaults; the session opens when the stream delivers it.
+  // New session from the litepaseo project's "+": opens a normal draft conversation view
+  // (no modal dialog). Leaving without sending creates nothing; sending starts the session.
   await page.locator(".group-row", { hasText: "litepaseo" }).hover();
   hostConfig.agentProfiles = [{ id: "default-review", name: "Default review", provider: "codex" }];
   await page.getByRole("button", { name: "New session in litepaseo" }).click();
-  const dialog = page.getByRole("dialog", { name: "New session" });
-  await dialog.waitFor();
-  await dialog.getByLabel("Apply agent profile").selectOption("default-review");
-  await expect(dialog.getByLabel("Model")).toHaveValue("gpt-5-codex");
-  await expect(dialog.getByLabel("Thinking")).toHaveValue("high");
-  assert.equal(await dialog.getByLabel("Project").inputValue(), "/code/litepaseo");
-  await dialog.getByLabel("First message").fill("Add a new session dialog");
-  await dialog.getByRole("button", { name: "Start session" }).click();
-  await page.waitForFunction(() => !document.querySelector(".sheet button[disabled]"));
+  const draft = page.locator("section.new-session");
+  await draft.waitFor();
+  assert.equal(await page.getByRole("dialog", { name: "New session" }).count(), 0, "new session is a conversation view, not a modal");
+  await draft.getByLabel("First message").fill("Changed my mind");
+  await draft.getByRole("button", { name: "Close new session" }).click();
+  await draft.waitFor({ state: "detached" });
+  assert.equal(creations.length, 0, "closing without sending does not create a workspace");
+
+  await page.locator(".group-row", { hasText: "litepaseo" }).hover();
+  await page.getByRole("button", { name: "New session in litepaseo" }).click();
+  await draft.waitFor();
+  await draft.getByLabel("Apply agent profile").selectOption("default-review");
+  await expect(draft.getByLabel("Model")).toHaveValue("gpt-5-codex");
+  await expect(draft.getByLabel("Thinking")).toHaveValue("high");
+  assert.equal(await draft.getByLabel("Project").inputValue(), "/code/litepaseo");
+  await draft.getByLabel("First message").fill("Add a new session dialog");
+  await draft.getByRole("button", { name: "Start session" }).click();
   await resync();
   await page.getByRole("heading", { name: "Brand new session" }).waitFor({ timeout: 15000 });
   hostConfig.agentProfiles = [];
@@ -637,7 +645,7 @@ try {
       prompt: "Add a new session dialog",
     },
   );
-  assert.equal(await dialog.count(), 0, "the dialog closes after creation");
+  assert.equal(await draft.count(), 0, "the draft view closes after creation");
 
   threadActions.length = 0; // Earlier conversation switching also marked alpha as read.
   // Thread actions from the row menu (right click on desktop): pin, rename, unread, archive.

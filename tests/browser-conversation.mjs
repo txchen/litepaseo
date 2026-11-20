@@ -316,7 +316,7 @@ try {
     const box = await close.boundingBox();
     assert.ok(box.y >= 0 && box.y + box.height <= height,'close stays on screen');
     await page.keyboard.press('n');
-    assert.equal(await page.getByRole('dialog', {name:'New session',exact:true}).count(),0,'preview does not trigger background shortcuts');
+    assert.equal(await page.locator('section.new-session').count(),0,'preview does not trigger background shortcuts');
     await page.keyboard.press('Tab');
     assert.equal(await close.evaluate(el => document.activeElement === el),true);
     await close.click();

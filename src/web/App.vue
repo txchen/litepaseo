@@ -352,7 +352,8 @@ function openDirectory() {
   directoryStream = openStream({
     url: () =>
       `/api/stream?generation=${encodeURIComponent(agentDirectory.generation)}&since=${agentDirectory.seq}` +
-      `&wgeneration=${encodeURIComponent(directory.generation)}&wsince=${directory.seq}`,
+      `&wgeneration=${encodeURIComponent(directory.generation)}&wsince=${directory.seq}` +
+      `&pgeneration=${encodeURIComponent(directory.emptyGeneration)}&psince=${directory.emptySeq}`,
     onState: (state) => {
       directoryState.value = state;
       if (state === "unauthorized") signOut("ended");
@@ -369,6 +370,10 @@ function openDirectory() {
         directory.applyCollection({ type: "snapshot", generation: message.generation, seq: message.seq, items: message.workspaces });
       else if (message.type === "workspaces-changes")
         directory.applyCollection({ type: "changes", generation: message.generation, seq: message.seq, changes: message.changes });
+      else if (message.type === "empty-projects-snapshot")
+        directory.applyEmptyProjects({ type: "snapshot", generation: message.generation, seq: message.seq, items: message.projects });
+      else if (message.type === "empty-projects-changes")
+        directory.applyEmptyProjects({ type: "changes", generation: message.generation, seq: message.seq, changes: message.changes });
       else agentDirectory.apply(message);
     },
   });
@@ -385,10 +390,15 @@ watch(query, (text) => {
       return;
     }
     const labels = hostLabels.value;
-    directory.setFilter((w) =>
-      `${w.name}\n${w.project}\n${w.branch ?? ""}\n${w.directory}\n${labels.get(w.hostId) ?? ""}`
-        .toLowerCase()
-        .includes(needle),
+    directory.setFilter(
+      (w) =>
+        `${w.name}\n${w.project}\n${w.branch ?? ""}\n${w.directory}\n${labels.get(w.hostId) ?? ""}`
+          .toLowerCase()
+          .includes(needle),
+      (p) =>
+        `${p.name}\n${p.rootPath}\n${labels.get(p.hostId) ?? ""}`
+          .toLowerCase()
+          .includes(needle),
     );
     agentDirectory.setFilter((a) =>
       `${a.title ?? ""}\n${a.project}\n${a.cwd}\n${labels.get(a.hostId) ?? ""}\n${a.provider}`
@@ -401,6 +411,7 @@ watch(query, (text) => {
 /** Opens an agent (board, notification, a new session) and the thread it belongs to. */
 function select(key: string) {
   tab.value = "chat";
+  newSession.value = null;
   selectedKey.value = key;
   const agent = agentDirectory.get(key);
   selectedThread.value = agent?.workspaceId ? `${agent.hostId}:${agent.workspaceId}` : null;
@@ -409,6 +420,7 @@ function select(key: string) {
 /** Opens a thread from the sidebar: its most recently used agent. */
 function selectThread(key: string) {
   tab.value = "chat";
+  newSession.value = null;
   selectedThread.value = key;
   selectedKey.value = agentDirectory.indexed(key, 1)[0]?.key ?? null;
   openDetail();
@@ -432,12 +444,16 @@ function closeDetail() {
   else detailOpen.value = false;
 }
 function onPopState() {
-  if (detailOpen.value && !history.state?.litepaseoDetail) detailOpen.value = false;
+  if (detailOpen.value && !history.state?.litepaseoDetail) {
+    detailOpen.value = false;
+    newSession.value = null;
+  }
 }
 window.addEventListener("popstate", onPopState);
 function openTab(next: Tab) {
   tab.value = next;
-  if (next !== "chat" || selectedKey.value) openDetail();
+  if (next !== "chat") newSession.value = null;
+  if (next !== "chat" || selectedKey.value || newSession.value) openDetail();
   else closeDetail();
 }
 
@@ -464,20 +480,33 @@ function onGlobalKey(event: KeyboardEvent) {
 }
 window.addEventListener("keydown", onGlobalKey);
 
-// New sessions: the dialog creates, the directory stream delivers, the selection opens it.
+// New sessions: a draft conversation screen; nothing is created until the user sends.
 const newSession = ref<{
   hostId: string | null;
   cwd: string | null;
-  project: { key: string | null; name: string } | null;
+  project: { key: string | null; name: string; projectId?: string; iconRevision?: string | null } | null;
 } | null>(null);
 function startNew(group?: ProjectGroup<WorkspaceSummary>) {
   // Without a project, start where you worked last: the most recent thread in the current view.
   const recent = group ? group.items.at(0) : directory.range(0, 1)[0];
+  const empty = !recent && group ? group.emptyProjects?.values().next().value : undefined;
+  tab.value = "chat";
+  selectedThread.value = null;
+  selectedKey.value = null;
   newSession.value = {
-    hostId: hostFilter.value ?? recent?.hostId ?? active.value?.hostId ?? null,
-    cwd: recent?.rootPath ?? null,
-    project: recent ? { key: recent.projectKey, name: recent.project } : null,
+    hostId: recent?.hostId ?? empty?.hostId ?? hostFilter.value ?? active.value?.hostId ?? null,
+    cwd: recent?.rootPath ?? empty?.rootPath ?? null,
+    project: recent
+      ? { key: recent.projectKey, name: recent.project, projectId: recent.projectId, iconRevision: recent.projectIconRevision }
+      : empty
+        ? { key: empty.projectKey, name: empty.name, projectId: empty.projectId, iconRevision: empty.iconRevision }
+        : null,
   };
+  openDetail();
+}
+function closeNewSession() {
+  newSession.value = null;
+  if (compact.matches) closeDetail();
 }
 function onCreated(key: string) {
   newSession.value = null;
@@ -765,6 +794,20 @@ onUnmounted(() => {
       </SidePanel>
       </div>
 
+      <!-- New session (draft conversation) -->
+      <NewSession
+        v-else-if="tab === 'chat' && newSession"
+        :key="(newSession.hostId ?? '') + '\n' + (newSession.project?.key ?? newSession.cwd ?? '')"
+        :hosts="hosts"
+        :initial-host-id="newSession.hostId"
+        :initial-cwd="newSession.cwd"
+        :initial-project="newSession.project"
+        :dictation-ready="dictationReady"
+        :request="api"
+        @close="closeNewSession"
+        @created="onCreated"
+      />
+
       <section v-else-if="tab === 'chat' && pendingSelection" class="empty">
         <span class="spinner"></span>
         <p>Starting session…</p>
@@ -822,16 +865,6 @@ onUnmounted(() => {
     />
     <ImagePreview v-if="lightbox" :src="lightbox" @close="lightbox = null" />
     <RenameThread v-if="renaming" :thread="renaming" :busy="busy" @close="renaming = null" @save="renameThread" />
-    <NewSession
-      v-if="newSession"
-      :hosts="hosts"
-      :initial-host-id="newSession.hostId"
-      :initial-cwd="newSession.cwd"
-      :initial-project="newSession.project"
-      :request="api"
-      @close="newSession = null"
-      @created="onCreated"
-    />
   </div>
   <ConfirmDialog v-if="confirmRequest" :key="confirmRequest.id" :request="confirmRequest" />
 </template>

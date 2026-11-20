@@ -29,8 +29,8 @@ async function openEvents(app: Requester, path: string) {
           buffer = buffer.slice(boundary + 2);
           if (!block.startsWith("data: ")) continue;
           const message = JSON.parse(block.slice(6));
-          // These checks are about the agent directory; workspaces have their own test.
-          if (message.type === "project-pins" || String(message.type).startsWith("workspaces-")) continue;
+          // These checks are about the agent directory; workspaces and empty projects have their own tests.
+          if (message.type === "project-pins" || String(message.type).startsWith("workspaces-") || String(message.type).startsWith("empty-projects-")) continue;
           return message;
         }
         const { value, done } = await reader.read();

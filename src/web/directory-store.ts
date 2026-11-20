@@ -1,7 +1,7 @@
 import { shallowRef } from "vue";
 import { OrderedIndex } from "../shared/ordered-index.ts";
 import { WeightedIndex } from "../shared/weighted-index.ts";
-import { LANES, laneOf, type AgentState, type Change, type Lane } from "../shared/wire.ts";
+import { LANES, laneOf, type AgentState, type Change, type EmptyProjectSummary, type Lane } from "../shared/wire.ts";
 
 /** Sidebar geometry: fixed pitches keep scroll offsets computable without measuring. */
 export const GROUP_PITCH = 36;
@@ -56,6 +56,8 @@ export interface ProjectGroup<T extends DirectoryItem = DirectoryItem> {
   unread: number;
   /** Members per host: the project row names the machine(s) it lives on. O(1) per change. */
   hosts: Map<string, number>;
+  /** Daemon projects in this group that currently have zero active workspaces. */
+  emptyProjects?: Map<string, EmptyProjectSummary>;
 }
 
 /** The most urgent state a project holds (Paseo's order for collapsed projects). */
@@ -77,6 +79,7 @@ export type SidebarRow<T extends DirectoryItem = DirectoryItem> =
  * checkouts, separate daemons), so they are never merged.
  */
 export const groupKey = (item: DirectoryItem) => `${item.hostId}\n${item.project.toLowerCase()}`;
+const emptyGroupKey = (project: EmptyProjectSummary) => `${project.hostId}\n${project.name.toLowerCase()}`;
 // One shared collator: localeCompare with options builds a collator per call.
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 /** Most recently used project first; name and key keep the order total and stable. */
@@ -103,8 +106,15 @@ class View<T extends DirectoryItem> {
   private readonly isCollapsed: (key: string) => boolean;
 
   private readonly pinRank: (item: T) => number;
-  constructor(compare: (a: T, b: T) => number, isCollapsed: (key: string) => boolean, pinRank: (item: T) => number) {
+  private readonly emptyPinRank: (project: EmptyProjectSummary) => number;
+  constructor(
+    compare: (a: T, b: T) => number,
+    isCollapsed: (key: string) => boolean,
+    pinRank: (item: T) => number,
+    emptyPinRank: (project: EmptyProjectSummary) => number,
+  ) {
     this.pinRank = pinRank;
+    this.emptyPinRank = emptyPinRank;
     this.compare = compare;
     this.isCollapsed = isCollapsed;
     this.flat = new OrderedIndex<T>(compare);
@@ -155,7 +165,43 @@ class View<T extends DirectoryItem> {
     group.items.remove(item);
     group.byRecency?.remove(item);
     this.count(group, item, -1);
-    if (group.items.size) this.reinsert(group);
+    if (group.items.size || group.emptyProjects?.size) this.reinsert(group);
+    else this.groups.delete(group.key);
+  }
+
+  addEmptyProject(project: EmptyProjectSummary) {
+    const key = emptyGroupKey(project);
+    let group = this.groups.get(key);
+    if (group) this.index.remove(group);
+    else {
+      group = {
+        key,
+        name: project.name,
+        items: new OrderedIndex<T>(this.compare),
+        byRecency: this.compare === compareAgents ? null : new OrderedIndex<T>(compareAgents),
+        recent: 0,
+        attention: 0,
+        failed: 0,
+        running: 0,
+        unread: 0,
+        hosts: new Map(),
+      };
+      this.groups.set(key, group);
+    }
+    const existing = group.emptyProjects?.get(project.key);
+    if (existing) this.countEmpty(group, existing, -1);
+    (group.emptyProjects ??= new Map()).set(project.key, project);
+    this.countEmpty(group, project, 1);
+    this.reinsert(group);
+  }
+
+  removeEmptyProject(project: EmptyProjectSummary) {
+    const group = this.groups.get(emptyGroupKey(project));
+    if (!group || !group.emptyProjects?.has(project.key)) return;
+    this.index.remove(group);
+    group.emptyProjects.delete(project.key);
+    this.countEmpty(group, project, -1);
+    if (group.items.size || group.emptyProjects.size) this.reinsert(group);
     else this.groups.delete(group.key);
   }
 
@@ -200,21 +246,33 @@ class View<T extends DirectoryItem> {
   }
 
   private reinsert(group: ProjectGroup<T>) {
-    group.recent = (group.byRecency ?? group.items).at(0)!.activityAt;
+    group.recent = (group.byRecency ?? group.items).at(0)?.activityAt ?? 0;
     this.index.insert(group, this.weight(group));
   }
 
+  private countPin(group: ProjectGroup<T>, rank: number, delta: number) {
+    if (!rank) return;
+    const ranks = (group.pinRanks ??= new Map());
+    const count = (ranks.get(rank) ?? 0) + delta;
+    if (count > 0) ranks.set(rank, count);
+    else ranks.delete(rank);
+    group.pinnedAt = ranks.size ? Math.min(...ranks.keys()) : 0;
+  }
+
+  private countHost(group: ProjectGroup<T>, hostId: string, delta: number) {
+    const onHost = (group.hosts.get(hostId) ?? 0) + delta;
+    if (onHost > 0) group.hosts.set(hostId, onHost);
+    else group.hosts.delete(hostId);
+  }
+
+  private countEmpty(group: ProjectGroup<T>, project: EmptyProjectSummary, delta: number) {
+    this.countPin(group, this.emptyPinRank(project), delta);
+    this.countHost(group, project.hostId, delta);
+  }
+
   private count(group: ProjectGroup<T>, item: T, delta: number) {
-    const rank = this.pinRank(item);
-    if (rank) {
-      const ranks = group.pinRanks ??= new Map();
-      const count = (ranks.get(rank) ?? 0) + delta;
-      if (count > 0) ranks.set(rank, count); else ranks.delete(rank);
-      group.pinnedAt = ranks.size ? Math.min(...ranks.keys()) : 0;
-    }
-    const onHost = (group.hosts.get(item.hostId) ?? 0) + delta;
-    if (onHost > 0) group.hosts.set(item.hostId, onHost);
-    else group.hosts.delete(item.hostId);
+    this.countPin(group, this.pinRank(item), delta);
+    this.countHost(group, item.hostId, delta);
     if (item.attention) {
       group.attention += delta;
       this.waiting += delta;
@@ -238,18 +296,23 @@ export type CollectionMessage<T> =
 export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
   generation = "";
   seq = -1;
+  emptyGeneration = "";
+  emptySeq = -1;
   private projectPins: Record<string, number> = {};
   private readonly pinRank = (item: T) => item.projectId ? this.projectPins[JSON.stringify([item.hostId, item.projectId])] ?? 0 : 0;
+  private readonly emptyPinRank = (p: EmptyProjectSummary) => this.projectPins[JSON.stringify([p.hostId, p.projectId])] ?? 0;
   setProjectPins(pins: Record<string, number>) {
     this.projectPins = pins;
     this.all.clear();
     for (const view of this.byHost.values()) view.clear();
     this.filtered = null;
     for (const item of this.byKey.values()) { this.all.add(item); this.hostView(item.hostId).add(item); }
+    for (const project of this.emptyByKey.values()) { this.all.addEmptyProject(project); this.hostView(project.hostId).addEmptyProject(project); }
     if (this.predicate) this.rebuildFiltered();
     this.version.value++;
   }
   private readonly byKey = new Map<string, T>();
+  private readonly emptyByKey = new Map<string, EmptyProjectSummary>();
   private readonly collapsed: Set<string>;
   private readonly compare: (a: T, b: T) => number;
   private readonly all: View<T>;
@@ -257,6 +320,7 @@ export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
   private host: string | null = null;
   private filtered: View<T> | null = null;
   private predicate: ((item: T) => boolean) | null = null;
+  private emptyPredicate: ((project: EmptyProjectSummary) => boolean) | null = null;
   private readonly persist: (collapsed: string[]) => void;
   /** Secondary indexes (e.g. agents by workspace and by parent), each bucket in recency order. */
   private readonly indexOf: ((item: T) => string | null | (string | null)[]) | null;
@@ -276,7 +340,7 @@ export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
     this.persist = options.persist ?? (() => {});
     this.compare = options.compare ?? compareAgents;
     this.indexOf = options.indexBy ?? null;
-    this.all = new View<T>(this.compare, this.collapsedFn, this.pinRank);
+    this.all = new View<T>(this.compare, this.collapsedFn, this.pinRank, this.emptyPinRank);
   }
 
   private readonly collapsedFn = (key: string) => this.collapsed.has(key);
@@ -292,7 +356,7 @@ export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
 
   private hostView(hostId: string) {
     let view = this.byHost.get(hostId);
-    if (!view) this.byHost.set(hostId, (view = new View<T>(this.compare, this.collapsedFn, this.pinRank)));
+    if (!view) this.byHost.set(hostId, (view = new View<T>(this.compare, this.collapsedFn, this.pinRank, this.emptyPinRank)));
     return view;
   }
 
@@ -325,6 +389,10 @@ export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
 
   get(key: string | null | undefined) {
     return key ? this.byKey.get(key) : undefined;
+  }
+
+  getEmptyProject(key: string | null | undefined) {
+    return key ? this.emptyByKey.get(key) : undefined;
   }
 
   /** Members of one secondary-index bucket, most recent first (O(log n + count)). */
@@ -386,8 +454,9 @@ export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
   }
 
   /** Builds the search view once (O(n log n)); later changes update it in O(log n). */
-  setFilter(predicate: ((item: T) => boolean) | null) {
+  setFilter(predicate: ((item: T) => boolean) | null, emptyPredicate?: ((project: EmptyProjectSummary) => boolean) | null) {
     this.predicate = predicate;
+    this.emptyPredicate = emptyPredicate ?? null;
     if (!predicate) this.filtered = null;
     else this.rebuildFiltered();
     this.version.value++;
@@ -401,6 +470,7 @@ export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
       this.filtered?.clear();
       this.buckets.clear();
       for (const item of message.items) this.put(item);
+      for (const project of this.emptyByKey.values()) this.putEmptyProject(project);
     } else {
       if (message.generation !== this.generation) return;
       for (const change of message.changes) {
@@ -420,6 +490,33 @@ export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
     this.version.value++;
   }
 
+  applyEmptyProjects(message: CollectionMessage<EmptyProjectSummary>): void {
+    if (message.type === "snapshot") {
+      for (const previous of this.emptyByKey.values()) {
+        this.all.removeEmptyProject(previous);
+        this.byHost.get(previous.hostId)?.removeEmptyProject(previous);
+        this.filtered?.removeEmptyProject(previous);
+      }
+      this.emptyByKey.clear();
+      for (const project of message.items) this.putEmptyProject(project);
+    } else {
+      if (message.generation !== this.emptyGeneration) return;
+      for (const change of message.changes) {
+        const previous = this.emptyByKey.get(change.key);
+        if (previous) {
+          this.all.removeEmptyProject(previous);
+          this.byHost.get(previous.hostId)?.removeEmptyProject(previous);
+          this.filtered?.removeEmptyProject(previous);
+        }
+        if (change.value) this.putEmptyProject(change.value);
+        else this.emptyByKey.delete(change.key);
+      }
+    }
+    this.emptyGeneration = message.generation;
+    this.emptySeq = message.seq;
+    this.version.value++;
+  }
+
   /** The agent directory's wire messages (kept for the agent store and its tests). */
   apply(message: { type: string; generation?: string; seq?: number; agents?: T[]; changes?: Change<T>[] }) {
     if (message.type === "snapshot")
@@ -432,11 +529,26 @@ export class DirectoryStore<T extends DirectoryItem = DirectoryItem> {
     return (this.host === null || item.hostId === this.host) && this.predicate!(item);
   }
 
+  private matchesEmpty(project: EmptyProjectSummary) {
+    return (this.host === null || project.hostId === this.host) && !!this.emptyPredicate?.(project);
+  }
+
+  private putEmptyProject(project: EmptyProjectSummary) {
+    this.emptyByKey.set(project.key, project);
+    this.all.addEmptyProject(project);
+    this.hostView(project.hostId).addEmptyProject(project);
+    if (this.filtered && this.matchesEmpty(project)) this.filtered.addEmptyProject(project);
+  }
+
   private rebuildFiltered() {
     // Search results are always expanded so matches are never hidden in a collapsed group.
-    const filtered = new View<T>(this.compare, () => false, this.pinRank);
+    const filtered = new View<T>(this.compare, () => false, this.pinRank, this.emptyPinRank);
     const base = this.base;
     for (const item of base.flat.range(0, base.size)) if (this.predicate!(item)) filtered.add(item);
+    if (this.emptyPredicate) {
+      for (const project of this.emptyByKey.values())
+        if (this.matchesEmpty(project)) filtered.addEmptyProject(project);
+    }
     this.filtered = filtered;
   }
 

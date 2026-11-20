@@ -18,7 +18,7 @@ const projectPins = (store: Store): Record<string, number> => JSON.parse(store.s
  * Directory streams. Each remembers the last collection seq it delivered, so a flush sends
  * only entries changed since then: O(changes) per flush, independent of directory size.
  */
-type DirectoryStream = { last: number; lastWorkspaces: number; send: (message: DirectoryMessage) => void };
+type DirectoryStream = { last: number; lastWorkspaces: number; lastEmptyProjects: number; send: (message: DirectoryMessage) => void };
 
 /**
  * The live directory every page holds (hosts, agents, workspaces, project pins, the instance
@@ -44,6 +44,15 @@ export function registerDirectoryRoutes(app: App, { store, hosts, sendQueue, str
   const broadcast = (message: DirectoryMessage) => {
     for (const stream of streams) stream.send(message);
   };
+  const deliverEmptyProjects = (stream: DirectoryStream) => {
+    const { emptyProjects } = hosts;
+    const changes = emptyProjects.changesSince(stream.lastEmptyProjects);
+    if (changes === null)
+      stream.send({ type: "empty-projects-snapshot", generation: emptyProjects.generation, seq: emptyProjects.seq, projects: emptyProjects.snapshot() });
+    else if (changes.length)
+      stream.send({ type: "empty-projects-changes", generation: emptyProjects.generation, seq: emptyProjects.seq, changes });
+    stream.lastEmptyProjects = emptyProjects.seq;
+  };
   const deliverWorkspaces = (stream: DirectoryStream) => {
     const { workspaces } = hosts;
     const changes = workspaces.changesSince(stream.lastWorkspaces);
@@ -55,6 +64,7 @@ export function registerDirectoryRoutes(app: App, { store, hosts, sendQueue, str
   };
   const deliverAgents = (stream: DirectoryStream) => {
     deliverWorkspaces(stream);
+    deliverEmptyProjects(stream);
     const { agents } = hosts;
     const changes = agents.changesSince(stream.last);
     if (changes === null)
@@ -84,8 +94,15 @@ export function registerDirectoryRoutes(app: App, { store, hosts, sendQueue, str
     const resumable = c.req.query("generation") === hosts.agents.generation && Number.isInteger(since);
     const wsince = Number(c.req.query("wsince"));
     const wresumable = c.req.query("wgeneration") === hosts.workspaces.generation && Number.isInteger(wsince);
+    const psince = Number(c.req.query("psince"));
+    const presumable = c.req.query("pgeneration") === hosts.emptyProjects.generation && Number.isInteger(psince);
     return eventStream(c.req.raw.signal, (send) => {
-      const stream: DirectoryStream = { last: resumable ? since : -1, lastWorkspaces: wresumable ? wsince : -1, send };
+      const stream: DirectoryStream = {
+        last: resumable ? since : -1,
+        lastWorkspaces: wresumable ? wsince : -1,
+        lastEmptyProjects: presumable ? psince : -1,
+        send,
+      };
       send(hostsMessage());
       send({ type: "project-pins", pins: projectPins(store) });
       deliverAgents(stream);

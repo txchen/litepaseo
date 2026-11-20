@@ -2,13 +2,14 @@ import { messageDeliveryModes } from "./message-delivery.ts";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
 import { deriveAgentStateBucket } from "@getpaseo/protocol/agent-state-bucket";
 import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
-import type { AgentState, AgentSummary, Permission, RewindMode, WorkspaceSummary } from "../shared/wire.ts";
+import type { AgentState, AgentSummary, EmptyProjectSummary, Permission, RewindMode, WorkspaceSummary } from "../shared/wire.ts";
 import type { VersionedCollection } from "./versioned-collection.ts";
 
 type SyncCursor = { generation: string; afterSeq: number };
 type Placement = { projectKey: string; projectName: string } | null | undefined;
 interface Payload {
   entries: unknown[];
+  emptyProjects?: unknown[];
   pageInfo: { hasMore: boolean; nextCursor: string | null };
   sync?: {
     generation: string;
@@ -88,10 +89,10 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
   /** Items touched by live updates while a paged (non-sync) snapshot is being read. */
   private liveTouched: Set<string> | null = null;
   private readonly adapter: Adapter<Raw, Extra, Memo, S>;
-  private readonly hostId: string;
+  protected readonly hostId: string;
   private readonly driver: DirectoryDriver;
   private readonly collection: VersionedCollection<S>;
-  private readonly changed: () => void;
+  protected readonly changed: () => void;
   private readonly transition: Transition<S>;
 
   constructor(
@@ -129,8 +130,13 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
     }
     if (this.members.size) this.changed();
     this.members.clear();
+    this.onDisposed();
     return released;
   }
+
+  protected onSnapshotProcessed(_payload: Payload, _full: boolean) {}
+  protected onRawUpdate(_payload: unknown) {}
+  protected onDisposed() {}
 
   private key(id: string) {
     return `${this.hostId}:${id}`;
@@ -157,8 +163,10 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
         if (token === this.token) void this.onSnapshot(payload, token, sync).catch(() => this.fail(token));
       },
       update: (message) => {
-        if (token === this.token && message.type === this.adapter.updateType)
+        if (token === this.token && message.type === this.adapter.updateType) {
           this.onUpdate(this.adapter.update(message.payload));
+          this.onRawUpdate(message.payload);
+        }
       },
       error: () => this.fail(token),
     });
@@ -199,6 +207,7 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
       for (const removal of payload.sync.removals) this.remove(removal.id, removal.seq);
       // A live update may already have moved the cursor past the snapshot's head.
       this.cursor = { generation: payload.sync.generation, afterSeq: Math.max(this.cursor.afterSeq, payload.sync.headSeq) };
+      this.onSnapshotProcessed(payload, false);
       return;
     }
     let entries = payload.entries;
@@ -226,6 +235,7 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
     for (const id of [...this.members.keys()])
       if (!seen.has(id) && !this.liveTouched?.has(id)) this.remove(id);
     this.liveTouched = null;
+    this.onSnapshotProcessed(payload, true);
     this.cursor = payload.sync
       ? {
           generation: payload.sync.generation,
@@ -510,9 +520,39 @@ export function summarizeWorkspace(hostId: string, ws: WorkspaceDescriptor, acti
   };
 }
 
+/** A project parent with zero active workspaces, as reported by the daemon. */
+export interface EmptyProjectDescriptor {
+  projectId: string;
+  projectKey?: string;
+  projectDisplayName: string;
+  projectCustomName?: string | null;
+  projectCustomIconRevision?: string | null;
+  projectIconRevision?: string;
+  projectRootPath: string;
+  projectKind: string;
+}
+
+export function summarizeEmptyProject(hostId: string, p: EmptyProjectDescriptor): EmptyProjectSummary {
+  return {
+    key: `${hostId}:${p.projectId}`,
+    hostId,
+    projectId: p.projectId,
+    projectKey: p.projectKey ?? p.projectId,
+    name: p.projectCustomName || p.projectDisplayName || basename(p.projectRootPath) || "Other",
+    customName: p.projectCustomName ?? null,
+    iconRevision: p.projectCustomIconRevision ?? p.projectIconRevision ?? null,
+    rootPath: p.projectRootPath,
+    kind: p.projectKind,
+  };
+}
+
+export type ProjectUpdatePayload =
+  | { kind: "upsert"; project: EmptyProjectDescriptor }
+  | { kind: "remove"; projectId: string };
+
 type WorkspaceUpdate =
   | { kind: "upsert"; workspace: WorkspaceDescriptor; generation?: string; seq?: number }
-  | { kind: "remove"; id: string; generation?: string; seq?: number };
+  | { kind: "remove"; id: string; emptyProject?: EmptyProjectDescriptor; removedProjectId?: string; generation?: string; seq?: number };
 
 const workspaceAdapter: Adapter<WorkspaceDescriptor, undefined, ActivityMemo, WorkspaceSummary> = {
   updateType: "workspace_update",
@@ -557,9 +597,96 @@ const workspaceAdapter: Adapter<WorkspaceDescriptor, undefined, ActivityMemo, Wo
   },
 };
 
-/** One daemon's workspaces (Paseo's threads). */
+/** One daemon's workspaces (Paseo's threads) and projects with zero active workspaces. */
 export class HostWorkspaces extends HostMirror<WorkspaceDescriptor, undefined, ActivityMemo, WorkspaceSummary> {
-  constructor(hostId: string, driver: DirectoryDriver, collection: VersionedCollection<WorkspaceSummary>, changed: () => void) {
-    super(workspaceAdapter, hostId, driver, collection, changed);
+  private readonly emptyProjects?: VersionedCollection<EmptyProjectSummary>;
+  private readonly activeByProject = new Map<string, Set<string>>();
+  private readonly emptyMembers = new Map<string, { fingerprint: string; summary: EmptyProjectSummary }>();
+
+  constructor(
+    hostId: string,
+    driver: DirectoryDriver,
+    collection: VersionedCollection<WorkspaceSummary>,
+    changed: () => void,
+    emptyProjects?: VersionedCollection<EmptyProjectSummary>,
+  ) {
+    super(workspaceAdapter, hostId, driver, collection, changed, (previous, next) => this.trackProject(previous, next));
+    this.emptyProjects = emptyProjects;
+  }
+
+  private trackProject(previous: WorkspaceSummary | null, next: WorkspaceSummary | null) {
+    if (previous && previous.projectId !== next?.projectId) {
+      const set = this.activeByProject.get(previous.projectId);
+      if (set) {
+        set.delete(previous.id);
+        if (!set.size) this.activeByProject.delete(previous.projectId);
+      }
+    }
+    if (next && next.projectId) {
+      let set = this.activeByProject.get(next.projectId);
+      if (!set) this.activeByProject.set(next.projectId, (set = new Set()));
+      set.add(next.id);
+      this.removeEmpty(next.projectId);
+    }
+  }
+
+  private upsertEmpty(descriptor: EmptyProjectDescriptor) {
+    if (!this.emptyProjects || this.activeByProject.has(descriptor.projectId)) return;
+    const summary = summarizeEmptyProject(this.hostId, descriptor);
+    const fingerprint = JSON.stringify(summary);
+    const existing = this.emptyMembers.get(descriptor.projectId);
+    if (existing?.fingerprint === fingerprint) return;
+    this.emptyMembers.set(descriptor.projectId, { fingerprint, summary });
+    this.emptyProjects.set(summary.key, summary);
+    this.changed();
+  }
+
+  private removeEmpty(projectId: string) {
+    if (!this.emptyProjects) return;
+    const existing = this.emptyMembers.get(projectId);
+    if (!existing) return;
+    this.emptyMembers.delete(projectId);
+    this.emptyProjects.delete(existing.summary.key);
+    this.changed();
+  }
+
+  onProjectUpdate(payload: ProjectUpdatePayload) {
+    if (payload.kind === "remove") this.removeEmpty(payload.projectId);
+    else if (payload.kind === "upsert") this.upsertEmpty(payload.project);
+  }
+
+  protected override onSnapshotProcessed(payload: Payload, full: boolean) {
+    if (!this.emptyProjects) return;
+    const list = Array.isArray(payload.emptyProjects) ? (payload.emptyProjects as EmptyProjectDescriptor[]) : null;
+    if (!full) {
+      if (list) for (const p of list) this.upsertEmpty(p);
+      return;
+    }
+    const seen = new Set<string>();
+    if (list) {
+      for (const p of list) {
+        if (this.activeByProject.has(p.projectId)) continue;
+        seen.add(p.projectId);
+        this.upsertEmpty(p);
+      }
+    }
+    for (const projectId of [...this.emptyMembers.keys()])
+      if (!seen.has(projectId)) this.removeEmpty(projectId);
+  }
+
+  protected override onRawUpdate(payload: unknown) {
+    const update = payload as WorkspaceUpdate | undefined;
+    if (!update || update.kind !== "remove") return;
+    if (update.removedProjectId) this.removeEmpty(update.removedProjectId);
+    else if (update.emptyProject) this.upsertEmpty(update.emptyProject);
+  }
+
+  protected override onDisposed() {
+    if (this.emptyProjects && this.emptyMembers.size) {
+      for (const member of this.emptyMembers.values()) this.emptyProjects.delete(member.summary.key);
+      this.changed();
+    }
+    this.emptyMembers.clear();
+    this.activeByProject.clear();
   }
 }

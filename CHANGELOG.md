@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.0
+
+- Show projects with zero active workspaces in the sidebar, matching Paseo: daemon `emptyProjects` snapshots, archive transitions, and `project.update` events stream live to the browser, with full support for pinning, host/search filtering, project menus/settings, and starting a new session.
+- Replace the New Session modal with an inline draft conversation view that uses the standard chat composer: pick the agent (harness), model, thinking level, mode, agent profile, worktree, and use voice dictation directly. Leaving or closing without sending creates nothing on the host.
+
 ## 0.10.0
 
 - Security hardening:

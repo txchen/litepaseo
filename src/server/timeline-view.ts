@@ -120,6 +120,8 @@ export class TimelineView {
   private rows: TimelineRow[] = [];
   private readonly bySeqStart = new Map<number, TimelineRow>();
   private readonly identities = new Map<string, TimelineRow>();
+  /** seqStarts whose turnMetrics were attached after streaming; included in resumeOps so returning tabs pick them up. */
+  private readonly metricsTouched = new Set<number>();
   private epoch = "";
   private lastSeq = -1;
   private hasOlder = false;
@@ -408,6 +410,7 @@ export class TimelineView {
     this.bySeqStart.clear();
     this.identities.clear();
     this.pending.clear();
+    this.metricsTouched.clear();
     this.epoch = page.epoch;
     this.lastSeq = page.window.maxSeq;
     this.resumeFloor = this.lastSeq;
@@ -541,7 +544,7 @@ export class TimelineView {
    */
   private resumeOps(since: TimelineResume): TimelineOp[] | null {
     if (since.epoch !== this.epoch || since.seq < this.resumeFloor || since.seq > this.lastSeq) return null;
-    const changed = this.rows.filter((row) => row.seqEnd > since.seq && row.seqStart >= since.from);
+    const changed = this.rows.filter((row) => row.seqStart >= since.from && (row.seqEnd > since.seq || this.metricsTouched.has(row.seqStart)));
     if (changed.length > RESET_ROWS) return null;
     return changed.map((row) => ({ type: "upsert", row: { ...row } }));
   }
@@ -577,28 +580,42 @@ export class TimelineView {
    * Pulls the last few projected entries after a turn finishes so daemon-computed turnMetrics
    * (speed, tokens, cache, cost) attach to live rows without reloading the whole timeline.
    */
-  async refreshTailMetrics() {
-    if (this.state !== "live" || !this.watchers.size) return;
+  async refreshTailMetrics(attempt = 0) {
+    if (this.state !== "live") return;
     const token = this.token;
     try {
       const page = await this.driver.fetchAgentTimeline(this.agentId, {
         direction: "tail",
-        limit: 8,
+        limit: 12,
         projection: "projected",
         wholeTurns: false,
       });
       if (token !== this.token || this.state !== "live" || page.epoch !== this.epoch) return;
       let updated = false;
+      let latestHasMetrics = false;
+      const latestAssistant = [...page.entries].reverse().find((e) => e.item.type === "assistant_message" || e.item.type === "tool_call");
       for (const entry of page.entries) {
         if (!entry.turnMetrics?.length) continue;
-        const existing = this.bySeqStart.get(entry.seqStart);
+        if (latestAssistant && entry.seqStart === latestAssistant.seqStart) latestHasMetrics = true;
+        const existing =
+          this.bySeqStart.get(entry.seqStart) ??
+          this.rows.find((r) => r.seqStart <= entry.seqEnd && r.seqEnd >= entry.seqStart);
         if (!existing) continue;
         if (JSON.stringify(existing.turnMetrics ?? null) === JSON.stringify(entry.turnMetrics)) continue;
         existing.turnMetrics = entry.turnMetrics;
+        this.metricsTouched.add(existing.seqStart);
+        if (this.metricsTouched.size > 16) {
+          const oldest = this.metricsTouched.values().next().value;
+          if (oldest !== undefined) this.metricsTouched.delete(oldest);
+        }
         this.mark(existing.seqStart, true);
         updated = true;
       }
       if (updated) this.flush();
+      if (!latestHasMetrics && attempt < 2) {
+        const t = setTimeout(() => void this.refreshTailMetrics(attempt + 1), attempt === 0 ? 600 : 1500);
+        t.unref?.();
+      }
     } catch {
       // Best-effort enrichment only.
     }

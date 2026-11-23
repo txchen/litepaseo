@@ -843,6 +843,39 @@ defineExpose({
               <Icon name="gauge" :size="13" />{{ turnMetricsSummary((turnMeta.get(r.seqStart)!.metrics ?? r.row.value.turnMetrics)!) }}
             </button>
           </div>
+          <div v-else-if="r.row.value.turnMetrics?.length" class="turn-footer">
+            <button
+              type="button"
+              class="turn-item turn-stats-btn"
+              :aria-expanded="openMetrics === r.seqStart"
+              :title="r.row.value.turnMetrics.map((m) => m.label + ': ' + m.value).join(' · ')"
+              @click="openMetrics = openMetrics === r.seqStart ? null : r.seqStart"
+            >
+              <Icon name="gauge" :size="13" />{{ turnMetricsSummary(r.row.value.turnMetrics) }}
+            </button>
+          </div>
+          <div v-else-if="r.row.value.turnMetrics?.length" class="turn-footer">
+            <button
+              type="button"
+              class="turn-item turn-stats-btn"
+              :aria-expanded="openMetrics === r.seqStart"
+              :title="r.row.value.turnMetrics.map((m) => m.label + ': ' + m.value).join(' · ')"
+              @click="openMetrics = openMetrics === r.seqStart ? null : r.seqStart"
+            >
+              <Icon name="gauge" :size="13" />{{ turnMetricsSummary(r.row.value.turnMetrics) }}
+            </button>
+          </div>
+          <div v-else-if="r.row.value.turnMetrics?.length" class="turn-footer">
+            <button
+              type="button"
+              class="turn-item turn-stats-btn"
+              :aria-expanded="openMetrics === r.seqStart"
+              :title="r.row.value.turnMetrics.map((m) => m.label + ': ' + m.value).join(' · ')"
+              @click="openMetrics = openMetrics === r.seqStart ? null : r.seqStart"
+            >
+              <Icon name="gauge" :size="13" />{{ turnMetricsSummary(r.row.value.turnMetrics) }}
+            </button>
+          </div>
           <div v-if="(turnMeta.get(r.seqStart)?.metrics ?? r.row.value.turnMetrics)?.length && openMetrics === r.seqStart" class="turn-metrics-card" role="region" aria-label="Turn stats">
             <div v-for="(m, mi) in (turnMeta.get(r.seqStart)?.metrics ?? r.row.value.turnMetrics)!" :key="mi" class="turn-metric" :class="m.tone && 'is-' + m.tone">
               <span class="turn-metric-label">{{ m.label }}</span>

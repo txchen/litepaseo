@@ -351,13 +351,13 @@ onMounted(() => {
             <button type="button" role="radio" :aria-checked="uiPrefs.chatDensity === 'collapse-turns'" :class="{ chosen: uiPrefs.chatDensity === 'collapse-turns' }" @click="uiPrefs.chatDensity = 'collapse-turns'">Replies</button>
           </div>
         </div>
-        <label class="card-row toggle-row">
+        <label class="card-row switch-row">
           <div class="grow"><div class="row-title">Auto-expand thinking</div><div class="row-sub">Open reasoning blocks automatically as they appear.</div></div>
-          <input type="checkbox" v-model="uiPrefs.autoExpandReasoning" />
+          <input v-model="uiPrefs.autoExpandReasoning" class="switch" type="checkbox" />
         </label>
-        <label class="card-row toggle-row">
+        <label class="card-row switch-row">
           <div class="grow"><div class="row-title">Chat outline rail</div><div class="row-sub">Show the prompt jump rail on wide screens.</div></div>
-          <input type="checkbox" v-model="uiPrefs.showChatOutline" />
+          <input v-model="uiPrefs.showChatOutline" class="switch" type="checkbox" />
         </label>
       </div>
 

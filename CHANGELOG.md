@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.0
+
+- **Workspace scripts & services runner**: run, stop, and inspect `paseo.json` scripts and services directly from the chat header, including live status, port badges, and service URL links.
+- **Changes panel Git workflow**: compare uncommitted changes or diff against a configurable base branch, browse commit history with per-file commit diffs, commit (with optional auto-generated messages), push, create pull requests, and view PR status & CI checks.
+- **Inline diff review comments**: click `+` on any diff line (or file) to add review comments and send them all as a structured prompt to the active agent.
+- **Fork conversation**: fork any workspace conversation from the thread menu or Command Center into a new draft session carrying its context attachment so you can switch provider, model, or worktree.
+- **Workspace labels**: assign, create, and delete 10-color workspace labels, display label chips in the sidebar, and filter workspaces by label in the sidebar and Command Center.
+- **Composer history recall & long-paste collapse**: press `↑`/`↓` in an empty composer to recall previous prompts; long text pastes (> 1,500 chars or > 30 lines) collapse into expandable chips and recombine on send.
+- **File downloads**: download any workspace file (including binary/non-text files) from `FileViewer` via a bounded, safe attachment endpoint.
+- **Fix live turn stats reliability**: preserve `turnMetrics` across `TimelineStore` resets, propagate turn metrics from any row in the turn into the turn footer, and retry tail metrics refresh once after turn completion.
+
 ## 0.12.2
 
 - **Next message suggestions compatibility & testing**: switch default token limit to `max_completion_tokens` (512) with automatic fallback to `max_tokens` for older gateways, fixing 400 errors on newer OpenAI/reasoning models; add a **Test** button in Settings to verify the configured endpoint directly.

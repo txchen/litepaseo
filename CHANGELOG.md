@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.2
+
+- **Next message suggestions compatibility & testing**: switch default token limit to `max_completion_tokens` (512) with automatic fallback to `max_tokens` for older gateways, fixing 400 errors on newer OpenAI/reasoning models; add a **Test** button in Settings to verify the configured endpoint directly.
+- **Live turn stats refresh & summary**: automatically refresh the tail's projected `turnMetrics` when a turn finishes so Speed, Tokens, Cache, and Cost appear right away without reloading; show Speed, Tokens, and Cost directly in the turn footer button (skipping Model/Elapsed already shown beside it).
+
 ## 0.12.1
 
 - Fix checkbox layout for **Auto-expand thinking** and **Chat outline rail** in Settings (use `switch-row` and `switch` styling so labels no longer collapse vertically).

@@ -117,6 +117,16 @@ const displayRows = computed(() => {
   });
 });
 const openMetrics = ref<number | null>(null);
+function turnMetricsSummary(metrics: { label: string; value: string }[]) {
+  const skip = new Set(["model", "elapsed"]);
+  const picked = metrics.filter((m) => !skip.has(m.label.toLowerCase()));
+  const priority = ["speed", "tokens", "cost", "cache"];
+  const ordered = [
+    ...priority.flatMap((p) => picked.filter((m) => m.label.toLowerCase().startsWith(p))),
+    ...picked.filter((m) => !priority.some((p) => m.label.toLowerCase().startsWith(p))),
+  ];
+  return (ordered.length ? ordered : metrics).slice(0, 3).map((m) => m.value).join(" · ");
+}
 
 // ---- Native next-message suggestion (no daemon plugin required) ------------------------------
 const RISKY_SUGGESTION = /[`$|<>]|(^|\s)[.~]?\/[\w.-]|https?:|www\.|\b(rm|sudo|delete|drop|remove|reset|force|push|deploy|publish|release|merge|token|password|passwd|secret|credential|api[ _-]?key|ssh)\b|删除|推送|部署|发布|密码|密钥|令牌/i;
@@ -830,7 +840,7 @@ defineExpose({
               :title="r.row.value.turnMetrics.map((m) => m.label + ': ' + m.value).join(' · ')"
               @click="openMetrics = openMetrics === r.seqStart ? null : r.seqStart"
             >
-              <Icon name="gauge" :size="13" />{{ r.row.value.turnMetrics.slice(0, 2).map((m) => m.value).join(" · ") }}
+              <Icon name="gauge" :size="13" />{{ turnMetricsSummary(r.row.value.turnMetrics) }}
             </button>
           </div>
           <div v-if="r.row.value.turnMetrics?.length && openMetrics === r.seqStart" class="turn-metrics-card" role="region" aria-label="Turn stats">

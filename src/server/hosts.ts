@@ -93,7 +93,12 @@ export class Hosts {
       driver as unknown as DirectoryDriver,
       this.agents,
       () => this.emit(this.agentListeners),
-      (previous, next) => notifyListeners(this.transitionListeners, previous, next),
+      (previous, next) => {
+        if (previous && next && (previous.turnActive || previous.state === "running") && !next.turnActive && next.state !== "running") {
+          void this.timelines.get(next.key)?.view.refreshTailMetrics();
+        }
+        notifyListeners(this.transitionListeners, previous, next);
+      },
     );
     const workspaces = new HostWorkspaces(
       hostId,

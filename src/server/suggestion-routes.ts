@@ -46,6 +46,24 @@ export function registerSuggestionRoutes(app: App, { store, fetch }: RouteContex
     cache.clear();
     return c.json(nextSuggestionSettings(store));
   });
+  app.post("/api/next-suggestion/test", async (c) => {
+    const config = nextSuggestionConfig(store);
+    if (!config) return c.json({ error: "Suggestion service is not configured." }, 409);
+    try {
+      const text = await generateNextSuggestion(
+        config,
+        [
+          { role: "user", text: "Fix the failing unit test and check the build." },
+          { role: "assistant", text: "Fixed the test and the build passes." },
+        ],
+        fetch,
+      );
+      return c.json({ ok: true, sample: text || "(empty suggestion)" });
+    } catch (error) {
+      if (error instanceof NextSuggestionError) return c.json({ error: error.message }, error.status);
+      throw error;
+    }
+  });
 
   app.post("/api/hosts/:host/agents/:agent/next-suggestion", async (c) => {
     const config = nextSuggestionConfig(store);

@@ -193,7 +193,7 @@ export async function generateNextSuggestion(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
   timer.unref?.();
-  try {
+  const call = async (tokenField: "max_completion_tokens" | "max_tokens") => {
     const response = await fetchImpl(`${config.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -202,8 +202,7 @@ export async function generateNextSuggestion(
       },
       body: JSON.stringify({
         model: config.model,
-        temperature: 0.2,
-        max_tokens: 120,
+        [tokenField]: tokenField === "max_completion_tokens" ? 512 : 160,
         messages: [
           { role: "system", content: INSTRUCTION },
           { role: "user", content: JSON.stringify({ conversation: context }) },
@@ -211,7 +210,14 @@ export async function generateNextSuggestion(
       }),
       signal: controller.signal,
     });
-    const bodyText = await readBoundedText(response);
+    return { response, bodyText: await readBoundedText(response) };
+  };
+  try {
+    let { response, bodyText } = await call("max_completion_tokens");
+    // Older OpenAI-compatible gateways only accept max_tokens; fall back once on 400.
+    if (response.status === 400 && /max_completion_tokens/i.test(bodyText)) {
+      ({ response, bodyText } = await call("max_tokens"));
+    }
     if (!response.ok) {
       let detail = `HTTP ${response.status}`;
       try {

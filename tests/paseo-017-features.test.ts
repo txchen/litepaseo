@@ -238,4 +238,20 @@ test("next-suggestion trims context, parses JSON/fenced output, redacts keys on 
     () => generateNextSuggestion(cfg, trimmed, errFetch),
     (err: Error) => !err.message.includes("sk-top-secret") && err.message.includes("[redacted]"),
   );
+
+  // Falls back from max_completion_tokens to max_tokens for legacy gateways.
+  const seenBodies: Record<string, unknown>[] = [];
+  const legacyFetch = (async (_url: unknown, init?: RequestInit) => {
+    const parsed = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    seenBodies.push(parsed);
+    if ("max_completion_tokens" in parsed) {
+      return new Response(JSON.stringify({ error: { message: "Unknown parameter: max_completion_tokens" } }), { status: 400 });
+    }
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"suggestion":"Check logs"}' } }] }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const fallback = await generateNextSuggestion(cfg, trimmed, legacyFetch);
+  assert.equal(fallback, "Check logs");
+  assert.equal(seenBodies.length, 2);
+  assert.ok("max_completion_tokens" in seenBodies[0]!);
+  assert.ok("max_tokens" in seenBodies[1]!);
 });

@@ -573,6 +573,37 @@ export class TimelineView {
     for (const joined of joiners) this.report?.({ ...base, totalMs: Math.round(done - joined), kind: "join" });
   }
 
+  /**
+   * Pulls the last few projected entries after a turn finishes so daemon-computed turnMetrics
+   * (speed, tokens, cache, cost) attach to live rows without reloading the whole timeline.
+   */
+  async refreshTailMetrics() {
+    if (this.state !== "live" || !this.watchers.size) return;
+    const token = this.token;
+    try {
+      const page = await this.driver.fetchAgentTimeline(this.agentId, {
+        direction: "tail",
+        limit: 8,
+        projection: "projected",
+        wholeTurns: false,
+      });
+      if (token !== this.token || this.state !== "live" || page.epoch !== this.epoch) return;
+      let updated = false;
+      for (const entry of page.entries) {
+        if (!entry.turnMetrics?.length) continue;
+        const existing = this.bySeqStart.get(entry.seqStart);
+        if (!existing) continue;
+        if (JSON.stringify(existing.turnMetrics ?? null) === JSON.stringify(entry.turnMetrics)) continue;
+        existing.turnMetrics = entry.turnMetrics;
+        this.mark(existing.seqStart, true);
+        updated = true;
+      }
+      if (updated) this.flush();
+    } catch {
+      // Best-effort enrichment only.
+    }
+  }
+
   private broadcast(ops: TimelineOp[]) {
     notifyListeners(this.watchers, ops);
   }

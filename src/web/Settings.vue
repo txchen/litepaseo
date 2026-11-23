@@ -117,6 +117,11 @@ const saveSuggestion = () =>
     suggestionEditing.value = false;
     suggestionMessage.value = "Saved. Next-message suggestions will appear after completed replies (Tab to accept).";
   });
+const testSuggestion = () =>
+  suggestionAction(async () => {
+    const res = await props.request("/next-suggestion/test", "POST", {});
+    suggestionMessage.value = `Test passed: “${res.sample}”`;
+  });
 const removeSuggestion = () =>
   suggestionAction(async () => {
     if (!(await confirmAction({ title: "Remove the suggestion service?", message: "Next-message suggestions turn off on every device.", confirmLabel: "Remove", danger: true }))) return;
@@ -469,6 +474,9 @@ onMounted(() => {
               <template v-else>Any OpenAI-compatible chat API. Predicts one editable next message after each reply without any daemon plugin.</template>
             </div>
           </div>
+          <button v-if="!suggestionEditing && suggestion?.configured" class="btn btn-ghost" :disabled="suggestionBusy" @click="testSuggestion">
+            {{ suggestionBusy ? "Testing…" : "Test" }}
+          </button>
           <button v-if="!suggestionEditing" class="btn btn-outline" :disabled="suggestionBusy || !suggestion" @click="suggestionEditing = true">
             {{ suggestion?.configured ? "Edit" : "Configure" }}
           </button>

@@ -34,6 +34,7 @@ const emit = defineEmits<{
   jump: [seq: number, epoch: string];
   select: [key: string];
   open: [path: string];
+  sendReview: [prompt: string];
 }>();
 </script>
 
@@ -49,7 +50,7 @@ const emit = defineEmits<{
       <button class="icon-btn" aria-label="Close panel" title="Close panel" @click="emit('close')"><Icon name="close" :size="14" /></button>
     </div>
     <div class="panel-body">
-      <ChangesPanel v-if="panel === 'changes'" :host-id="agent.hostId" :cwd="cwd" :api="api" />
+      <ChangesPanel v-if="panel === 'changes'" :host-id="agent.hostId" :cwd="cwd" :workspace-id="agent.workspaceId" :api="api" @send-review="(p) => emit('sendReview', p)" />
       <ConversationSearch v-if="panel === 'search'" :base="path(agent)" :api="api" @jump="(seq, epoch) => emit('jump', seq, epoch)" />
       <SubagentsPanel
         v-if="panel === 'subagents'"

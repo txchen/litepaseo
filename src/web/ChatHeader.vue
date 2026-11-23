@@ -2,6 +2,8 @@
 import { computed, ref } from "vue";
 import type { AgentSummary, WorkspaceSummary } from "../shared/wire.ts";
 import Icon from "./Icon.vue";
+import ScriptsMenu from "./ScriptsMenu.vue";
+import type { Api } from "./use-api.ts";
 import type { WorkspaceTabs } from "./use-workspace-tabs.ts";
 
 /**
@@ -21,6 +23,7 @@ const props = defineProps<{
   agents: AgentSummary[];
   selectedKey: string | null;
   tabs: WorkspaceTabs;
+  api?: Api;
 }>();
 const emit = defineEmits<{
   back: [];
@@ -137,6 +140,7 @@ function showAgent(key: string) {
     >
       <Icon name="terminal" :size="16" />
     </button>
+    <ScriptsMenu v-if="agent.workspaceId && api" :host-id="agent.hostId" :workspace-id="agent.workspaceId" :api="api" />
     <button
       v-if="agent.workspaceId"
       class="icon-btn head-tool"

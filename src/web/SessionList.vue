@@ -266,6 +266,7 @@ onUnmounted(() => {
             <span class="session-dot"><span v-if="dot(row.item)" class="status-dot" :class="dot(row.item)"></span></span>
             <span class="session-title">
               <Icon v-if="row.item.pinnedAt" name="pin" :size="11" class="pin-mark" />{{ row.item.name }}
+              <span v-for="lbl in (row.item.labels ?? []).slice(0, 2)" :key="lbl" class="ws-label-pill">{{ lbl }}</span>
               <small v-if="queues?.[row.item.key]" :title="queues[row.item.key].paused ? 'Queue paused' : 'Queued messages'"> · {{ queues[row.item.key].paused ? 'Paused' : 'Queued' }} {{ queues[row.item.key].count }}</small>
             </span>
             <span v-if="mode === 'recent'" class="session-project">{{ row.item.project }}</span>

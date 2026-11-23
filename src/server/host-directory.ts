@@ -489,6 +489,8 @@ export interface WorkspaceDescriptor {
   activityAt: string | null;
   createdAt?: string;
   lastUserMessageAt?: string | null;
+  labels?: string[];
+  diffStat?: { additions: number; deletions: number } | null;
   gitRuntime?: { currentBranch?: string | null } | null;
   project?: { projectKey: string; projectName: string } | null;
   syncSeq?: number;
@@ -520,6 +522,8 @@ export function summarizeWorkspace(hostId: string, ws: WorkspaceDescriptor, acti
     state,
     attention: state === "needs_input",
     unread: state === "unread" || state === "failed",
+    ...(ws.labels?.length ? { labels: ws.labels } : {}),
+    ...(ws.diffStat ? { diffStat: ws.diffStat } : {}),
   };
 }
 

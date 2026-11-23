@@ -142,6 +142,7 @@ const gutter = computed(() => Array.from({ length: lineCount.value }, (_, i) => 
 const highlighted = computed(() => file.value?.text === undefined ? null : highlight(file.value.text, languageFor(props.path)));
 const size = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
 const copied = ref(false);
+const downloadUrl = computed(() => `/api/hosts/${encodeURIComponent(props.hostId)}/fs/download?cwd=${encodeURIComponent(props.cwd)}&path=${encodeURIComponent(props.path)}`);
 let copiedTimer: ReturnType<typeof setTimeout> | undefined;
 async function copyPath() {
   await navigator.clipboard?.writeText(fullPath.value).catch(() => {});
@@ -160,6 +161,7 @@ async function copyPath() {
       <button v-if="isMarkdown" class="icon-btn" :title="rendered ? 'Show source' : 'Show rendered'" @click="rendered = !rendered">
         <Icon :name="rendered ? 'terminal' : 'eye'" :size="14" />
       </button>
+      <a :href="downloadUrl" download class="icon-btn" title="Download file" aria-label="Download file"><Icon name="download" :size="14" /></a>
       <button class="icon-btn" title="Reload" aria-label="Reload file" @click="load"><Icon name="refresh" :size="14" /></button>
       <button class="icon-btn" :title="copied ? 'Copied' : 'Copy path'" aria-label="Copy path" @click="copyPath">
         <Icon :name="copied ? 'check' : 'copy'" :size="14" />
@@ -183,7 +185,10 @@ async function copyPath() {
         </div>
         <p v-if="file.truncated" class="file-note">Showing the first 1 MB.</p>
       </template>
-      <p v-else-if="file" class="file-note">{{ file.mime || file.kind }} · not shown as text</p>
+      <div v-else-if="file" class="file-note file-binary-note">
+        <span>{{ file.mime || file.kind }} · not shown as text ({{ size(file.size) }})</span>
+        <a :href="downloadUrl" download class="btn btn-sm btn-outline"><Icon name="download" :size="13" />Download</a>
+      </div>
     </div>
   </div>
 </template>

@@ -27,10 +27,12 @@ const props = defineProps<{
   usageLoading: boolean;
   directoryState: StreamState;
   tab: Tab;
+  availableLabels?: string[];
 }>();
 const query = defineModel<string>("query", { required: true });
 const listMode = defineModel<"projects" | "recent">("listMode", { required: true });
 const hostFilter = defineModel<string | null>("hostFilter", { required: true });
+const labelFilter = defineModel<string | null>("labelFilter", { default: null });
 const emit = defineEmits<{
   select: [key: string];
   new: [group: ProjectGroup<WorkspaceSummary>];
@@ -121,7 +123,7 @@ defineExpose({
       </button>
       <button
         class="icon-btn side-tool"
-        :class="{ chosen: viewMenu || hostFilter !== null || listMode !== 'projects' }"
+        :class="{ chosen: viewMenu || hostFilter !== null || labelFilter !== null || listMode !== 'projects' }"
         aria-label="View options"
         title="Group and filter"
         :aria-expanded="viewMenu"
@@ -129,6 +131,13 @@ defineExpose({
       >
         <Icon name="sliders" :size="15" />
       </button>
+    </div>
+    <div v-if="labelFilter" class="active-host-filter" role="group" aria-label="Active label filter">
+      <button class="active-host-label" @click="viewMenu = true">
+        <Icon name="layers" :size="13" />
+        <span>Label: {{ labelFilter }}</span>
+      </button>
+      <button class="icon-btn" aria-label="Clear label filter" title="Show all labels" @click="labelFilter = null"><Icon name="close" :size="13" /></button>
     </div>
     <div v-if="hostFilter" class="active-host-filter" role="group" aria-label="Active host filter">
       <button class="active-host-label" :title="'Filtered by host: ' + (hostLabels.get(hostFilter) ?? hostFilter)" @click="viewMenu = true">
@@ -143,6 +152,10 @@ defineExpose({
           By project
         </button>
         <button role="radio" :aria-checked="listMode === 'recent'" :class="{ chosen: listMode === 'recent' }" @click="listMode = 'recent'">Recent</button>
+      </div>
+      <div v-if="availableLabels?.length" class="host-filter" role="radiogroup" aria-label="Filter by label">
+        <button role="radio" :aria-checked="labelFilter === null" :class="{ chosen: labelFilter === null }" @click="labelFilter = null">All labels</button>
+        <button v-for="lbl in availableLabels" :key="lbl" role="radio" :aria-checked="labelFilter === lbl" :class="{ chosen: labelFilter === lbl }" @click="labelFilter = labelFilter === lbl ? null : lbl">{{ lbl }}</button>
       </div>
       <div v-if="hosts.length > 1" class="host-filter" role="radiogroup" aria-label="Filter by host">
         <button role="radio" :aria-checked="hostFilter === null" :class="{ chosen: hostFilter === null }" @click="hostFilter = null">

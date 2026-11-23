@@ -14,7 +14,8 @@ const TRIM_TO = 2500;
  * message images, which the server adds to the item; comparing the item covers both. */
 function sameRow(a: TimelineRow, b: TimelineRow) {
   return a.seqEnd === b.seqEnd && a.timestamp === b.timestamp && a.provider === b.provider && a.turnId === b.turnId
-    && JSON.stringify(a.item) === JSON.stringify(b.item);
+    && JSON.stringify(a.item) === JSON.stringify(b.item)
+    && JSON.stringify(a.turnMetrics ?? null) === JSON.stringify(b.turnMetrics ?? null);
 }
 
 /**

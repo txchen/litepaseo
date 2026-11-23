@@ -1188,3 +1188,20 @@
 .usage-account.is-hidden-source {
   opacity: 0.5;
 }
+.ws-label-pill {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  background: var(--accent-soft);
+  color: var(--accent);
+  vertical-align: middle;
+}
+.file-binary-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}

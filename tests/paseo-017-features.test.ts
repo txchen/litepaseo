@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { HostBackgroundWork, type BackgroundWorkDriver } from "../src/server/background-work.ts";
 import { UsageService } from "../src/server/usage.ts";
 import { projectProviderEntry } from "../src/server/host-settings.ts";
+import { summarizeWorkspace } from "../src/server/host-directory.ts";
+import { TimelineStore } from "../src/web/timeline-store.ts";
+import { turnFooters } from "../src/web/timeline-display.ts";
 import {
   NextSuggestionCache,
   clearNextSuggestion,
@@ -254,4 +257,57 @@ test("next-suggestion trims context, parses JSON/fenced output, redacts keys on 
   assert.equal(seenBodies.length, 2);
   assert.ok("max_completion_tokens" in seenBodies[0]!);
   assert.ok("max_tokens" in seenBodies[1]!);
+});
+
+test("TimelineStore updates rows when turnMetrics arrive and turnFooters propagates them to the turn footer", () => {
+  const store = new TimelineStore();
+  const baseRow = {
+    seqStart: 10,
+    seqEnd: 12,
+    timestamp: "2026-11-23T12:00:10Z",
+    provider: "pi",
+    turnId: "t1",
+    item: { type: "assistant_message", text: "Done." },
+  };
+  store.apply([{ type: "reset", epoch: "e1", rows: [baseRow], hasOlder: false, startCursor: null, seq: 12 }]);
+  assert.equal(store.rows[0]!.row.value.turnMetrics, undefined);
+
+  const metrics = [
+    { label: "Speed", value: "~12 tok/s" },
+    { label: "Tokens", value: "42K ↑ · 1.9K ↓" },
+  ];
+  store.apply([{ type: "reset", epoch: "e1", rows: [{ ...baseRow, turnMetrics: metrics }], hasOlder: false, startCursor: null, seq: 12 }]);
+  assert.deepEqual(store.rows[0]!.row.value.turnMetrics, metrics);
+
+  // Even when a later row in the same turn carries the footer, turnFooters keeps turnMetrics from the assistant row.
+  const footers = turnFooters(
+    [
+      { seqStart: 9, seqEnd: 9, timestamp: "2026-11-23T12:00:00Z", provider: "pi", turnId: "t1", item: { type: "user_message", text: "Hi" } },
+      { ...baseRow, turnMetrics: metrics },
+      { seqStart: 13, seqEnd: 13, timestamp: "2026-11-23T12:00:11Z", provider: "pi", turnId: "t1", item: { type: "tool_call", name: "done", status: "completed" } },
+    ],
+    true,
+  );
+  assert.deepEqual(footers.get(13)?.metrics, metrics);
+});
+
+test("summarizeWorkspace forwards labels and diffStat", () => {
+  const summary = summarizeWorkspace(
+    "h1",
+    {
+      id: "wks_1",
+      projectId: "p1",
+      projectDisplayName: "demo",
+      projectRootPath: "/repo",
+      workspaceKind: "checkout",
+      name: "demo",
+      status: "done",
+      activityAt: "2026-11-23T12:00:00Z",
+      labels: ["bug", "urgent"],
+      diffStat: { additions: 42, deletions: 7 },
+    },
+    1000,
+  );
+  assert.deepEqual(summary.labels, ["bug", "urgent"]);
+  assert.deepEqual(summary.diffStat, { additions: 42, deletions: 7 });
 });

@@ -117,6 +117,10 @@ export interface WorkspaceSummary {
   state: AgentState;
   attention: boolean;
   unread: boolean;
+  /** Workspace labels assigned on the daemon, when present. */
+  labels?: string[];
+  /** Uncommitted/branch diff line counts, when reported by the daemon. */
+  diffStat?: { additions: number; deletions: number } | null;
 }
 
 /** A project with zero active workspaces, kept in the sidebar after its last thread is archived. */
@@ -382,6 +386,37 @@ export interface ProjectConfigState {
   uncommittedSetup?: boolean;
 }
 
+export interface ForkContextAttachment {
+  id?: string;
+  filename: string;
+  mimeType: "text/plain";
+  title?: string | null;
+  text: string;
+}
+
+export interface ForkContextResult {
+  attachment: ForkContextAttachment | null;
+  itemCount: number;
+}
+
+export interface WorkspaceScriptInfo {
+  scriptName: string;
+  type: "script" | "service";
+  port: number | null;
+  proxyUrl: string | null;
+  lifecycle: string;
+  health: string | null;
+  exitCode: number | null;
+  terminalId: string | null;
+}
+
+export type WorkspaceLabelColor = "violet" | "sky" | "emerald" | "orange" | "pink" | "indigo" | "teal" | "red" | "amber" | "blue";
+
+export interface WorkspaceLabelDef {
+  name: string;
+  color: WorkspaceLabelColor;
+}
+
 export interface CreateSessionRequest {
   idempotencyKey: string;
   cwd: string;
@@ -395,6 +430,8 @@ export interface CreateSessionRequest {
   worktreeBranch?: string;
   /** Attach the new agent to an existing workspace instead of creating a new one. */
   workspaceId?: string;
+  /** Optional text attachments (e.g. forked conversation context). */
+  attachments?: ForkContextAttachment[];
 }
 
 /** A task on the board. Description and comments are Markdown; optional on older cards. */

@@ -583,3 +583,46 @@
   gap: 8px;
   margin-top: 8px;
 }
+.pasted-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 12px 0;
+}
+.pasted-chip {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-1);
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.pasted-chip-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pasted-chip-head .link-btn {
+  flex: 1;
+  text-align: left;
+}
+.pasted-preview {
+  margin: 6px 0 2px;
+  padding: 6px 8px;
+  max-height: 160px;
+  overflow: auto;
+  background: var(--surface-2);
+  border-radius: 6px;
+  font-size: 11.5px;
+  white-space: pre-wrap;
+}
+.fork-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 0;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+}

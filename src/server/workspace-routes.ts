@@ -5,6 +5,7 @@ import { errorMessage, hostPath as path, type App, type Ctx, type RouteContext }
 
 /** Text files larger than this open truncated: the viewer is for reading, not for dumps. */
 const MAX_TEXT_BYTES = 1024 * 1024;
+const MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024;
 const MAX_ENTRIES = 2000;
 const SEARCH_CACHE_MS = 15_000;
 const SEARCH_MAX_FILES = 1500;
@@ -62,11 +63,128 @@ export function registerWorkspaceRoutes(app: App, { hosts, store, streamValidity
     return files;
   }
 
-  app.get("/api/hosts/:host/changes", async c => {
+  app.get("/api/hosts/:host/changes", async (c) => {
     const cwd = path.parse(c.req.query("cwd"));
-    const result = await hosts.get(c.req.param("host")).driver.getCheckoutDiff(cwd, { mode: "uncommitted" });
+    const mode = z.enum(["uncommitted", "base", "all"]).catch("uncommitted").parse(c.req.query("mode"));
+    const baseRef = z.string().trim().min(1).max(200).optional().parse(c.req.query("baseRef") || undefined);
+    const result = await hosts.get(c.req.param("host")).driver.getCheckoutDiff(cwd, { mode, ...(baseRef ? { baseRef } : {}) });
     if (result.error) return c.json({ error: result.error.message }, 409);
     return c.json(result);
+  });
+  app.get("/api/hosts/:host/git/commits", async (c) => {
+    const cwd = path.parse(c.req.query("cwd"));
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.listCheckoutCommits !== "function") return c.json({ baseRef: null, commits: [] });
+    try {
+      return c.json(await driver.listCheckoutCommits(cwd));
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not load commits") }, 502);
+    }
+  });
+  app.get("/api/hosts/:host/git/commit-diff", async (c) => {
+    const cwd = path.parse(c.req.query("cwd"));
+    const sha = z.string().trim().min(4).max(80).regex(/^[0-9a-fA-F]+$/).parse(c.req.query("sha"));
+    const filePath = path.parse(c.req.query("path"));
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.getCommitFileDiff !== "function") return c.json({ error: "Commit diff unsupported on this host" }, 409);
+    try {
+      return c.json(await driver.getCommitFileDiff(cwd, sha, filePath));
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not load commit diff") }, 502);
+    }
+  });
+  app.post("/api/hosts/:host/git/commit", async (c) => {
+    const input = z.object({ cwd: path, message: z.string().max(4000).optional(), addAll: z.boolean().optional() }).parse(await c.req.json());
+    const { driver } = hosts.get(c.req.param("host"));
+    try {
+      const res = await driver.checkoutCommit(input.cwd, { ...(input.message?.trim() ? { message: input.message.trim() } : {}), addAll: input.addAll !== false });
+      if ((res as { error?: { message?: string } | null }).error) return c.json({ error: (res as { error: { message?: string } }).error.message || "Commit failed" }, 409);
+      return c.json(res);
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Commit failed") }, 502);
+    }
+  });
+  app.post("/api/hosts/:host/git/push", async (c) => {
+    const { cwd } = z.object({ cwd: path }).parse(await c.req.json());
+    const { driver } = hosts.get(c.req.param("host"));
+    try {
+      const res = await driver.checkoutPush(cwd);
+      if ((res as { error?: { message?: string } | null }).error) return c.json({ error: (res as { error: { message?: string } }).error.message || "Push failed" }, 409);
+      return c.json(res);
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Push failed") }, 502);
+    }
+  });
+  app.get("/api/hosts/:host/git/pr-status", async (c) => {
+    const cwd = path.parse(c.req.query("cwd"));
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.checkoutPrStatus !== "function") return c.json({ available: false });
+    try {
+      return c.json(await driver.checkoutPrStatus(cwd));
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "PR status unavailable") }, 502);
+    }
+  });
+  app.post("/api/hosts/:host/git/pr", async (c) => {
+    const input = z.object({ cwd: path, title: z.string().max(300).optional(), body: z.string().max(20_000).optional(), baseRef: z.string().max(200).optional() }).parse(await c.req.json());
+    const { driver } = hosts.get(c.req.param("host"));
+    try {
+      const res = await driver.checkoutPrCreate(input.cwd, {
+        ...(input.title?.trim() ? { title: input.title.trim() } : {}),
+        ...(input.body?.trim() ? { body: input.body.trim() } : {}),
+        ...(input.baseRef?.trim() ? { baseRef: input.baseRef.trim() } : {}),
+      });
+      if ((res as { error?: { message?: string } | null }).error) return c.json({ error: (res as { error: { message?: string } }).error.message || "Could not create PR" }, 409);
+      return c.json(res);
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not create PR") }, 502);
+    }
+  });
+  app.post("/api/hosts/:host/workspaces/:workspace/base-branch", async (c) => {
+    const { baseRef } = z.object({ baseRef: z.string().trim().min(1).max(200) }).parse(await c.req.json());
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.setWorkspaceBaseBranch !== "function") return c.json({ error: "Base branch setting unsupported" }, 409);
+    try {
+      return c.json(await driver.setWorkspaceBaseBranch({ workspaceId: c.req.param("workspace"), baseRef }));
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not set base branch") }, 502);
+    }
+  });
+  // ---- Workspace scripts & services ----------------------------------------------------------
+  app.get("/api/hosts/:host/workspaces/:workspace/scripts", async (c) => {
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.listWorkspaceScripts !== "function") return c.json({ scripts: [] });
+    try {
+      const res = await driver.listWorkspaceScripts(c.req.param("workspace"));
+      if (res.error) return c.json({ error: res.error }, 502);
+      return c.json({ scripts: res.scripts ?? [] });
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not list scripts") }, 502);
+    }
+  });
+  app.post("/api/hosts/:host/workspaces/:workspace/scripts/:name/start", async (c) => {
+    const { driver } = hosts.get(c.req.param("host"));
+    const wsId = c.req.param("workspace"), name = c.req.param("name");
+    try {
+      const res = typeof driver.startWorkspaceScriptWithStatus === "function"
+        ? await driver.startWorkspaceScriptWithStatus(wsId, name)
+        : await driver.startWorkspaceScript(wsId, name);
+      if (res.error) return c.json({ error: res.error }, 409);
+      return c.json(res);
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not start script") }, 502);
+    }
+  });
+  app.post("/api/hosts/:host/workspaces/:workspace/scripts/:name/stop", async (c) => {
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.stopWorkspaceScript !== "function") return c.json({ error: "Stopping scripts is unsupported on this host" }, 409);
+    try {
+      const res = await driver.stopWorkspaceScript(c.req.param("workspace"), c.req.param("name"));
+      if (res.error) return c.json({ error: res.error }, 409);
+      return c.json(res);
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not stop script") }, 502);
+    }
   });
   app.get("/api/hosts/:host/fs/search", async (c) => {
     const hostId = c.req.param("host");
@@ -125,6 +243,25 @@ export function registerWorkspaceRoutes(app: App, { hosts, store, streamValidity
         size: result.size,
         modifiedAt: result.modifiedAt,
         ...(text !== undefined ? { text, truncated: result.size > MAX_TEXT_BYTES } : {}),
+      });
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "File unavailable") }, 404);
+    }
+  });
+  app.get("/api/hosts/:host/fs/download", async (c) => {
+    const cwd = path.parse(c.req.query("cwd"));
+    const file = path.parse(c.req.query("path"));
+    const { driver } = hosts.get(c.req.param("host"));
+    try {
+      const result = await driver.readFile(cwd, file, undefined, MAX_DOWNLOAD_BYTES + 1);
+      if (result.size > MAX_DOWNLOAD_BYTES) return c.json({ error: "File exceeds 32 MB download limit" }, 413);
+      const rawName = (result.path.split("/").pop() || "download").replace(/[\r\n"\\]/g, "_");
+      const encoded = encodeURIComponent(rawName);
+      return c.body(result.bytes as Uint8Array<ArrayBuffer>, 200, {
+        "Content-Type": result.mime || "application/octet-stream",
+        "Content-Disposition": `attachment; filename="${rawName}"; filename*=UTF-8''${encoded}`,
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, no-store",
       });
     } catch (error) {
       return c.json({ error: errorMessage(error, "File unavailable") }, 404);

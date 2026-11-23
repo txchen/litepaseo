@@ -190,7 +190,40 @@ function onDragLeave(event: DragEvent) {
   const form = event.currentTarget as HTMLElement;
   if (!form.contains(event.relatedTarget as Node | null)) dragging.value = false;
 }
-/** Pasted screenshots and files become attachments; plain text pastes stay text. */
+// ---- Long paste collapse & prompt history recall (#7) ----------------------------------------
+interface PastedBlock { id: number; text: string; lines: number; expanded: boolean }
+const pastedBlocks = ref<PastedBlock[]>([]);
+let pasteSeq = 0;
+const promptHistory: string[] = [];
+let historyIndex = -1;
+let historyDraft = "";
+
+const hasSubmittable = computed(() => composerHasContent.value || pastedBlocks.value.length > 0);
+
+function recordHistory(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  if (promptHistory.at(-1) !== trimmed) promptHistory.push(trimmed);
+  if (promptHistory.length > 50) promptHistory.shift();
+  historyIndex = -1;
+  historyDraft = "";
+}
+
+async function submitComposer() {
+  const blocks = pastedBlocks.value.map((b) => b.text);
+  if (blocks.length) {
+    const combined = [prompt.value.trim(), ...blocks].filter(Boolean).join("\n\n");
+    recordHistory(prompt.value.trim() || combined.slice(0, 500));
+    prompt.value = combined;
+    pastedBlocks.value = [];
+    await nextTick();
+  } else {
+    recordHistory(prompt.value);
+  }
+  await send();
+}
+
+/** Pasted screenshots/files become attachments; very long text pastes collapse into a chip. */
 function pasteFiles(event: ClipboardEvent) {
   const data = event.clipboardData;
   if (!data) return;
@@ -200,10 +233,25 @@ function pasteFiles(event: ClipboardEvent) {
       .filter((item) => item.kind === "file")
       .map((item) => item.getAsFile())
       .filter((file): file is File => !!file);
-  if (!files.length) return;
-  event.preventDefault();
-  void attachmentPanel.value?.addFiles(files);
+  if (files.length) {
+    event.preventDefault();
+    void attachmentPanel.value?.addFiles(files);
+    return;
+  }
+  const text = data.getData("text/plain");
+  if (!text) return;
+  const lines = text.split(/\r?\n/).length;
+  if (text.length > 1500 || lines > 30) {
+    event.preventDefault();
+    pastedBlocks.value.push({ id: ++pasteSeq, text, lines, expanded: false });
+  }
 }
+
+watch(() => props.agent.key, () => {
+  pastedBlocks.value = [];
+  historyIndex = -1;
+  historyDraft = "";
+});
 
 const placeholder = computed(() => {
   if (composerSuggestion.value && !coarsePointer) return composerSuggestion.value;
@@ -214,6 +262,34 @@ const placeholder = computed(() => {
 });
 function onKey(event: KeyboardEvent) {
   if (autocomplete.value?.onKeyDown(event)) return;
+  if (event.key === "ArrowUp" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey && promptHistory.length) {
+    const el = element.value;
+    const atStart = !prompt.value || (el && el.selectionStart === 0 && el.selectionEnd === 0 && historyIndex >= 0);
+    if (atStart) {
+      event.preventDefault();
+      if (historyIndex < 0) {
+        historyDraft = prompt.value;
+        historyIndex = promptHistory.length - 1;
+      } else if (historyIndex > 0) {
+        historyIndex--;
+      }
+      prompt.value = promptHistory[historyIndex] ?? "";
+      void nextTick(autosize);
+      return;
+    }
+  }
+  if (event.key === "ArrowDown" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey && historyIndex >= 0) {
+    event.preventDefault();
+    if (historyIndex < promptHistory.length - 1) {
+      historyIndex++;
+      prompt.value = promptHistory[historyIndex] ?? "";
+    } else {
+      historyIndex = -1;
+      prompt.value = historyDraft;
+    }
+    void nextTick(autosize);
+    return;
+  }
   if (event.key === "Tab" && !event.shiftKey && composerSuggestion.value) {
     event.preventDefault();
     prompt.value = composerSuggestion.value;
@@ -226,7 +302,7 @@ function onKey(event: KeyboardEvent) {
   if (enterSends || mod) {
     event.preventDefault();
     acTrigger.value = null;
-    void send();
+    void submitComposer();
   }
 }
 
@@ -292,7 +368,7 @@ defineExpose({
       <form
         class="composer"
         :class="{ 'is-dragging': dragging }"
-        @submit.prevent="send"
+        @submit.prevent="submitComposer"
         @dragover.prevent="dragging = true"
         @dragleave="onDragLeave"
         @drop.prevent="dragging = false; attachmentPanel?.addFiles($event.dataTransfer?.files)"
@@ -308,13 +384,23 @@ defineExpose({
           @close="acDismissedAt = acTrigger ? `${acTrigger.mode}:${acTrigger.start}:${acTrigger.query}` : null; acTrigger = null"
         />
         <AttachmentPanel ref="attachmentPanel" :store="attachments" :agent-key="agent.key" :base="'/api' + path(agent)" :busy="busy || !!uncertain" />
+        <div v-if="pastedBlocks.length" class="pasted-list">
+          <div v-for="b in pastedBlocks" :key="b.id" class="pasted-chip">
+            <div class="pasted-chip-head">
+              <Icon name="file" :size="13" />
+              <button type="button" class="link-btn" @click="b.expanded = !b.expanded">Pasted text · {{ b.lines }} lines · {{ b.text.length }} chars</button>
+              <button type="button" class="icon-btn" aria-label="Remove pasted text" @click="pastedBlocks = pastedBlocks.filter((x) => x.id !== b.id)"><Icon name="close" :size="12" /></button>
+            </div>
+            <pre v-if="b.expanded" class="pasted-preview">{{ b.text.slice(0, 4000) }}{{ b.text.length > 4000 ? "\n…" : "" }}</pre>
+          </div>
+        </div>
         <div v-if="dictationPreview" ref="dictationPreviewElement" class="dictation-preview" role="status" aria-live="polite">{{ dictationPreview }}</div>
         <textarea
           ref="element"
           v-model="prompt"
           rows="1"
           :placeholder="placeholder"
-          :required="!selectedAttachments.length"
+          :required="!selectedAttachments.length && !pastedBlocks.length"
           @input="autosize(); refreshAutocomplete()"
           @click="refreshAutocomplete"
           @keyup="refreshAutocomplete"
@@ -371,11 +457,11 @@ defineExpose({
               <Icon name="stop" :size="18" />
             </button>
             <button
-              v-if="!running || composerHasContent"
+              v-if="!running || hasSubmittable"
               class="disc disc-send"
               aria-label="Send"
               title="Send (Enter) · Shift+Enter for a new line"
-              :disabled="busy || !!uncertain || !attachmentsReady || !composerHasContent"
+              :disabled="busy || !!uncertain || !attachmentsReady || !hasSubmittable"
             >
               <Icon name="send" :size="17" />
             </button>

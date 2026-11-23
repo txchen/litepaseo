@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import type { CheckoutWorktreeOption, HostState, ProjectOption, ProviderOption } from "../shared/wire.ts";
+import type { CheckoutWorktreeOption, ForkContextResult, HostState, ProjectOption, ProviderOption } from "../shared/wire.ts";
 import { prefs as uiPrefs } from "./preferences.ts";
 import DictationButton from "./DictationButton.vue";
 import Icon from "./Icon.vue";
@@ -19,6 +19,7 @@ const props = defineProps<{
   /** When set, adds a new agent inside this existing workspace instead of creating a new one. */
   workspaceId?: string | null;
   workspaceName?: string | null;
+  forkContext?: ForkContextResult | null;
   dictationReady: boolean;
   request: (path: string, method?: string, body?: unknown, timeoutMs?: number) => Promise<any>;
 }>();
@@ -296,6 +297,7 @@ async function create() {
         ...(mode.value ? { modeId: mode.value } : {}),
         ...(thinking.value ? { thinkingOptionId: thinking.value } : {}),
         prompt: prompt.value,
+        ...(props.forkContext?.attachment ? { attachments: [props.forkContext.attachment] } : {}),
         ...(!props.workspaceId && useWorktree.value && worktreeKind.value === "new" ? { worktreeBranch: branch.value.trim() } : {}),
       },
       120_000,
@@ -337,7 +339,7 @@ onMounted(() => {
         <Icon name="back" :size="18" />
       </button>
       <ProjectIcon v-if="projectName" :name="projectName" :source="iconSource" :size="20" />
-      <h1 class="chat-title">{{ workspaceId ? "New agent" : "New session" }}</h1>
+      <h1 class="chat-title">{{ forkContext?.attachment ? "Fork conversation" : workspaceId ? "New agent" : "New session" }}</h1>
       <span v-if="projectName" class="chat-context hide-sm" :title="[projectName, selectedHost?.label, cwd].filter(Boolean).join(' · ')">
         {{ projectName }}<template v-if="connected.length > 1 && selectedHost"> · {{ selectedHost.label }}</template>
       </span>
@@ -354,7 +356,8 @@ onMounted(() => {
       <div v-else class="new-session-card">
         <ProjectIcon v-if="projectName" :name="projectName" :source="iconSource" :size="44" />
         <div v-else class="empty-mark"><Icon name="chat" :size="24" /></div>
-        <h2>{{ workspaceId ? (workspaceName || projectName || "New agent") : (projectName || "New session") }}</h2>
+        <h2>{{ forkContext?.attachment ? "Fork: " + (workspaceName || projectName || "Conversation") : workspaceId ? (workspaceName || projectName || "New agent") : (projectName || "New session") }}</h2>
+        <p v-if="forkContext?.attachment" class="fork-badge"><Icon name="branch" :size="13" />Carrying {{ forkContext.itemCount }} messages from previous conversation</p>
         <p v-if="cwd && project !== CUSTOM" class="new-session-path" :title="cwd">
           <Icon name="folder" :size="13" />{{ tildeHome(cwd) }}
         </p>

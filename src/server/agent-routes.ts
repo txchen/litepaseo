@@ -73,6 +73,18 @@ export function registerAgentRoutes(app: App, { hosts }: RouteContext) {
         prompt: z.string().max(100000).optional(),
         worktreeBranch: z.string().trim().min(1).max(200).optional(),
         workspaceId: z.string().trim().min(1).max(200).optional(),
+        attachments: z
+          .array(
+            z.object({
+              id: z.string().max(200).optional(),
+              filename: z.string().min(1).max(300),
+              mimeType: z.literal("text/plain"),
+              title: z.string().max(300).nullable().optional(),
+              text: z.string().max(500_000),
+            }),
+          )
+          .max(5)
+          .optional(),
       })
       .parse(await c.req.json()) satisfies CreateSessionRequest;
     const hostId = c.req.param("host");
@@ -97,6 +109,7 @@ export function registerAgentRoutes(app: App, { hosts }: RouteContext) {
             ...(input.modeId ? { modeId: input.modeId } : {}),
             ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
             ...(input.prompt?.trim() ? { initialPrompt: input.prompt } : {}),
+            ...(input.attachments?.length ? { attachments: input.attachments as never } : {}),
           })
         : await api.agents.create({
             idempotencyKey: input.idempotencyKey,
@@ -108,6 +121,7 @@ export function registerAgentRoutes(app: App, { hosts }: RouteContext) {
               ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
             },
             ...(input.prompt?.trim() ? { prompt: input.prompt } : {}),
+            ...(input.attachments?.length ? { attachments: input.attachments as never } : {}),
             ...(input.worktreeBranch ? { worktree: { mode: "branch-off" as const, newBranch: input.worktreeBranch } } : {}),
           });
       return c.json({ id: agent.id, key: `${hostId}:${agent.id}` }, 201);
@@ -120,6 +134,20 @@ export function registerAgentRoutes(app: App, { hosts }: RouteContext) {
         },
         502,
       );
+    }
+  });
+
+  // ---- Fork conversation context --------------------------------------------------------------
+  app.post("/api/hosts/:host/agents/:agent/fork-context", async (c) => {
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.buildAgentForkContext !== "function")
+      return c.json({ error: "This host does not support forking conversations." }, 409);
+    try {
+      const res = await driver.buildAgentForkContext(c.req.param("agent"));
+      if (res.error) return c.json({ error: res.error }, 409);
+      return c.json({ attachment: res.attachment ?? null, itemCount: res.itemCount ?? 0 });
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not build fork context.") }, 502);
     }
   });
 

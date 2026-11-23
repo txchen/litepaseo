@@ -106,7 +106,7 @@ const results = computed<ResultRow[]>(() => {
 
   if (mode.value === "workspaces") {
     const activeRows: ResultRow[] = props.workspaces
-      .filter((w) => matches(`${w.name} ${w.project} ${w.branch ?? ""} ${hostLabels.value.get(w.hostId) ?? ""}`))
+      .filter((w) => matches(`${w.name} ${w.project} ${w.branch ?? ""} ${(w.labels ?? []).join(" ")} ${hostLabels.value.get(w.hostId) ?? ""}`))
       .slice(0, 30)
       .map((w) => ({
         key: "ws:" + w.key,

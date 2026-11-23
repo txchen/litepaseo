@@ -246,6 +246,7 @@ export interface TurnFooter {
   took: string;
   /** seqStarts of the turn's assistant messages, for "Copy turn". */
   messages: number[];
+  metrics?: import("../shared/wire.ts").AgentMetric[];
 }
 
 /**
@@ -255,7 +256,7 @@ export interface TurnFooter {
  */
 export function turnFooters(rows: TimelineRow[], lastFinished: boolean, now = new Date()): Map<number, TurnFooter> {
   const out = new Map<number, TurnFooter>();
-  let current: { id: string; first: TimelineRow; last: TimelineRow; messages: number[] } | null = null;
+  let current: { id: string; first: TimelineRow; last: TimelineRow; messages: number[]; metrics?: import("../shared/wire.ts").AgentMetric[] } | null = null;
   const close = (finished: boolean) => {
     if (!current || !finished) return;
     const end = Date.parse(current.last.timestamp);
@@ -265,6 +266,7 @@ export function turnFooters(rows: TimelineRow[], lastFinished: boolean, now = ne
       at: formatMessageTimestamp(new Date(end), now),
       took: Number.isFinite(start) && end >= start ? formatDuration(end - start) : "",
       messages: current.messages,
+      ...(current.metrics?.length ? { metrics: current.metrics } : {}),
     });
   };
   for (const row of rows) {
@@ -275,6 +277,7 @@ export function turnFooters(rows: TimelineRow[], lastFinished: boolean, now = ne
     }
     current ??= { id: row.turnId, first: row, last: row, messages: [] };
     current.last = row;
+    if (row.turnMetrics?.length) current.metrics = row.turnMetrics;
     if (row.item.type === "assistant_message") current.messages.push(row.seqStart);
   }
   close(lastFinished);

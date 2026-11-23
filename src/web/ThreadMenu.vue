@@ -12,6 +12,8 @@ const emit = defineEmits<{
   pin: [thread: WorkspaceSummary, pinned: boolean];
   unread: [thread: WorkspaceSummary];
   read: [thread: WorkspaceSummary];
+  labels: [thread: WorkspaceSummary];
+  fork: [thread: WorkspaceSummary];
   archive: [thread: WorkspaceSummary];
 }>();
 const element = ref<HTMLElement | null>(null);
@@ -42,6 +44,8 @@ const { position } = useMenu(element, { x: props.x, y: props.y }, () => emit("cl
     <button v-else role="menuitem" @click="pick(() => emit('unread', thread))">
       <Icon name="dot" :size="14" />Mark as unread
     </button>
+    <button role="menuitem" @click="pick(() => emit('labels', thread))"><Icon name="layers" :size="14" />Labels…</button>
+    <button role="menuitem" @click="pick(() => emit('fork', thread))"><Icon name="branch" :size="14" />Fork conversation…</button>
     <div class="menu-sep"></div>
     <button role="menuitem" class="menu-danger" @click="pick(() => emit('archive', thread))">
       <Icon name="archive" :size="14" />Archive…

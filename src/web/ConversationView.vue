@@ -833,18 +833,18 @@ defineExpose({
               <Icon name="hourglass" :size="14" />{{ turnMeta.get(r.seqStart)!.took }}
             </span>
             <button
-              v-if="r.row.value.turnMetrics?.length"
+              v-if="(turnMeta.get(r.seqStart)!.metrics ?? r.row.value.turnMetrics)?.length"
               type="button"
               class="turn-item turn-stats-btn"
               :aria-expanded="openMetrics === r.seqStart"
-              :title="r.row.value.turnMetrics.map((m) => m.label + ': ' + m.value).join(' · ')"
+              :title="(turnMeta.get(r.seqStart)!.metrics ?? r.row.value.turnMetrics)!.map((m) => m.label + ': ' + m.value).join(' · ')"
               @click="openMetrics = openMetrics === r.seqStart ? null : r.seqStart"
             >
-              <Icon name="gauge" :size="13" />{{ turnMetricsSummary(r.row.value.turnMetrics) }}
+              <Icon name="gauge" :size="13" />{{ turnMetricsSummary((turnMeta.get(r.seqStart)!.metrics ?? r.row.value.turnMetrics)!) }}
             </button>
           </div>
-          <div v-if="r.row.value.turnMetrics?.length && openMetrics === r.seqStart" class="turn-metrics-card" role="region" aria-label="Turn stats">
-            <div v-for="(m, mi) in r.row.value.turnMetrics" :key="mi" class="turn-metric" :class="m.tone && 'is-' + m.tone">
+          <div v-if="(turnMeta.get(r.seqStart)?.metrics ?? r.row.value.turnMetrics)?.length && openMetrics === r.seqStart" class="turn-metrics-card" role="region" aria-label="Turn stats">
+            <div v-for="(m, mi) in (turnMeta.get(r.seqStart)?.metrics ?? r.row.value.turnMetrics)!" :key="mi" class="turn-metric" :class="m.tone && 'is-' + m.tone">
               <span class="turn-metric-label">{{ m.label }}</span>
               <span class="turn-metric-value">{{ m.value }}</span>
             </div>

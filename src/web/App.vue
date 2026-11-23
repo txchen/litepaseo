@@ -2,7 +2,7 @@
 import { trackViewingPresence } from "./viewing-presence.ts";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "./safe-storage.ts";
 import { computed, defineAsyncComponent, nextTick, onUnmounted, provide, ref, shallowRef, watch } from "vue";
-import type { AgentBackgroundWorkItem, AgentSummary, DirectoryMessage, HostState, ProviderSubagent, RewindMode, WorkspaceSummary } from "../shared/wire.ts";
+import type { AgentBackgroundWorkItem, AgentSummary, DirectoryMessage, ForkContextResult, HostState, ProviderSubagent, RewindMode, WorkspaceSummary } from "../shared/wire.ts";
 import { DirectoryStore, comparePinnedFirst, type ProjectGroup } from "./directory-store.ts";
 import { openStream, type StreamState } from "./event-stream.ts";
 import { agentPath as path, useApi } from "./use-api.ts";
@@ -45,6 +45,7 @@ const TerminalPanel = defineAsyncComponent(() => import("./TerminalPanel.vue"));
 const CommandCenter = defineAsyncComponent(() => import("./CommandCenter.vue"));
 const ArchivedWorkspaces = defineAsyncComponent(() => import("./ArchivedWorkspaces.vue"));
 const AddProjectDialog = defineAsyncComponent(() => import("./AddProjectDialog.vue"));
+const LabelsDialog = defineAsyncComponent(() => import("./LabelsDialog.vue"));
 
 // Compact layouts: the detail pane is a history entry, so the system back button or gesture
 // returns to the list instead of leaving the app.
@@ -391,34 +392,53 @@ function openDirectory() {
   });
 }
 
-// Search: the matching set is built once per query and then maintained incrementally.
-watch(query, (text) => {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => {
-    const needle = text.trim().toLowerCase();
-    if (!needle) {
-      directory.setFilter(null);
-      agentDirectory.setFilter(null);
-      return;
-    }
-    const labels = hostLabels.value;
-    directory.setFilter(
-      (w) =>
-        `${w.name}\n${w.project}\n${w.branch ?? ""}\n${w.directory}\n${labels.get(w.hostId) ?? ""}`
-          .toLowerCase()
-          .includes(needle),
-      (p) =>
-        `${p.name}\n${p.rootPath}\n${labels.get(p.hostId) ?? ""}`
-          .toLowerCase()
-          .includes(needle),
-    );
-    agentDirectory.setFilter((a) =>
-      `${a.title ?? ""}\n${a.project}\n${a.cwd}\n${labels.get(a.hostId) ?? ""}\n${a.provider}`
+// Search and label filter: the matching set is built once per query and then maintained incrementally.
+const labelFilter = ref<string | null>(null);
+const availableLabels = computed(() => {
+  directory.version.value;
+  const set = new Set<string>();
+  for (const w of directory.range(0, directory.total)) {
+    for (const l of w.labels ?? []) set.add(l);
+  }
+  return [...set].sort((a, b) => a.localeCompare(b));
+});
+function applyDirectoryFilter() {
+  const needle = query.value.trim().toLowerCase();
+  const lbl = labelFilter.value;
+  if (!needle && !lbl) {
+    directory.setFilter(null);
+    agentDirectory.setFilter(null);
+    return;
+  }
+  const labels = hostLabels.value;
+  directory.setFilter(
+    (w) => {
+      if (lbl && !(w.labels ?? []).includes(lbl)) return false;
+      if (!needle) return true;
+      return `${w.name}\n${w.project}\n${w.branch ?? ""}\n${w.directory}\n${(w.labels ?? []).join(" ")}\n${labels.get(w.hostId) ?? ""}`
+        .toLowerCase()
+        .includes(needle);
+    },
+    (p) =>
+      !lbl &&
+      `${p.name}\n${p.rootPath}\n${labels.get(p.hostId) ?? ""}`
         .toLowerCase()
         .includes(needle),
-    );
-  }, 120);
+  );
+  agentDirectory.setFilter(
+    needle
+      ? (a) =>
+          `${a.title ?? ""}\n${a.project}\n${a.cwd}\n${labels.get(a.hostId) ?? ""}\n${a.provider}`
+            .toLowerCase()
+            .includes(needle)
+      : null,
+  );
+}
+watch(query, () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(applyDirectoryFilter, 120);
 });
+watch(labelFilter, () => applyDirectoryFilter());
 
 /** Opens an agent (board, notification, a new session) and the thread it belongs to. */
 function select(key: string) {
@@ -474,6 +494,7 @@ const composerDock = ref<InstanceType<typeof ComposerDock> | null>(null);
 const commandCenterOpen = ref(false);
 const archivedOpen = ref(false);
 const addProjectOpen = ref(false);
+const labelingThread = shallowRef<WorkspaceSummary | null>(null);
 
 const allWorkspaces = computed(() => {
   directory.version.value;
@@ -507,6 +528,8 @@ const commandActions = computed<CommandAction[]>(() => {
     );
     if (t) {
       list.push(
+        { id: "labels", label: "Manage workspace labels", sub: t.name, icon: "layers", run: () => { labelingThread.value = t; } },
+        { id: "fork", label: "Fork conversation", sub: t.name, icon: "branch", run: () => void forkThread(t) },
         { id: "rename", label: "Rename workspace", sub: t.name, icon: "edit", run: () => { renaming.value = t; } },
         { id: "archive", label: "Archive workspace", sub: t.name, icon: "archive", run: () => void archiveThread(t) },
       );
@@ -567,6 +590,7 @@ const newSession = ref<{
   project: { key: string | null; name: string; projectId?: string; iconRevision?: string | null } | null;
   workspaceId?: string | null;
   workspaceName?: string | null;
+  forkContext?: ForkContextResult | null;
 } | null>(null);
 function startNew(group?: ProjectGroup<WorkspaceSummary>) {
   // Without a project, start where you worked last: the most recent thread in the current view.
@@ -603,6 +627,32 @@ function startNewAgentInWorkspace() {
     workspaceName: t?.name || a.title || a.project,
   };
   openDetail();
+}
+async function forkThread(thread: WorkspaceSummary) {
+  const agent = agentDirectory.indexed(thread.key, 1)[0] ?? (active.value?.workspaceId === thread.id ? active.value : null);
+  if (!agent) {
+    error.value = "No active agent found to fork in this workspace.";
+    return;
+  }
+  await action(async () => {
+    const forkContext = (await api(path(agent) + "/fork-context", "POST", {}, 60_000)) as ForkContextResult;
+    tab.value = "chat";
+    selectedThread.value = null;
+    selectedKey.value = null;
+    newSession.value = {
+      hostId: thread.hostId,
+      cwd: thread.rootPath,
+      project: { key: thread.projectKey, name: thread.project, projectId: thread.projectId, iconRevision: thread.projectIconRevision },
+      workspaceName: thread.name,
+      forkContext,
+    };
+    openDetail();
+  });
+}
+function sendReviewToAgent(reviewPrompt: string) {
+  prompt.value = prompt.value.trim() ? `${prompt.value.trim()}\n\n${reviewPrompt}` : reviewPrompt;
+  void nextTick(autosize);
+  showNotice("Review comments added to composer. Press Send when ready.");
 }
 function closeNewSession() {
   newSession.value = null;
@@ -707,6 +757,8 @@ onUnmounted(() => {
       v-model:query="query"
       v-model:list-mode="listMode"
       v-model:host-filter="hostFilter"
+      v-model:label-filter="labelFilter"
+      :available-labels="availableLabels"
       :instance-name="instanceName"
       :hosts="hosts"
       :store="directory"
@@ -804,6 +856,7 @@ onUnmounted(() => {
           :agents="threadAgents"
           :selected-key="selectedKey"
           :tabs="tabs"
+          :api="api"
           @back="closeDetail"
           @select="select"
           @select-agent="(key) => (selectedKey = key)"
@@ -885,6 +938,7 @@ onUnmounted(() => {
         @jump="jumpSearch"
         @select="select"
         @open="openFile"
+        @send-review="sendReviewToAgent"
       >
         <div
           class="panel-resize"
@@ -914,6 +968,7 @@ onUnmounted(() => {
         :initial-project="newSession.project"
         :workspace-id="newSession.workspaceId ?? null"
         :workspace-name="newSession.workspaceName ?? null"
+        :fork-context="newSession.forkContext ?? null"
         :dictation-ready="dictationReady"
         :request="api"
         @close="closeNewSession"
@@ -951,6 +1006,8 @@ onUnmounted(() => {
       @pin="pinThread"
       @unread="markThreadUnread"
       @read="markThreadRead"
+      @labels="(t) => (labelingThread = t)"
+      @fork="forkThread"
       @archive="archiveThread"
     />
     <ProjectMenu
@@ -1001,6 +1058,12 @@ onUnmounted(() => {
       :initial-host-id="hostFilter ?? active?.hostId ?? null"
       :api="api"
       @close="addProjectOpen = false"
+    />
+    <LabelsDialog
+      v-if="labelingThread"
+      :thread="labelingThread"
+      :api="api"
+      @close="labelingThread = null"
     />
     <div v-if="archiveUndo" class="undo-toast" role="status" aria-live="polite">
       <span>Archived “{{ archiveUndo.name }}”</span>

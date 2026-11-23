@@ -195,6 +195,59 @@ export function registerProjectRoutes(app: App, { hosts, fetch }: RouteContext) 
     }
   });
 
+  // ---- Workspace labels -----------------------------------------------------------------------
+  const LABEL_COLORS = ["violet", "sky", "emerald", "orange", "pink", "indigo", "teal", "red", "amber", "blue"] as const;
+  app.get("/api/hosts/:host/labels", async (c) => {
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.listWorkspaceLabels !== "function") return c.json({ labels: [] });
+    try {
+      const res = await driver.listWorkspaceLabels();
+      return c.json({ labels: res.labels ?? [] });
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not list workspace labels.") }, 502);
+    }
+  });
+  app.post("/api/hosts/:host/workspaces/:workspace/labels", async (c) => {
+    const input = z
+      .object({
+        name: z.string().trim().min(1).max(60),
+        color: z.enum(LABEL_COLORS).optional(),
+        assigned: z.boolean(),
+      })
+      .parse(await c.req.json());
+    const { driver, id } = workspace(c);
+    if (typeof driver.setWorkspaceLabel !== "function") return c.json({ error: "Workspace labels are unsupported on this host." }, 409);
+    try {
+      const res = await driver.setWorkspaceLabel({
+        workspaceId: id,
+        label: { name: input.name, color: input.color ?? "blue" },
+        assigned: input.assigned,
+      });
+      return c.json(res);
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not update workspace label.") }, 502);
+    }
+  });
+  app.patch("/api/hosts/:host/labels/:name", async (c) => {
+    const input = z.object({ newName: z.string().trim().min(1).max(60).optional(), color: z.enum(LABEL_COLORS).optional() }).parse(await c.req.json());
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.updateWorkspaceLabel !== "function") return c.json({ error: "Workspace labels are unsupported on this host." }, 409);
+    try {
+      return c.json(await driver.updateWorkspaceLabel({ name: c.req.param("name"), ...input }));
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not update label.") }, 502);
+    }
+  });
+  app.delete("/api/hosts/:host/labels/:name", async (c) => {
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.deleteWorkspaceLabel !== "function") return c.json({ error: "Workspace labels are unsupported on this host." }, 409);
+    try {
+      return c.json(await driver.deleteWorkspaceLabel({ name: c.req.param("name") }));
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not delete label.") }, 502);
+    }
+  });
+
   // ---- Archived workspaces --------------------------------------------------------------------
   app.get("/api/hosts/:host/archived-workspaces", async (c) => {
     const hostId = c.req.param("host");

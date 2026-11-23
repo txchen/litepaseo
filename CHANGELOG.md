@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.12.0
+
+- Upgrade `@getpaseo/client` and `@getpaseo/protocol` to `0.17.3`.
+- **Composer `/` & `@` autocomplete**: type `/` for provider slash commands and skills, or `@` to fuzzy-search and insert workspace file paths.
+- **Command Center (`Cmd/Ctrl+K`)**: lazy-loaded global palette with Workspaces (including archived search and restore), Files, and Actions tabs.
+- **Archive Undo & Archived Workspaces**: 6-second Undo toast (`Cmd/Ctrl+Z`) after archiving, plus an Archived Workspaces browser in the sidebar footer to search and restore past sessions.
+- **Background work & heartbeats**: live collapsible bar above the composer showing running background tasks and heartbeats with one-click stop, multiplexed over the existing timeline stream.
+- **Native turn & session stats**: expandable per-turn metrics in the turn footer and session metrics in the chat header (timing, tokens, cache, cost); automatically deduplicates legacy `turn-speed` plugin rows.
+- **Reading & Chat preferences**: configure content width (Default / Wide / Full), text size, send shortcut (`Enter` vs `Cmd/Ctrl+Enter`), default running delivery mode, chat detail density (Full / Compact / Replies), auto-expand thinking, and chat outline toggle. Added `Cmd/Ctrl+/` (model picker) and `Cmd/Ctrl+Shift+/` (cycle thinking) shortcuts.
+- **Workspace multi-agent, existing worktrees & Add Project**: start a new agent directly inside an existing workspace (`+`), pick an existing git worktree in New Session, and add projects from host directories, recent suggestions, or GitHub clone.
+- **Provider online updates**: show installed CLI versions, provider docs links, update checks, and inline CLI updates in Host Settings.
+- **Usage enhancements**: display native quota exhaustion forecasts (`runsOutAt`), balance-based accounts (OpenRouter, Copilot, etc.), and per-browser source reordering and visibility toggles.
+- **Built-in Next message suggestions**: configure one OpenAI-compatible chat endpoint in LitePaseo Settings to predict an editable next message (with Tab completion and risky-action send protection) across all hosts without any daemon plugin.
+
 ## 0.11.0
 
 - Show projects with zero active workspaces in the sidebar, matching Paseo: daemon `emptyProjects` snapshots, archive transitions, and `project.update` events stream live to the browser, with full support for pinning, host/search filtering, project menus/settings, and starting a new session.

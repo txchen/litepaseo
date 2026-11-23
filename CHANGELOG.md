@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.1
+
+- Fix checkbox layout for **Auto-expand thinking** and **Chat outline rail** in Settings (use `switch-row` and `switch` styling so labels no longer collapse vertically).
+
 ## 0.12.0
 
 - Upgrade `@getpaseo/client` and `@getpaseo/protocol` to `0.17.3`.

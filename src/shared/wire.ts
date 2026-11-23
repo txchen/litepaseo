@@ -202,7 +202,7 @@ export type TimelineOp =
       /** The latest change the rows include, for resuming after a reconnect (servers before 0.9). */
       seq?: number;
     }
-  | { type: "upsert"; row: TimelineRow }
+  | { type: "upsert"; row: TimelineRow; seq?: number }
   | { type: "append"; seqStart: number; seqEnd: number; timestamp: string; text: string }
   | { type: "error"; message: string };
 

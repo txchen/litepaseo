@@ -129,6 +129,11 @@ export class HostSubagents {
     };
   }
 
+  /** Current status of a provider subagent, if known. */
+  statusOf(parentAgentId: string, subagentId: string): ProviderSubagent["status"] | undefined {
+    return this.parents.get(parentAgentId)?.subagents.get(subagentId)?.status;
+  }
+
   /** A TimelineView driver for one subagent conversation. */
   timelineDriver(parentAgentId: string, subagentId: string): TimelineDriver {
     const key = `${parentAgentId}\0${subagentId}`;

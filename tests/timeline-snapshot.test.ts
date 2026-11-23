@@ -14,8 +14,8 @@ function fakeHost(hosts: Hosts, options: { readyAtOnce?: boolean } = {}) {
   let fetches = 0;
   const driver = {
     getConnectionState: () => ({ status: "connected" }),
-    subscribeAgentTimeline: () => Object.assign(() => {}, { ready: readiness, release: async () => {} }),
     fetchAgentTimeline: async () => {
+      await readiness;
       fetches++;
       return {
         epoch: "e", reset: false, window: { minSeq: 1, maxSeq: 7, nextSeq: 8 }, startCursor: null, endCursor: null,
@@ -41,14 +41,14 @@ test("a snapshot waits for a view that is still loading, then leaves it for the 
   host.ready();
   const snapshot = await pending;
   assert.equal(snapshot.type, "reset");
-  assert.equal(snapshot.seq, 7, "says how far it reaches, for the stream to resume from");
+  assert.equal(snapshot.seq, 1, "says how far the view revision reaches, for the stream to resume from");
   assert.deepEqual(snapshot.rows.map((r) => r.seqStart), [1]);
   await settle();
   assert.equal(view(hosts)!.view.watcherCount, 0, "it does not stay a viewer");
   assert.ok(view(hosts)!.idle, "the view lives on for the stream that follows");
   // A live view answers at once, without reading from the daemon again.
   const again = await hosts.timelineSnapshot("h", "a1");
-  assert.equal(again.seq, 7);
+  assert.equal(again.seq, 1);
   assert.equal(host.fetches(), 1);
   await settle();
   assert.equal(view(hosts)!.view.watcherCount, 0);
@@ -76,7 +76,7 @@ test("GET …/timeline/latest returns the conversation as a plain response", asy
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-type"), "application/json");
     const snapshot = await response.json();
-    assert.deepEqual([snapshot.type, snapshot.epoch, snapshot.seq, snapshot.rows[0].item.text], ["reset", "e", 7, "hi"]);
+    assert.deepEqual([snapshot.type, snapshot.epoch, snapshot.seq, snapshot.rows[0].item.text], ["reset", "e", 1, "hi"]);
     assert.equal((await get("/hosts/nope/agents/a1/timeline/latest")).status, 404);
   } finally {
     await hosts.close();

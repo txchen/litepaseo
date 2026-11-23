@@ -16,6 +16,8 @@ export interface StreamOptions {
 
 const MIN_RETRY_MS = 1000;
 const MAX_RETRY_MS = 30_000;
+/** Server sends SSE heartbeats every 20 s; 45 s of complete silence means a half-open mobile socket. */
+const STALL_MS = 45_000;
 
 /**
  * Reads a server-sent event stream over fetch (so the bearer header is sent), reconnecting
@@ -26,8 +28,19 @@ export function openStream(options: StreamOptions) {
   let closed = false,
     controller: AbortController | null = null,
     retry: ReturnType<typeof setTimeout> | undefined,
+    stall: ReturnType<typeof setTimeout> | undefined,
     delay = MIN_RETRY_MS;
   const setState = (state: StreamState) => options.onState?.(state);
+  const clearStall = () => {
+    clearTimeout(stall);
+    stall = undefined;
+  };
+  const armStall = (current: AbortController) => {
+    clearStall();
+    stall = setTimeout(() => {
+      if (controller === current) current.abort();
+    }, STALL_MS);
+  };
 
   const run = async () => {
     if (closed || document.hidden || controller) return;
@@ -35,6 +48,7 @@ export function openStream(options: StreamOptions) {
     retry = undefined;
     const current = (controller = new AbortController());
     setState("connecting");
+    armStall(current);
     try {
       const response = await fetch(options.url(), {
         // The session cookie authenticates; no secret lives in page script.
@@ -54,6 +68,7 @@ export function openStream(options: StreamOptions) {
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
+        armStall(current);
         if (!live && value) {
           live = true;
           setState("live");
@@ -75,6 +90,7 @@ export function openStream(options: StreamOptions) {
     } catch {
       // Aborted, offline or malformed: handled by the reconnect below.
     } finally {
+      clearStall();
       if (controller === current) controller = null;
     }
     if (closed) return setState("closed");
@@ -94,13 +110,33 @@ export function openStream(options: StreamOptions) {
       void run();
     }
   };
+  const reconnectNow = () => {
+    if (closed || document.hidden) return;
+    delay = MIN_RETRY_MS;
+    if (controller) {
+      // Network changed or page resumed from bfcache: abort any stale half-open socket.
+      controller.abort();
+    } else {
+      clearTimeout(retry);
+      retry = undefined;
+      void run();
+    }
+  };
+  const onPageShow = (event: PageTransitionEvent) => {
+    if (event.persisted) reconnectNow();
+  };
   document.addEventListener("visibilitychange", onVisibility);
+  window.addEventListener("online", reconnectNow);
+  window.addEventListener("pageshow", onPageShow);
   void run();
   return {
     close() {
       closed = true;
       clearTimeout(retry);
+      clearStall();
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", reconnectNow);
+      window.removeEventListener("pageshow", onPageShow);
       controller?.abort();
     },
   };

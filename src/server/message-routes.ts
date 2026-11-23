@@ -138,6 +138,7 @@ export function registerMessageRoutes(app: App, { store, hosts, attachments, sen
           ...(prepared.attachments.length ? { attachments: prepared.attachments } : {}),
         });
       attachments.consumed(input.attachmentIds);
+      hosts.wakeTimeline(host, agent, true);
       return c.json({ status: "acknowledged", messageId: input.messageId });
     } catch {
       return c.json({ error: "Delivery outcome unknown. Refresh the conversation before retrying.", messageId: input.messageId }, 502);

@@ -82,15 +82,17 @@ test("a viewer waiting for rows checks the host and is logged, also when it give
     const hosts = new Hosts();
     const checks: string[] = [];
     let ready!: () => void;
+    const gate = new Promise<void>((r) => (ready = r));
     const driver = {
       getConnectionState: () => ({ status: "connected" }),
-      subscribeAgentTimeline: () =>
-        Object.assign(() => {}, { ready: new Promise<void>((r) => (ready = r)), release: async () => {} }),
-      fetchAgentTimeline: async () => ({
-        epoch: "e", reset: false, window: { minSeq: 1, maxSeq: 1, nextSeq: 2 }, startCursor: null, endCursor: null,
-        hasOlder: false, hasNewer: false,
-        entries: [{ provider: "codex", item: { type: "user_message", text: "hi" }, timestamp: "t", seqStart: 1, seqEnd: 1 }],
-      }),
+      fetchAgentTimeline: async () => {
+        await gate;
+        return {
+          epoch: "e", reset: false, window: { minSeq: 1, maxSeq: 1, nextSeq: 2 }, startCursor: null, endCursor: null,
+          hasOlder: false, hasNewer: false,
+          entries: [{ provider: "codex", item: { type: "user_message", text: "hi" }, timestamp: "t", seqStart: 1, seqEnd: 1 }],
+        };
+      },
     };
     hosts.clients.set("h", { driver, liveness: { check: async (reason: string) => void checks.push(reason) } } as never);
     const t0 = performance.now();

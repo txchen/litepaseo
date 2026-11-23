@@ -61,7 +61,7 @@ export class TimelineStore {
         this.lastSeq = op.seq ?? op.rows.reduce((max, row) => Math.max(max, row.seqEnd), -1);
         membership = true;
       } else if (op.type === "upsert") {
-        this.lastSeq = Math.max(this.lastSeq, op.row.seqEnd);
+        this.lastSeq = op.seq !== undefined ? Math.max(this.lastSeq, op.seq) : Math.max(this.lastSeq, op.row.seqEnd);
         const index = this.find(op.row.seqStart);
         if (index >= 0) this.rows[index].row.value = op.row;
         else {

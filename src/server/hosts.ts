@@ -94,8 +94,15 @@ export class Hosts {
       this.agents,
       () => this.emit(this.agentListeners),
       (previous, next) => {
-        if (previous && next && (previous.turnActive || previous.state === "running") && !next.turnActive && next.state !== "running") {
-          void this.timelines.get(next.key)?.view.refreshTailMetrics();
+        if (next) {
+          const view = this.timelines.get(next.key)?.view;
+          if (view) {
+            const running = next.turnActive === true || next.state === "running" || next.status === "running" || next.status === "initializing";
+            view.setActive(running);
+            if (!running && previous && (previous.activityAt !== next.activityAt || previous.state !== next.state)) {
+              view.wake();
+            }
+          }
         }
         notifyListeners(this.transitionListeners, previous, next);
       },
@@ -113,6 +120,9 @@ export class Hosts {
         if (previous.error) logEvent("host_reconnected", { hostId, after: previous.error.code });
         this.diagnostics.set(hostId, { lastConnectedAt: new Date().toISOString() });
         this.clients.get(hostId)?.backgroundWork.reconnect();
+        for (const entry of this.timelines.values()) {
+          if (entry.hostId === hostId && entry.view.watcherCount > 0) entry.view.wake();
+        }
       }
       else if (state.status === "connecting") this.diagnostics.set(hostId, { ...previous, nextRetryAt: undefined, attempt: state.attempt });
       else if (state.status === "disconnected") {
@@ -229,9 +239,22 @@ export class Hosts {
     return () => this.hostListeners.delete(listener);
   }
 
+  /** Wakes a watched timeline view immediately (e.g. after sending a message or rewinding). */
+  wakeTimeline(hostId: string, agentId: string, followUp = false) {
+    const view = this.timelines.get(`${hostId}:${agentId}`)?.view;
+    if (!view) return;
+    view.wake(followUp);
+  }
+
   /** The provider subagents of one agent, as they change. */
   watchSubagents(hostId: string, agentId: string, listener: (subagents: ProviderSubagent[]) => void) {
-    return this.get(hostId).subagents.watch(agentId, listener);
+    return this.get(hostId).subagents.watch(agentId, (subagents) => {
+      for (const s of subagents) {
+        const subView = this.timelines.get(`${hostId}:${agentId}:subagent:${s.id}`)?.view;
+        if (subView) subView.setActive(s.status === "running");
+      }
+      listener(subagents);
+    });
   }
 
   /** Background tasks and heartbeats of one agent, as they change. */
@@ -262,6 +285,11 @@ export class Hosts {
         // Which layer a slow open spent its time in; no conversation content.
         logEvent("timeline_slow", { hostId, agentId, ...(subagentId ? { subagentId } : {}), connectionAtStart: connection ?? null, ...report });
       });
+      const agent = subagentId ? undefined : this.agents.get(key);
+      const running = subagentId
+        ? client.subagents.statusOf(agentId, subagentId) === "running"
+        : !!(agent && (agent.turnActive === true || agent.state === "running" || agent.status === "running" || agent.status === "initializing"));
+      view.setActive(running);
       entry = { view, hostId, fresh: true };
       this.timelines.set(key, entry);
       view.start();
@@ -293,7 +321,7 @@ export class Hosts {
       watcher(ops);
     }, since);
     // A live view answers at once, possibly with nothing (a resume with no changes).
-    if (joined.state === "live" || joined.state === "catching-up") finishWait(false);
+    if (joined.state === "live") finishWait(false);
     const current = entry;
     return () => {
       finishWait(true);

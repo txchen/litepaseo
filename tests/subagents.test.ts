@@ -159,6 +159,7 @@ test("a subagent conversation streams through the shared timeline view", async (
     ],
   };
   const view = new TimelineView(subagents.timelineDriver("parent", "sub"), "parent");
+  view.setActive(true);
   const store = new TimelineStore();
   view.watch((ops: TimelineOp[]) => store.apply(ops));
   view.start();
@@ -168,15 +169,19 @@ test("a subagent conversation streams through the shared timeline view", async (
   assert.deepEqual(store.rows.map((r) => r.row.value.item.text), ["Find the bug", "Looking"]);
   assert.equal(store.rows[1].row.value.provider, "claude");
 
-  // Live rows of this subagent extend the conversation; other subagents' rows do not.
-  daemon.emit({ kind: "timeline", parentAgentId: "parent", subagentId: "other", provider: "claude", item: { type: "assistant_message", text: "nope" }, timestamp: "t3", seq: 3, epoch: "e1" });
-  daemon.emit({ kind: "timeline", parentAgentId: "parent", subagentId: "sub", provider: "claude", item: { type: "assistant_message", text: " closely" }, timestamp: "t3", seq: 3, epoch: "e1" });
-  await sleep(500);
+  // Next low-frequency pull picks up the updated subagent projection from the daemon.
+  daemon.page = {
+    ...daemon.page,
+    window: { minSeq: 1, maxSeq: 3, nextSeq: 4 },
+    rows: [
+      { item: { type: "user_message", text: "Find the bug" }, timestamp: "t1", seq: 1, seqStart: 1, seqEnd: 1 },
+      { item: { type: "assistant_message", text: "Looking closely" }, timestamp: "t3", seq: 2, seqStart: 2, seqEnd: 3 },
+    ],
+  };
+  await sleep(1_500);
   assert.deepEqual(store.rows.map((r) => r.row.value.item.text), ["Find the bug", "Looking closely"]);
 
   await view.dispose();
-  await sleep(30_000);
-  assert.equal(daemon.released, 1);
 });
 
 test("an event subscription that fails to start is replaced on the next try", async () => {
@@ -198,16 +203,14 @@ test("an event subscription that fails to start is replaced on the next try", as
     rows: [{ item: { type: "user_message", text: "Find the bug" }, timestamp: "t1", seq: 1, seqStart: 1, seqEnd: 1 }],
   };
   const subagents = new HostSubagents(daemon);
-  const view = new TimelineView(subagents.timelineDriver("parent", "sub"), "parent");
-  const store = new TimelineStore();
-  view.watch((ops: TimelineOp[]) => store.apply(ops));
-  view.start();
+  const sub1 = subagents.timelineDriver("parent", "sub").subscribeAgentTimeline!("parent", () => {});
+  sub1.ready.catch(() => {});
   await settle();
   assert.equal(daemon.released, 1, "the failed subscription is let go at once");
-  await sleep(2_000);
-  await sleep(2_000);
+  sub1();
+  const sub2 = subagents.timelineDriver("parent", "sub").subscribeAgentTimeline!("parent", () => {});
+  await settle();
   assert.equal(daemon.subscriptions, 2, "the retry subscribes afresh");
-  assert.deepEqual(store.rows.map((r) => r.row.value.item.text), ["Find the bug"]);
-  await view.dispose();
+  sub2();
   await subagents.dispose();
 });

@@ -257,6 +257,10 @@ let stream: { close(): void } | null = null;
 /** The first rows are on their way through a plain request; the stream waits for them. */
 let loadingLatest = true;
 const latestAbort = new AbortController();
+const onVisibleRecover = () => {
+  if (!document.hidden && loadingLatest && inView) latestAbort.abort();
+};
+document.addEventListener("visibilitychange", onVisibleRecover);
 void open();
 /**
  * The first rows come through a plain request, which has an end: no proxy holds its tail back
@@ -275,7 +279,7 @@ async function loadLatest() {
     const response = await fetch("/api" + base() + "/timeline/latest", {
       // The custom header marks same-origin script (CSRF guard), as for every API call.
       headers: { "x-litepaseo": "1" },
-      signal: AbortSignal.any([latestAbort.signal, AbortSignal.timeout(60_000)]),
+      signal: AbortSignal.any([latestAbort.signal, AbortSignal.timeout(15_000)]),
     });
     if (response.status === 401) return emit("unauthorized");
     if (!response.ok || !response.body) return opening.via("stream");
@@ -792,6 +796,7 @@ onUnmounted(() => {
   clearTimeout(suggestionTimer);
   cancelAnimationFrame(activeFrame);
   document.removeEventListener("visibilitychange", syncElapsedClock);
+  document.removeEventListener("visibilitychange", onVisibleRecover);
 });
 
 defineExpose({

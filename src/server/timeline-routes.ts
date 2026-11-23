@@ -252,6 +252,7 @@ export function registerTimelineRoutes(app: App, { store, hosts, streamValidity,
       return c.json({ error: "This agent cannot rewind that way." }, 400);
     try {
       await client.driver.rewindAgent(c.req.param("agent"), messageId, mode);
+      hosts.wakeTimeline(c.req.param("host"), c.req.param("agent"), true);
       return c.json({ ok: true });
     } catch (error) {
       return c.json({ error: errorMessage(error, "Rewind failed") }, 502);

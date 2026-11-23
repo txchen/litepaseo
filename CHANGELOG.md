@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.2
+
+- **Wake + Pull single-source-of-truth timeline (`TimelineView`)**:
+  - Replace the dual push+pull local projection state machine with a single authoritative source (`fetchAgentTimeline(..., projection: "projected")`), cutting complexity in half and eliminating push/pull drift.
+  - Zero polling and zero timers while a conversation is idle; running conversations pull at a low 1.5 s cadence while watched and push only changed rows using a monotonic view `revision` so returning tabs always receive late `turnMetrics` and updates cleanly.
+  - Detect rewind/truncation without epoch changes and >60-row gaps, resetting cleanly instead of leaving stale rows or holes; preserve turn-end settle checks across in-flight pulls; stop polling completed subagents automatically; wake watched views on host reconnect and message send/rewind.
+- **Mobile & flaky-network resilience**:
+  - Add a 45 s stall watchdog (paired with the 20 s server heartbeat) plus `online` and `pageshow` (bfcache) reconnect triggers to `event-stream.ts` so half-open mobile sockets recover automatically.
+  - Trigger a background verification pull when a returning client resumes a cached view older than 5 s.
+  - Tighten `/timeline/latest` timeout from 60 s to 15 s, abort wedged initial loads on mobile resume, and bound daemon timeline pulls with a 20 s safety timeout so a slow remote host never locks `inFlight`.
+
 ## 0.13.1
 
 - **Fix intermittent missing turn stats (`turnMetrics`)**:

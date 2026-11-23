@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.1
+
+- **Fix intermittent missing turn stats (`turnMetrics`)**:
+  - Refresh tail `turnMetrics` even while a kept-alive conversation is backgrounded, retry (`600ms` / `1500ms`) if the latest turn's metrics haven't landed yet, and match overlapping `seqStart`–`seqEnd` ranges.
+  - Track `metricsTouched` rows in `TimelineView.resumeOps` so returning to a cached tab always receives newly attached `turnMetrics` even though `seqEnd` did not advance.
+  - Render `turnMetrics` on standalone rows without a `turnId` as well.
+
 ## 0.13.0
 
 - **Workspace scripts & services runner**: run, stop, and inspect `paseo.json` scripts and services directly from the chat header, including live status, port badges, and service URL links.

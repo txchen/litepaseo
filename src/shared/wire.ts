@@ -21,6 +21,13 @@ export const LANES: Lane[] = ["needs_input", "running", "review", "done"];
 export const laneOf = (state: AgentState): Lane =>
   state === "failed" || state === "unread" ? "review" : state;
 
+/** A formatted metric badge reported by the daemon (turn timing, tokens, cache, cost). */
+export interface AgentMetric {
+  label: string;
+  value: string;
+  tone?: "default" | "ok" | "warning" | "danger";
+}
+
 /** The subset of a daemon agent snapshot the console renders. */
 export interface AgentSummary {
   key: string;
@@ -49,6 +56,8 @@ export interface AgentSummary {
   /** Context window use from the latest turn (tokens), when the provider reports it. */
   contextUsed?: number | null;
   contextMax?: number | null;
+  /** Session-level metrics (timing, tokens, cache, cost) when reported by the provider. */
+  sessionMetrics?: AgentMetric[];
   /** Needs the user's input: a pending permission or question (drives push and the badge). */
   attention: boolean;
   state: AgentState;
@@ -175,6 +184,8 @@ export interface TimelineRow {
   provider: string;
   turnId?: string;
   item: TimelineItem;
+  /** Per-turn timing, token, cache, and cost metrics attached to the turn's final row. */
+  turnMetrics?: AgentMetric[];
 }
 
 export type TimelineOp =
@@ -220,8 +231,56 @@ export interface SubagentsMessage {
   subagents: ProviderSubagent[];
 }
 
+/** A running background task or heartbeat owned by an agent. */
+export interface AgentBackgroundWorkItem {
+  id: string;
+  kind: string;
+  description: string | null;
+  command?: string;
+  startedAt: string;
+  canStop?: boolean;
+  stopToken?: string;
+}
+
+/** The agent's current background tasks and heartbeats; sent whenever the list changes. */
+export interface BackgroundWorkMessage {
+  type: "background-work";
+  items: AgentBackgroundWorkItem[];
+}
+
 /** What a conversation's timeline stream carries. */
-export type TimelineStreamMessage = TimelineMessage | SubagentsMessage;
+export type TimelineStreamMessage = TimelineMessage | SubagentsMessage | BackgroundWorkMessage;
+
+/** A provider slash command or skill returned for `/` composer autocomplete. */
+export interface SlashCommandOption {
+  name: string;
+  description: string;
+  argumentHint: string;
+  kind: "command" | "skill";
+}
+
+/** An archived workspace / agent history entry that can be inspected or restored. */
+export interface ArchivedWorkspaceSummary {
+  hostId: string;
+  id: string;
+  workspaceId: string | null;
+  name: string;
+  project: string;
+  cwd: string;
+  branch: string | null;
+  archivedAt: string;
+  provider: string;
+  status: string;
+}
+
+/** An existing git worktree on a host repository. */
+export interface CheckoutWorktreeOption {
+  path: string;
+  branchName: string | null;
+  head: string | null;
+  createdAt: string;
+  containsCwd: boolean;
+}
 
 export interface TimelinePage {
   epoch: string;
@@ -251,10 +310,40 @@ export interface ProviderOption {
 /** Every provider a host knows, for its settings page: enabled or not, with catalogue freshness. */
 export interface HostProviderInfo extends ProviderOption {
   description?: string;
+  docsUrl?: string;
   source: "builtin" | "custom";
   enabled: boolean;
   /** When the daemon last fetched this provider's model catalogue; null before the first fetch. */
   fetchedAt: string | null;
+}
+
+/** Provider installation inspection returned on demand from host settings. */
+export interface ProviderInstallationInfo {
+  provider: string;
+  installedVersion: string | null;
+  installUrl?: string | null;
+  docsUrl?: string | null;
+  canCheckUpdates: boolean;
+  canUpdate: boolean;
+  status?: string;
+  error?: string | null;
+}
+
+export interface ProviderUpdateCheckResult {
+  provider: string;
+  status: "current" | "available" | "unknown" | "error" | "unsupported";
+  versions?: string[];
+  message?: string;
+}
+
+export interface ProviderUpdateResult {
+  provider: string;
+  status: "running" | "succeeded" | "failed";
+  id?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  message?: string;
+  output?: { type: "stdout" | "stderr" | "message"; text: string }[];
 }
 
 /** A provider feature the composer can switch (Paseo's AgentFeature: toggle or select). */
@@ -304,6 +393,8 @@ export interface CreateSessionRequest {
   prompt?: string;
   /** Start in a new git worktree on this new branch. */
   worktreeBranch?: string;
+  /** Attach the new agent to an existing workspace instead of creating a new one. */
+  workspaceId?: string;
 }
 
 /** A task on the board. Description and comments are Markdown; optional on older cards. */

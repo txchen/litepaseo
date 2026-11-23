@@ -60,11 +60,29 @@ export function useThreadActions({ api, action, directory, selectedThread, selec
   async function markThreadRead(thread: WorkspaceSummary) {
     await action(async () => void (await api(threadPath(thread) + "/read", "POST", {})));
   }
+  const archiveUndo = shallowRef<WorkspaceSummary | null>(null);
+  let undoTimer: ReturnType<typeof setTimeout> | undefined;
+  function dismissArchiveUndo() {
+    clearTimeout(undoTimer);
+    undoTimer = undefined;
+    archiveUndo.value = null;
+  }
+  async function undoArchive() {
+    const thread = archiveUndo.value;
+    if (!thread) return;
+    dismissArchiveUndo();
+    await action(async () => {
+      await api(threadPath(thread) + "/undo-archive", "POST", {});
+    });
+  }
   async function archiveThread(thread: WorkspaceSummary) {
     if (!(await confirmAction({ title: `Archive “${thread.name}”?`, message: "It leaves the sidebar; the host keeps its history.", confirmLabel: "Archive" }))) return;
     await action(async () => {
       await api(threadPath(thread) + "/archive", "POST", {});
       if (selectedThread.value === thread.key) selectedThread.value = selectedKey.value = null;
+      archiveUndo.value = thread;
+      clearTimeout(undoTimer);
+      undoTimer = setTimeout(() => { archiveUndo.value = null; }, 6000);
     });
   }
   // Viewing an unread thread marks it read (the agent-level read is the app's).
@@ -162,6 +180,7 @@ export function useThreadActions({ api, action, directory, selectedThread, selec
 
   return {
     menu, renaming, openMenu, openHeaderMenu, renameThread, pinThread, markThreadUnread, markThreadRead, archiveThread,
+    archiveUndo, undoArchive, dismissArchiveUndo,
     projectPinned, applyProjectPins, pinProject, projectMenu, projectSettings, settingsProject, openProjectMenu, removeProject,
   };
 }

@@ -6,6 +6,11 @@ import { errorMessage, hostPath as path, type App, type Ctx, type RouteContext }
 /** Text files larger than this open truncated: the viewer is for reading, not for dumps. */
 const MAX_TEXT_BYTES = 1024 * 1024;
 const MAX_ENTRIES = 2000;
+const SEARCH_CACHE_MS = 15_000;
+const SEARCH_MAX_FILES = 1500;
+const SEARCH_MAX_DIRS = 120;
+const SEARCH_BUDGET_MS = 1500;
+const SEARCH_SKIP = new Set([".git", "node_modules", "dist", "build", ".next", ".nuxt", "target", "__pycache__", ".venv", "venv", ".cache", "coverage"]);
 /** Terminal output is coalesced into one event per frame-ish interval. */
 const TERMINAL_FLUSH_MS = 16;
 /** A terminal dimension from a query string: whole, within bounds, else the default. */
@@ -20,11 +25,76 @@ const clampSize = (value: string | undefined, fallback: number, min: number, max
  * keeps state beyond an open terminal stream.
  */
 export function registerWorkspaceRoutes(app: App, { hosts, store, streamValidity, encodingOf }: RouteContext) {
+  const fileIndexCache = new Map<string, { at: number; files: string[] }>();
+  async function workspaceFiles(hostId: string, cwd: string): Promise<string[]> {
+    const key = `${hostId}\n${cwd}`;
+    const cached = fileIndexCache.get(key);
+    const now = Date.now();
+    if (cached && now - cached.at < SEARCH_CACHE_MS) return cached.files;
+    const { driver } = hosts.get(hostId);
+    const files: string[] = [];
+    const queue: string[] = ["."];
+    const deadline = now + SEARCH_BUDGET_MS;
+    let dirs = 0;
+    while (queue.length && files.length < SEARCH_MAX_FILES && dirs < SEARCH_MAX_DIRS && Date.now() < deadline) {
+      const dir = queue.shift()!;
+      dirs++;
+      let result;
+      try {
+        result = await driver.listDirectory(cwd, dir);
+      } catch {
+        continue;
+      }
+      for (const e of result.entries ?? []) {
+        if (e.kind === "directory") {
+          if (!SEARCH_SKIP.has(e.name)) queue.push(e.path);
+        } else {
+          files.push(e.path);
+          if (files.length >= SEARCH_MAX_FILES) break;
+        }
+      }
+    }
+    if (fileIndexCache.size > 32) {
+      const oldest = fileIndexCache.keys().next().value;
+      if (oldest) fileIndexCache.delete(oldest);
+    }
+    fileIndexCache.set(key, { at: Date.now(), files });
+    return files;
+  }
+
   app.get("/api/hosts/:host/changes", async c => {
     const cwd = path.parse(c.req.query("cwd"));
     const result = await hosts.get(c.req.param("host")).driver.getCheckoutDiff(cwd, { mode: "uncommitted" });
     if (result.error) return c.json({ error: result.error.message }, 409);
     return c.json(result);
+  });
+  app.get("/api/hosts/:host/fs/search", async (c) => {
+    const hostId = c.req.param("host");
+    const cwd = path.parse(c.req.query("cwd"));
+    const q = (c.req.query("q") ?? "").trim().toLowerCase();
+    const limit = clampSize(c.req.query("limit"), 40, 1, 100);
+    try {
+      const all = await workspaceFiles(hostId, cwd);
+      if (!q) return c.json({ files: all.slice(0, limit), total: all.length });
+      const tokens = q.split(/\s+/).filter(Boolean);
+      const scored: { path: string; score: number }[] = [];
+      for (const file of all) {
+        const lower = file.toLowerCase();
+        if (!tokens.every((t) => lower.includes(t))) continue;
+        const base = lower.slice(lower.lastIndexOf("/") + 1);
+        let score = 0;
+        if (base === q) score = 100;
+        else if (base.startsWith(q)) score = 80;
+        else if (base.includes(q)) score = 60;
+        else if (lower.startsWith(q)) score = 40;
+        else score = 20;
+        scored.push({ path: file, score: score - file.length * 0.01 });
+      }
+      scored.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+      return c.json({ files: scored.slice(0, limit).map((s) => s.path), total: scored.length });
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not search files") }, 404);
+    }
   });
   // ---- Files -------------------------------------------------------------------------------
   app.get("/api/hosts/:host/fs/list", async (c) => {

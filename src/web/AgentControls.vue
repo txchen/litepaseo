@@ -22,6 +22,7 @@ const CACHE_MS = 5 * 60_000;
 const cache = new Map<string, { at: number; options: AgentConfigOptions }>();
 const options = ref<AgentConfigOptions | null>(null);
 const pending = ref<Partial<Record<"model" | "thinking" | "mode" | string, string | boolean>>>({});
+const modelSelect = ref<HTMLSelectElement | null>(null);
 
 async function load(force = false) {
   const key = props.agent.key;
@@ -49,7 +50,7 @@ const modelOption = computed(() => options.value?.models.find((m) => m.id === mo
 /** "anthropic/claude-opus-5-5" → "claude-opus-5-5" until the provider's label is known. */
 const modelLabel = computed(() => modelOption.value?.label ?? (model.value ? model.value.split("/").pop()! : "Model"));
 /** The turn footer shows the same model name as the composer chip. */
-defineExpose({ modelLabel });
+defineExpose({ modelLabel, focusModel, cycleThinking });
 const thinking = computed(() => (pending.value.thinking as string | undefined) ?? props.agent.thinking ?? modelOption.value?.defaultThinkingId ?? null);
 const thinkingOptions = computed(() => modelOption.value?.thinking ?? []);
 const thinkingLabel = computed(() => thinkingOptions.value.find((t) => t.id === thinking.value)?.label ?? thinking.value ?? "");
@@ -109,6 +110,18 @@ async function change(slot: string, body: AgentConfigChange, value: string | boo
 }
 const pick = (event: Event) => (event.target as HTMLSelectElement).value;
 
+function focusModel() {
+  modelSelect.value?.focus();
+  try { (modelSelect.value as HTMLSelectElement & { showPicker?: () => void })?.showPicker?.(); } catch {}
+}
+function cycleThinking() {
+  const list = thinkingOptions.value;
+  if (!list.length || props.disabled) return;
+  const idx = list.findIndex((t) => t.id === thinking.value);
+  const next = list[(idx + 1) % list.length];
+  if (next) void change("thinking", { thinkingOptionId: next.id }, next.id);
+}
+
 // Context window gauge.
 const context = computed(() => {
   const used = props.agent.contextUsed ?? 0,
@@ -126,6 +139,7 @@ const RING = 2 * Math.PI * 7;
     <label class="chip" :class="{ 'is-disabled': disabled || !options?.models.length }" :title="agent.provider + ' · Model: ' + modelLabel">
       <ProviderIcon :provider="agent.provider" /><span class="chip-text">{{ modelLabel }}</span><Icon name="chevron" :size="11" class="chip-caret" />
       <select
+        ref="modelSelect"
         aria-label="Model"
         :disabled="disabled || !options?.models.length"
         :value="model ?? ''"

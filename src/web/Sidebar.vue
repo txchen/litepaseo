@@ -38,6 +38,9 @@ const emit = defineEmits<{
   projectMenu: [group: ProjectGroup<WorkspaceSummary>, x: number, y: number];
   openTab: [tab: Tab];
   refreshUsage: [];
+  openCommandCenter: [];
+  addProject: [];
+  openArchived: [];
 }>();
 
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -98,7 +101,7 @@ defineExpose({
           aria-label="Search sessions, projects, hosts"
           aria-keyshortcuts="/ Control+K Meta+K"
         />
-        <kbd class="hide-sm">{{ isMac ? "⌘K" : "Ctrl K" }}</kbd>
+        <button type="button" class="kbd-btn hide-sm" title="Open Command Center" @click.stop.prevent="emit('openCommandCenter')"><kbd>{{ isMac ? "⌘K" : "Ctrl K" }}</kbd></button>
       </label>
       <button class="side-row" :class="{ chosen: tab === 'board' }" @click="emit('openTab', 'board')">
         <Icon name="board" :size="15" />Kanban
@@ -108,6 +111,14 @@ defineExpose({
       <span class="side-label">{{ listMode === "projects" ? "Workspaces" : "Recent" }}</span>
       <!-- Always the number of workspaces listed: the same unit as the host chips. -->
       <span class="list-summary" :title="listSummary" :aria-label="listSummary">{{ viewSize }}</span>
+      <button
+        class="icon-btn side-tool"
+        aria-label="Add project"
+        title="Add project"
+        @click="emit('addProject')"
+      >
+        <Icon name="plus" :size="15" />
+      </button>
       <button
         class="icon-btn side-tool"
         :class="{ chosen: viewMenu || hostFilter !== null || listMode !== 'projects' }"
@@ -169,6 +180,14 @@ defineExpose({
       <span class="live" :class="'is-' + directoryState" :title="'Directory stream: ' + directoryState">
         <span class="live-dot"></span>{{ liveLabel }}
       </span>
+      <button
+        class="icon-btn"
+        title="Archived workspaces"
+        aria-label="Archived workspaces"
+        @click="emit('openArchived')"
+      >
+        <Icon name="archive" :size="15" />
+      </button>
       <button
         class="icon-btn"
         :class="{ chosen: tab === 'schedules' }"

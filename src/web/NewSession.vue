@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import type { HostState, ProjectOption, ProviderOption } from "../shared/wire.ts";
+import type { CheckoutWorktreeOption, HostState, ProjectOption, ProviderOption } from "../shared/wire.ts";
+import { prefs as uiPrefs } from "./preferences.ts";
 import DictationButton from "./DictationButton.vue";
 import Icon from "./Icon.vue";
 import ProjectIcon, { type ProjectIconSource } from "./ProjectIcon.vue";
@@ -15,6 +16,9 @@ const props = defineProps<{
   initialCwd: string | null;
   /** Project to preselect, matched against the host's projects by key, then by name. */
   initialProject: { key: string | null; name: string; projectId?: string; iconRevision?: string | null } | null;
+  /** When set, adds a new agent inside this existing workspace instead of creating a new one. */
+  workspaceId?: string | null;
+  workspaceName?: string | null;
   dictationReady: boolean;
   request: (path: string, method?: string, body?: unknown, timeoutMs?: number) => Promise<any>;
 }>();
@@ -70,7 +74,33 @@ const model = ref("");
 const thinking = ref("");
 const mode = ref("");
 const useWorktree = ref(false);
+const worktreeKind = ref<"new" | "existing">("new");
 const branch = ref("");
+const existingWorktrees = ref<CheckoutWorktreeOption[]>([]);
+const selectedWorktreePath = ref("");
+const loadingWorktrees = ref(false);
+
+async function loadWorktrees() {
+  if (!hostId.value || !cwd.value || props.workspaceId) return;
+  loadingWorktrees.value = true;
+  try {
+    const list = (await props.request(
+      `/hosts/${encodeURIComponent(hostId.value)}/worktrees?cwd=${encodeURIComponent(cwd.value)}`,
+    )) as CheckoutWorktreeOption[];
+    existingWorktrees.value = Array.isArray(list) ? list : [];
+    if (!existingWorktrees.value.some((w) => w.path === selectedWorktreePath.value)) {
+      selectedWorktreePath.value = existingWorktrees.value.find((w) => !w.containsCwd)?.path ?? existingWorktrees.value[0]?.path ?? "";
+    }
+  } catch {
+    existingWorktrees.value = [];
+  } finally {
+    loadingWorktrees.value = false;
+  }
+}
+
+watch([useWorktree, worktreeKind, hostId, () => cwd.value], ([use, kind]) => {
+  if (use && kind === "existing") void loadWorktrees();
+});
 const prompt = ref("");
 const busy = ref(false);
 const error = ref("");
@@ -134,7 +164,7 @@ const canCreate = computed(
     !!provider.value &&
     !!prompt.value.trim() &&
     !busy.value &&
-    (!useWorktree.value || !!branch.value.trim()),
+    (!!props.workspaceId || !useWorktree.value || (worktreeKind.value === "new" ? !!branch.value.trim() : !!selectedWorktreePath.value)),
 );
 
 function autosize() {
@@ -240,7 +270,7 @@ watch(model, () => {
   const m = selectedModel.value;
   if (m && !m.thinking.some((t) => t.id === thinking.value)) thinking.value = m.defaultThinkingId ?? "";
 });
-watch([hostId, project, customPath, provider, model, thinking, mode, featureValues, useWorktree, branch, prompt], () => {
+watch([hostId, project, customPath, provider, model, thinking, mode, featureValues, useWorktree, worktreeKind, branch, selectedWorktreePath, prompt], () => {
   if (error.value) idempotencyKey = newId();
   error.value = "";
 });
@@ -249,20 +279,24 @@ async function create() {
   if (!canCreate.value) return;
   busy.value = true;
   error.value = "";
+  const effectiveCwd = !props.workspaceId && useWorktree.value && worktreeKind.value === "existing"
+    ? selectedWorktreePath.value
+    : cwd.value;
   try {
     const result = await props.request(
       `/hosts/${encodeURIComponent(hostId.value)}/agents`,
       "POST",
       {
         idempotencyKey,
-        cwd: cwd.value,
+        cwd: effectiveCwd,
         provider: provider.value,
+        ...(props.workspaceId ? { workspaceId: props.workspaceId } : {}),
         ...(Object.keys(featureValues.value).length ? { featureValues: featureValues.value } : {}),
         ...(model.value ? { model: model.value } : {}),
         ...(mode.value ? { modeId: mode.value } : {}),
         ...(thinking.value ? { thinkingOptionId: thinking.value } : {}),
         prompt: prompt.value,
-        ...(useWorktree.value ? { worktreeBranch: branch.value.trim() } : {}),
+        ...(!props.workspaceId && useWorktree.value && worktreeKind.value === "new" ? { worktreeBranch: branch.value.trim() } : {}),
       },
       120_000,
     );
@@ -279,8 +313,9 @@ async function create() {
 
 function onKey(event: KeyboardEvent) {
   if (event.key !== "Enter" || event.isComposing) return;
-  // Desktop: Enter sends, Shift+Enter breaks. Touch keyboards keep Enter for new lines.
-  if ((!coarsePointer && !event.shiftKey) || event.metaKey || event.ctrlKey) {
+  const mod = event.metaKey || event.ctrlKey;
+  const enterSends = !coarsePointer && uiPrefs.sendShortcut === "enter" && !event.shiftKey;
+  if (enterSends || mod) {
     event.preventDefault();
     void create();
   }
@@ -302,7 +337,7 @@ onMounted(() => {
         <Icon name="back" :size="18" />
       </button>
       <ProjectIcon v-if="projectName" :name="projectName" :source="iconSource" :size="20" />
-      <h1 class="chat-title">New session</h1>
+      <h1 class="chat-title">{{ workspaceId ? "New agent" : "New session" }}</h1>
       <span v-if="projectName" class="chat-context hide-sm" :title="[projectName, selectedHost?.label, cwd].filter(Boolean).join(' · ')">
         {{ projectName }}<template v-if="connected.length > 1 && selectedHost"> · {{ selectedHost.label }}</template>
       </span>
@@ -319,12 +354,12 @@ onMounted(() => {
       <div v-else class="new-session-card">
         <ProjectIcon v-if="projectName" :name="projectName" :source="iconSource" :size="44" />
         <div v-else class="empty-mark"><Icon name="chat" :size="24" /></div>
-        <h2>{{ projectName || "New session" }}</h2>
+        <h2>{{ workspaceId ? (workspaceName || projectName || "New agent") : (projectName || "New session") }}</h2>
         <p v-if="cwd && project !== CUSTOM" class="new-session-path" :title="cwd">
           <Icon name="folder" :size="13" />{{ tildeHome(cwd) }}
         </p>
 
-        <div class="new-session-targets">
+        <div v-if="!workspaceId" class="new-session-targets">
           <label v-if="connected.length > 1" class="target-chip" :title="'Host: ' + (selectedHost?.label ?? '')">
             <Icon name="server" :size="14" />
             <span class="target-text">{{ selectedHost?.label ?? "Host" }}</span>
@@ -367,16 +402,35 @@ onMounted(() => {
           spellcheck="false"
           :disabled="busy"
         />
-        <input
-          v-if="useWorktree"
-          v-model="branch"
-          class="new-session-input"
-          aria-label="New branch"
-          placeholder="feature/my-change"
-          autocomplete="off"
-          spellcheck="false"
-          :disabled="busy"
-        />
+        <div v-if="!workspaceId && useWorktree" class="new-session-worktree">
+          <div class="segmented segmented-sm" role="radiogroup" aria-label="Worktree source">
+            <button type="button" role="radio" :aria-checked="worktreeKind === 'new'" :class="{ chosen: worktreeKind === 'new' }" @click="worktreeKind = 'new'">New branch</button>
+            <button type="button" role="radio" :aria-checked="worktreeKind === 'existing'" :class="{ chosen: worktreeKind === 'existing' }" @click="worktreeKind = 'existing'">Existing worktree</button>
+          </div>
+          <input
+            v-if="worktreeKind === 'new'"
+            v-model="branch"
+            class="new-session-input"
+            aria-label="New branch"
+            placeholder="feature/my-change"
+            autocomplete="off"
+            spellcheck="false"
+            :disabled="busy"
+          />
+          <select
+            v-else
+            v-model="selectedWorktreePath"
+            class="new-session-input"
+            aria-label="Existing worktree"
+            :disabled="busy || loadingWorktrees || !existingWorktrees.length"
+          >
+            <option v-if="loadingWorktrees" value="">Loading worktrees…</option>
+            <option v-else-if="!existingWorktrees.length" value="">No existing worktrees found</option>
+            <option v-for="wt in existingWorktrees" :key="wt.path" :value="wt.path">
+              {{ wt.branchName || "(detached)" }} — {{ tildeHome(wt.path) }}
+            </option>
+          </select>
+        </div>
       </div>
     </div>
 

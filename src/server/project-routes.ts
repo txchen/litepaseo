@@ -3,7 +3,7 @@ import { UnknownHostError } from "./hosts.ts";
 import { IconCache } from "./media.ts";
 import { importProjectIcon, MAX_ICON_BYTES } from "./project-icon-import.ts";
 import { customIcons, errorMessage, hostPath, type App, type Ctx, type RouteContext } from "./route-context.ts";
-import type { ProjectConfigState } from "../shared/wire.ts";
+import type { ArchivedWorkspaceSummary, ProjectConfigState } from "../shared/wire.ts";
 
 const configErrors: Record<string, [string, 404 | 409 | 422 | 502]> = {
   project_not_found: ["The selected host has no record of this project.", 404],
@@ -168,7 +168,128 @@ export function registerProjectRoutes(app: App, { hosts, fetch }: RouteContext) 
   });
   app.post("/api/hosts/:host/workspaces/:workspace/archive", async (c) => {
     const { driver, id } = workspace(c);
-    await driver.archiveWorkspace(id);
-    return c.json({ ok: true });
+    const res = await driver.archiveWorkspace(id);
+    if (res?.error) return c.json({ error: res.error }, 409);
+    return c.json({ ok: true, archivedAt: res?.archivedAt ?? null });
+  });
+  app.post("/api/hosts/:host/workspaces/:workspace/undo-archive", async (c) => {
+    const { driver, id } = workspace(c);
+    if (typeof driver.undoWorkspaceArchive !== "function")
+      return c.json({ error: "This host does not support undoing workspace archive." }, 409);
+    try {
+      await driver.undoWorkspaceArchive(id);
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not undo archive.") }, 409);
+    }
+  });
+  app.post("/api/hosts/:host/workspaces/:workspace/restore", async (c) => {
+    const { driver, id } = workspace(c);
+    if (typeof driver.restoreWorkspace !== "function")
+      return c.json({ error: "This host does not support restoring archived workspaces." }, 409);
+    try {
+      await driver.restoreWorkspace(id);
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not restore workspace.") }, 409);
+    }
+  });
+
+  // ---- Archived workspaces --------------------------------------------------------------------
+  app.get("/api/hosts/:host/archived-workspaces", async (c) => {
+    const hostId = c.req.param("host");
+    const q = z.string().max(200).optional().parse(c.req.query("q") || undefined);
+    const { driver } = hosts.get(hostId);
+    if (typeof driver.fetchAgentHistory !== "function") return c.json([] satisfies ArchivedWorkspaceSummary[]);
+    try {
+      const res = await driver.fetchAgentHistory({
+        filter: { includeArchived: true },
+        ...(q?.trim() ? { search: q.trim() } : {}),
+        sort: [{ key: "updated_at", direction: "desc" }],
+        page: { limit: 100 },
+      });
+      const seen = new Set<string>();
+      const out: ArchivedWorkspaceSummary[] = [];
+      for (const entry of res.entries ?? []) {
+        const agent = entry.agent;
+        if (!agent?.archivedAt) continue;
+        const dedupeKey = agent.workspaceId || agent.id;
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+        const project = entry.project?.projectName || agent.cwd.replace(/\/+$/, "").split("/").pop() || agent.cwd;
+        out.push({
+          hostId,
+          id: agent.id,
+          workspaceId: agent.workspaceId ?? null,
+          name: agent.title || project,
+          project,
+          cwd: agent.cwd,
+          branch: null,
+          archivedAt: agent.archivedAt,
+          provider: agent.provider,
+          status: agent.status,
+        });
+      }
+      return c.json(out);
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not load archived workspaces.") }, 502);
+    }
+  });
+
+  // ---- Add project & GitHub clone -------------------------------------------------------------
+  app.get("/api/hosts/:host/project-suggestions", async (c) => {
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.listProjectSuggestions !== "function") return c.json({ suggestions: [] });
+    try {
+      const res = await driver.listProjectSuggestions();
+      return c.json({ suggestions: res.suggestions ?? [] });
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not load project suggestions.") }, 502);
+    }
+  });
+  app.post("/api/hosts/:host/projects", async (c) => {
+    const { cwd } = z.object({ cwd: hostPath }).parse(await c.req.json());
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.addProject !== "function")
+      return c.json({ error: "This host does not support adding projects." }, 409);
+    try {
+      const res = await driver.addProject(cwd);
+      if (res.error) return c.json({ error: res.error }, 400);
+      return c.json({ ok: true, project: res.project ?? null });
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not add project.") }, 502);
+    }
+  });
+  app.get("/api/hosts/:host/github/search", async (c) => {
+    const query = z.string().trim().min(1).max(200).parse(c.req.query("q") ?? "");
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.searchGithubRepositories !== "function")
+      return c.json({ error: "This host does not support GitHub search." }, 409);
+    try {
+      const res = await driver.searchGithubRepositories({ query, limit: 20 });
+      if (res.error) return c.json({ error: res.error }, 502);
+      return c.json({ repositories: res.repositories ?? [] });
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not search GitHub repositories.") }, 502);
+    }
+  });
+  app.post("/api/hosts/:host/projects/clone", async (c) => {
+    const input = z
+      .object({
+        repo: z.string().trim().min(1).max(300),
+        targetDirectory: hostPath,
+        cloneProtocol: z.enum(["https", "ssh"]).optional(),
+      })
+      .parse(await c.req.json());
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.cloneGithubProject !== "function")
+      return c.json({ error: "This host does not support cloning repositories." }, 409);
+    try {
+      const res = await driver.cloneGithubProject(input);
+      if (res.error) return c.json({ error: res.error }, 400);
+      return c.json({ ok: true, path: res.checkoutPath ?? input.targetDirectory, project: res.project ?? null });
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not clone repository.") }, 502);
+    }
   });
 }

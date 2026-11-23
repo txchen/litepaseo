@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import type { HostProviderInfo } from "../shared/wire.ts";
+import type { HostProviderInfo, ProviderInstallationInfo, ProviderUpdateCheckResult, ProviderUpdateResult } from "../shared/wire.ts";
 import { confirmAction } from "./confirm.ts";
 import {
   BASE_PROVIDERS,
@@ -111,11 +111,70 @@ async function diagnose(id: string) {
 function hideDiagnostic(id: string) {
   delete diagnostics.value[id];
 }
+// ---- Provider installation version & online CLI updates (0.17.1+) ----------------------------
+const installations = ref<Record<string, ProviderInstallationInfo>>({});
+const checkingUpdate = ref<string[]>([]);
+const updateChecks = ref<Record<string, ProviderUpdateCheckResult>>({});
+const updatingProvider = ref<string[]>([]);
+const updateResults = ref<Record<string, ProviderUpdateResult | { status: "failed"; message: string }>>({});
+
+async function inspectInstallation(id: string, force = false) {
+  if (!force && installations.value[id]) return;
+  try {
+    const info = (await props.api(
+      `${props.base}/settings/providers/${encodeURIComponent(id)}/installation${force ? "?refresh=1" : ""}`,
+    )) as ProviderInstallationInfo;
+    installations.value[id] = info;
+  } catch {
+    // Older hosts simply omit installation metadata.
+  }
+}
+async function checkUpdates(id: string) {
+  if (checkingUpdate.value.includes(id)) return;
+  checkingUpdate.value = [...checkingUpdate.value, id];
+  try {
+    const result = (await props.api(
+      `${props.base}/settings/providers/${encodeURIComponent(id)}/check-updates`,
+      "POST",
+      {},
+      60_000,
+    )) as ProviderUpdateCheckResult;
+    updateChecks.value[id] = result;
+  } catch (e) {
+    updateChecks.value[id] = { provider: id, status: "error", message: message(e) };
+  } finally {
+    checkingUpdate.value = checkingUpdate.value.filter((x) => x !== id);
+  }
+}
+async function runProviderUpdate(id: string) {
+  if (updatingProvider.value.includes(id)) return;
+  updatingProvider.value = [...updatingProvider.value, id];
+  try {
+    const result = (await props.api(
+      `${props.base}/settings/providers/${encodeURIComponent(id)}/update`,
+      "POST",
+      {},
+      180_000,
+    )) as ProviderUpdateResult;
+    updateResults.value[id] = result;
+    if (result.status === "succeeded") {
+      await inspectInstallation(id, true);
+      delete updateChecks.value[id];
+    }
+  } catch (e) {
+    updateResults.value[id] = { status: "failed", message: message(e) };
+  } finally {
+    updatingProvider.value = updatingProvider.value.filter((x) => x !== id);
+  }
+}
 function providerDraft(id: string): ProviderDraft {
   return (props.draft.providers[id] ??= { commandText: "", additionalModels: [] });
 }
 function toggleProvider(id: string) {
-  if (!openProviders.value[id]) providerDraft(id);
+  if (!openProviders.value[id]) {
+    providerDraft(id);
+    if (props.features.providerInstallation) void inspectInstallation(id);
+  }
   openProviders.value[id] = !openProviders.value[id];
 }
 function setEnabled(row: Row, enabled: boolean) {
@@ -228,6 +287,31 @@ function restoreProvider(id: string) {
         <div v-if="row.reported?.status === 'error' && row.reported.error" class="ps-callout is-error">
           <p><Icon name="alert" :size="14" />{{ row.reported.error }}</p>
         </div>
+        <div v-if="installations[row.id]?.installedVersion || row.reported?.docsUrl || installations[row.id]?.installUrl" class="hs-provider-meta">
+          <span v-if="installations[row.id]?.installedVersion" class="hs-tag">v{{ installations[row.id]!.installedVersion }}</span>
+          <a
+            v-if="row.reported?.docsUrl || installations[row.id]?.docsUrl || installations[row.id]?.installUrl"
+            :href="(row.reported?.docsUrl || installations[row.id]?.docsUrl || installations[row.id]?.installUrl)!"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="link-btn"
+          >
+            Docs <Icon name="external" :size="12" />
+          </a>
+        </div>
+        <p v-if="updateChecks[row.id]" class="setting-note" :class="{ 'is-error': updateChecks[row.id]!.status === 'error' }" role="status">
+          <template v-if="updateChecks[row.id]!.status === 'current'">CLI is up to date.</template>
+          <template v-else-if="updateChecks[row.id]!.status === 'available'">
+            Update available{{ updateChecks[row.id]!.versions?.length ? ": " + updateChecks[row.id]!.versions!.join(", ") : "" }}{{ updateChecks[row.id]!.message ? " · " + updateChecks[row.id]!.message : "" }}
+          </template>
+          <template v-else>{{ updateChecks[row.id]!.message || "Update status unavailable." }}</template>
+        </p>
+        <div v-if="updateResults[row.id]" class="hs-output-wrap">
+          <p class="setting-note" :class="{ 'is-error': updateResults[row.id]!.status === 'failed' }" role="status">
+            Update {{ updateResults[row.id]!.status }}{{ updateResults[row.id]!.message ? ": " + updateResults[row.id]!.message : "" }}
+          </p>
+          <pre v-if="'output' in updateResults[row.id]! && (updateResults[row.id] as ProviderUpdateResult).output?.length" class="hs-output">{{ (updateResults[row.id] as ProviderUpdateResult).output!.map((o) => o.text).join("") }}</pre>
+        </div>
         <div v-if="row.reported?.models.length" class="field">
           <span>Models reported by the host</span>
           <ul class="hs-models">
@@ -248,6 +332,24 @@ function restoreProvider(id: string) {
           </button>
           <button v-if="row.reported" type="button" class="btn btn-outline btn-sm" :disabled="diagnosing.includes(row.id)" @click="diagnose(row.id)">
             {{ diagnosing.includes(row.id) ? "Checking…" : "Run diagnostic" }}
+          </button>
+          <button
+            v-if="features.providerInstallation && row.reported && installations[row.id]?.canCheckUpdates !== false"
+            type="button"
+            class="btn btn-outline btn-sm"
+            :disabled="checkingUpdate.includes(row.id)"
+            @click="checkUpdates(row.id)"
+          >
+            {{ checkingUpdate.includes(row.id) ? "Checking…" : "Check updates" }}
+          </button>
+          <button
+            v-if="features.providerInstallation && installations[row.id]?.canUpdate"
+            type="button"
+            class="btn btn-primary btn-sm"
+            :disabled="updatingProvider.includes(row.id)"
+            @click="runProviderUpdate(row.id)"
+          >
+            <Icon name="download" :size="13" />{{ updatingProvider.includes(row.id) ? "Updating…" : "Update CLI" }}
           </button>
           <button
             v-if="row.custom && (!row.saved || features.providerRemoval)"

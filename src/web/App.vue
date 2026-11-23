@@ -2,7 +2,7 @@
 import { trackViewingPresence } from "./viewing-presence.ts";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "./safe-storage.ts";
 import { computed, defineAsyncComponent, nextTick, onUnmounted, provide, ref, shallowRef, watch } from "vue";
-import type { AgentSummary, DirectoryMessage, HostState, ProviderSubagent, RewindMode, WorkspaceSummary } from "../shared/wire.ts";
+import type { AgentBackgroundWorkItem, AgentSummary, DirectoryMessage, HostState, ProviderSubagent, RewindMode, WorkspaceSummary } from "../shared/wire.ts";
 import { DirectoryStore, comparePinnedFirst, type ProjectGroup } from "./directory-store.ts";
 import { openStream, type StreamState } from "./event-stream.ts";
 import { agentPath as path, useApi } from "./use-api.ts";
@@ -35,11 +35,16 @@ import { preloadMarkstream } from "./markstream-loader.ts";
 import { version as WEB_VERSION } from "../../package.json";
 import SchedulesPage from "./SchedulesPage.vue";
 import { TIMELINE_CONTEXT, parseFileLink, type FileLink, type TimelineContext } from "./timeline-display.ts";
+import { cycleTheme } from "./theme.ts";
+import type { CommandAction } from "./CommandCenter.vue";
 // These load on first use: the board, host settings, the file viewer and xterm.js stay out of the first page.
 const KanbanPage = defineAsyncComponent(() => import("./KanbanPage.vue"));
 const HostSettings = defineAsyncComponent(() => import("./HostSettings.vue"));
 const FileViewer = defineAsyncComponent(() => import("./FileViewer.vue"));
 const TerminalPanel = defineAsyncComponent(() => import("./TerminalPanel.vue"));
+const CommandCenter = defineAsyncComponent(() => import("./CommandCenter.vue"));
+const ArchivedWorkspaces = defineAsyncComponent(() => import("./ArchivedWorkspaces.vue"));
+const AddProjectDialog = defineAsyncComponent(() => import("./AddProjectDialog.vue"));
 
 // Compact layouts: the detail pane is a history entry, so the system back button or gesture
 // returns to the list instead of leaving the app.
@@ -116,6 +121,7 @@ const { panel, togglePanel, terminalOpen, terminalActive, showConversation, acti
   fileViews, fileViewKey, saveFileView, reveal, revealDirectory, openLocalLink } = tabs;
 /** The open agent's provider subagents (from its timeline stream) and the one being read. */
 const providerSubagents = shallowRef<ProviderSubagent[]>([]);
+const backgroundWork = shallowRef<AgentBackgroundWorkItem[]>([]);
 const openedSubagent = ref<string | null>(null);
 function openSubagent(id: string | null) {
   openedSubagent.value = id;
@@ -124,6 +130,11 @@ function openSubagent(id: string | null) {
 
 const composer = useComposer({ active, selectedKey, authenticated, api, action, busy, showLatest: () => conversation.value?.showLatest() });
 const { prompt, autosize, queueSummary, offerSuggestion, dictationReady, showNotice } = composer;
+const suggestionsReady = ref(false);
+watch(authenticated, (ok) => {
+  if (!ok) { suggestionsReady.value = false; return; }
+  void api("/next-suggestion").then((s) => { suggestionsReady.value = !!s?.configured; }).catch(() => {});
+}, { immediate: true });
 
 async function jumpSearch(seq: number, epoch: string) {
   const view = conversation.value;
@@ -135,6 +146,7 @@ async function jumpSearch(seq: number, epoch: string) {
 // A different conversation starts without the previous one's subagents.
 watch(() => active.value?.key ?? null, () => {
   providerSubagents.value = [];
+  backgroundWork.value = [];
   openedSubagent.value = null;
   if (panel.value === "subagents") panel.value = null;
 });
@@ -458,6 +470,57 @@ function openTab(next: Tab) {
 }
 
 const sidebar = ref<InstanceType<typeof Sidebar> | null>(null);
+const composerDock = ref<InstanceType<typeof ComposerDock> | null>(null);
+const commandCenterOpen = ref(false);
+const archivedOpen = ref(false);
+const addProjectOpen = ref(false);
+
+const allWorkspaces = computed(() => {
+  directory.version.value;
+  return directory.range(0, directory.size);
+});
+
+const commandActions = computed<CommandAction[]>(() => {
+  const list: CommandAction[] = [
+    { id: "new-session", label: "New session", sub: "Start a new workspace conversation", icon: "plus", shortcut: "N", run: () => startNew() },
+    { id: "add-project", label: "Add project", sub: "Add a host directory or clone from GitHub", icon: "folder", run: () => { addProjectOpen.value = true; } },
+    { id: "archived", label: "Archived workspaces", sub: "View and restore archived workspaces", icon: "archive", run: () => { archivedOpen.value = true; } },
+    { id: "board", label: "Open Kanban board", icon: "board", run: () => openTab("board") },
+    { id: "schedules", label: "Open Schedules", icon: "clock", run: () => openTab("schedules") },
+    { id: "hosts", label: "Manage Hosts", icon: "server", run: () => openTab("hosts") },
+    { id: "settings", label: "Open Settings", icon: "gear", run: () => openTab("settings") },
+    { id: "theme", label: "Cycle theme (System / Light / Dark)", icon: "sun", run: () => cycleTheme() },
+  ];
+  if (active.value) {
+    const a = active.value;
+    const t = activeThread.value;
+    if (a.workspaceId) {
+      list.unshift({ id: "new-agent", label: "New agent in workspace", sub: t?.name || a.project, icon: "bot", run: () => startNewAgentInWorkspace() });
+    }
+    list.unshift(
+      { id: "model", label: "Switch model", sub: footerModel.value || a.provider, icon: "sparkle", shortcut: "⌘/", run: () => composerDock.value?.focusModel() },
+      { id: "thinking", label: "Cycle thinking level", sub: a.thinking || "Default", icon: "brain", shortcut: "⌘⇧/", run: () => composerDock.value?.cycleThinking() },
+      { id: "panel-files", label: "Toggle Files panel", icon: "folder", run: () => togglePanel("files") },
+      { id: "panel-changes", label: "Toggle Changes panel", icon: "file", run: () => togglePanel("changes") },
+      { id: "panel-search", label: "Search conversation", icon: "search", run: () => togglePanel("search") },
+      { id: "terminal", label: "Open Terminal", icon: "terminal", run: () => tabs.openTerminal() },
+    );
+    if (t) {
+      list.push(
+        { id: "rename", label: "Rename workspace", sub: t.name, icon: "edit", run: () => { renaming.value = t; } },
+        { id: "archive", label: "Archive workspace", sub: t.name, icon: "archive", run: () => void archiveThread(t) },
+      );
+    }
+  }
+  return list;
+});
+
+async function restoreArchivedWorkspace(hostId: string, workspaceId: string) {
+  await action(async () => {
+    await api(`/hosts/${encodeURIComponent(hostId)}/workspaces/${encodeURIComponent(workspaceId)}/restore`, "POST", {});
+  });
+}
+
 function onGlobalKey(event: KeyboardEvent) {
   const target = event.target as HTMLElement | null;
   const typing = !!target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
@@ -465,13 +528,30 @@ function onGlobalKey(event: KeyboardEvent) {
     lightbox.value = null;
     return;
   }
+  const mod = event.metaKey || event.ctrlKey;
+  if (mod && event.key.toLowerCase() === "k" && authenticated.value) {
+    event.preventDefault();
+    commandCenterOpen.value = !commandCenterOpen.value;
+    return;
+  }
   // Page shortcuts must not act behind a modal dialog.
   if (dialogOpen()) return;
-  if ((event.key === "k" && (event.metaKey || event.ctrlKey)) || (event.key === "/" && !typing)) {
+  if (mod && event.key === "/" && active.value && tab.value === "chat") {
+    event.preventDefault();
+    if (event.shiftKey) composerDock.value?.cycleThinking();
+    else composerDock.value?.focusModel();
+    return;
+  }
+  if (mod && event.key.toLowerCase() === "z" && !event.shiftKey && !typing && archiveUndo.value) {
+    event.preventDefault();
+    void undoArchive();
+    return;
+  }
+  if (event.key === "/" && !typing && !mod) {
     event.preventDefault();
     if (detailOpen.value && compact.matches) closeDetail();
     sidebar.value?.focusSearch();
-  } else if (event.key === "n" && !typing && !event.metaKey && !event.ctrlKey && !event.altKey && authenticated.value && !newSession.value) {
+  } else if (event.key === "n" && !typing && !mod && !event.altKey && authenticated.value && !newSession.value) {
     event.preventDefault();
     startNew();
   } else if (event.key === "Escape" && sidebar.value?.isSearchInput(target) && query.value) {
@@ -485,6 +565,8 @@ const newSession = ref<{
   hostId: string | null;
   cwd: string | null;
   project: { key: string | null; name: string; projectId?: string; iconRevision?: string | null } | null;
+  workspaceId?: string | null;
+  workspaceName?: string | null;
 } | null>(null);
 function startNew(group?: ProjectGroup<WorkspaceSummary>) {
   // Without a project, start where you worked last: the most recent thread in the current view.
@@ -504,6 +586,24 @@ function startNew(group?: ProjectGroup<WorkspaceSummary>) {
   };
   openDetail();
 }
+function startNewAgentInWorkspace() {
+  const a = active.value;
+  const t = activeThread.value;
+  if (!a || !a.workspaceId) return;
+  tab.value = "chat";
+  selectedThread.value = null;
+  selectedKey.value = null;
+  newSession.value = {
+    hostId: a.hostId,
+    cwd: workspaceCwd.value,
+    project: t
+      ? { key: t.projectKey, name: t.project, projectId: t.projectId, iconRevision: t.projectIconRevision }
+      : { key: a.projectKey, name: a.project },
+    workspaceId: a.workspaceId,
+    workspaceName: t?.name || a.title || a.project,
+  };
+  openDetail();
+}
 function closeNewSession() {
   newSession.value = null;
   if (compact.matches) closeDetail();
@@ -518,6 +618,7 @@ const pendingSelection = computed(() => (!!selectedKey.value || !!selectedThread
 // The sidebar's thread and project menus.
 const {
   menu, renaming, openMenu, openHeaderMenu, renameThread, pinThread, markThreadUnread, markThreadRead, archiveThread,
+  archiveUndo, undoArchive, dismissArchiveUndo,
   projectPinned, applyProjectPins, pinProject, projectMenu, projectSettings, settingsProject, openProjectMenu, removeProject,
 } = useThreadActions({ api, action, directory, selectedThread, selectedKey, activeThread, readyKey, hostLabels, closeDetail });
 
@@ -623,6 +724,9 @@ onUnmounted(() => {
       @project-menu="openProjectMenu"
       @open-tab="openTab"
       @refresh-usage="loadUsage(true)"
+      @open-command-center="commandCenterOpen = true"
+      @add-project="addProjectOpen = true"
+      @open-archived="archivedOpen = true"
     >
       <div
         class="sidebar-resize"
@@ -664,6 +768,7 @@ onUnmounted(() => {
         @signed-out="signOut('user')"
         @totp-changed="(on) => authInfo && (authInfo.totp = on)"
         @dictation-changed="(on) => (dictationReady = on)"
+        @suggestions-changed="(on) => (suggestionsReady = on)"
       />
 
       <!-- Hosts -->
@@ -704,6 +809,7 @@ onUnmounted(() => {
           @select-agent="(key) => (selectedKey = key)"
           @subagents="openedSubagent = null; togglePanel('subagents')"
           @menu="openHeaderMenu"
+          @new-agent="startNewAgentInWorkspace"
         />
         <TerminalPanel
           v-if="terminalOpen"
@@ -740,8 +846,10 @@ onUnmounted(() => {
             :host-label="hostLabels.get(active.hostId) ?? ''"
             :settled="markdownSettled"
             :footer-model="footerModel"
+            :suggestions-ready="suggestionsReady"
             @error="(message) => (error = message)"
             @subagents="(key, list) => key === active?.key && (providerSubagents = list)"
+            @background-work="(key, list) => key === active?.key && (backgroundWork = list)"
             @ready="(key) => key === active?.key && (readyKey = key)"
             @timeline-click="onTimelineClick"
             @unauthorized="signOut('ended')"
@@ -750,12 +858,14 @@ onUnmounted(() => {
         </KeepAlive>
 
         <ComposerDock
+          ref="composerDock"
           v-show="!activeFile && !terminalActive"
           :composer="composer"
           :agent="active"
           :api="api"
           :busy="busy"
           :host-connected="hostStates.get(active.hostId) === 'connected'"
+          :background-work="backgroundWork"
           @model="(label) => (footerModel = label)"
         />
       </section>
@@ -797,11 +907,13 @@ onUnmounted(() => {
       <!-- New session (draft conversation) -->
       <NewSession
         v-else-if="tab === 'chat' && newSession"
-        :key="(newSession.hostId ?? '') + '\n' + (newSession.project?.key ?? newSession.cwd ?? '')"
+        :key="(newSession.hostId ?? '') + '\n' + (newSession.workspaceId ?? newSession.project?.key ?? newSession.cwd ?? '')"
         :hosts="hosts"
         :initial-host-id="newSession.hostId"
         :initial-cwd="newSession.cwd"
         :initial-project="newSession.project"
+        :workspace-id="newSession.workspaceId ?? null"
+        :workspace-name="newSession.workspaceName ?? null"
         :dictation-ready="dictationReady"
         :request="api"
         @close="closeNewSession"
@@ -865,6 +977,36 @@ onUnmounted(() => {
     />
     <ImagePreview v-if="lightbox" :src="lightbox" @close="lightbox = null" />
     <RenameThread v-if="renaming" :thread="renaming" :busy="busy" @close="renaming = null" @save="renameThread" />
+    <CommandCenter
+      v-if="commandCenterOpen"
+      :workspaces="allWorkspaces"
+      :hosts="hosts"
+      :active-agent="active"
+      :actions="commandActions"
+      :api="api"
+      @close="commandCenterOpen = false"
+      @select-workspace="select"
+      @open-file="openFile"
+      @restore-archived="restoreArchivedWorkspace"
+    />
+    <ArchivedWorkspaces
+      v-if="archivedOpen"
+      :hosts="hosts"
+      :api="api"
+      @close="archivedOpen = false"
+    />
+    <AddProjectDialog
+      v-if="addProjectOpen"
+      :hosts="hosts"
+      :initial-host-id="hostFilter ?? active?.hostId ?? null"
+      :api="api"
+      @close="addProjectOpen = false"
+    />
+    <div v-if="archiveUndo" class="undo-toast" role="status" aria-live="polite">
+      <span>Archived “{{ archiveUndo.name }}”</span>
+      <button type="button" class="btn btn-sm btn-primary" @click="undoArchive">Undo</button>
+      <button type="button" class="icon-btn" aria-label="Dismiss" @click="dismissArchiveUndo"><Icon name="close" :size="13" /></button>
+    </div>
   </div>
   <ConfirmDialog v-if="confirmRequest" :key="confirmRequest.id" :request="confirmRequest" />
 </template>

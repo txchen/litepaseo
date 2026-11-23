@@ -7,6 +7,8 @@ import { MAX_IMAGE_BYTES, imageMime, imageReadTarget, isLocalConnection, isMater
 import { eventStream } from "./sse.ts";
 import { errorMessage, hostPath, type App, type RouteContext } from "./route-context.ts";
 import type {
+  AgentBackgroundWorkItem,
+  BackgroundWorkMessage,
   PromptIndex,
   SubagentsMessage,
   TimelineItem,
@@ -77,9 +79,22 @@ export function registerTimelineRoutes(app: App, { store, hosts, streamValidity,
       } catch {
         // A host without provider subagent support: the conversation still streams.
       }
+      let sentBg = "";
+      let stopBg = () => {};
+      try {
+        stopBg = hosts.watchBackgroundWork(hostId, agentId, (items) => {
+          const text = JSON.stringify(items);
+          if (text === sentBg) return;
+          sentBg = text;
+          send({ type: "background-work", items } satisfies BackgroundWorkMessage);
+        });
+      } catch {
+        // Older host without background work support.
+      }
       return () => {
         stop();
         stopSubagents();
+        stopBg();
       };
     }, streamValidity(c), encodingOf(c));
   });
@@ -104,9 +119,32 @@ export function registerTimelineRoutes(app: App, { store, hosts, streamValidity,
         timestamp: e.timestamp,
         provider: e.provider,
         ...(e.turnId ? { turnId: e.turnId } : {}),
+        ...(e.turnMetrics?.length ? { turnMetrics: e.turnMetrics } : {}),
         item: withMessageImages(store, hostId, agentId, e.item as TimelineItem),
       })),
     } satisfies TimelinePage);
+  });
+
+  // ---- Background work & heartbeats ------------------------------------------------------------
+  app.post("/api/hosts/:host/agents/:agent/background-work/stop", async (c) => {
+    const hostId = c.req.param("host"), agentId = c.req.param("agent");
+    const item = z
+      .object({
+        id: z.string().min(1).max(300),
+        kind: z.string().min(1).max(100),
+        description: z.string().nullable().default(null),
+        command: z.string().optional(),
+        startedAt: z.string().min(1).max(100),
+        canStop: z.boolean().optional(),
+        stopToken: z.string().optional(),
+      })
+      .parse(await c.req.json()) satisfies AgentBackgroundWorkItem;
+    try {
+      await hosts.stopBackgroundWork(hostId, agentId, item);
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not stop background work.") }, 502);
+    }
   });
 
   // ---- Provider subagents: read-only conversations, live like an agent's -----------------------

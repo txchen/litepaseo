@@ -10,6 +10,20 @@ export interface UsageWindow {
   shortLabel: string | null;
   remainingPct: number | null;
   resetsAt: string | null;
+  durationSeconds?: number | null;
+  runsOutAt?: string | null;
+  shortfallPct?: number | null;
+  summary?: boolean;
+  tone: string | null;
+}
+export interface UsageBalance {
+  id: string;
+  label: string;
+  used: number | null;
+  remaining: number | null;
+  limit: number | null;
+  unit: "usd" | "credits" | "requests" | "tokens";
+  resetsAt: string | null;
   tone: string | null;
 }
 export interface UsageAccount {
@@ -22,6 +36,7 @@ export interface UsageAccount {
   status: string;
   error: string | null;
   windows: UsageWindow[];
+  balances?: UsageBalance[];
   hosts: string[];
 }
 export interface UsageReport {
@@ -75,10 +90,30 @@ export class UsageService {
                 ? Math.max(0, 100 - w.usedPct)
                 : null,
           resetsAt: w.resetsAt ?? null,
+          ...(typeof w.durationSeconds === "number" ? { durationSeconds: w.durationSeconds } : {}),
+          ...(typeof w.runsOutAt === "string" ? { runsOutAt: w.runsOutAt } : {}),
+          ...(typeof w.shortfallPct === "number" ? { shortfallPct: w.shortfallPct } : {}),
+          ...(typeof w.summary === "boolean" ? { summary: w.summary } : {}),
           tone: w.tone ?? null,
         }));
-        if (!windows.length && p.status === "unavailable") continue; // provider not signed in there
-        const key = [p.providerId, p.planLabel ?? "", p.sourceLabel ?? "", ...windows.map((w) => `${w.id}@${w.resetsAt ?? ""}`)].join("|");
+        const balances: UsageBalance[] = (p.balances ?? []).map((b: any) => ({
+          id: String(b.id),
+          label: String(b.label),
+          used: typeof b.used === "number" ? b.used : null,
+          remaining: typeof b.remaining === "number" ? b.remaining : null,
+          limit: typeof b.limit === "number" ? b.limit : null,
+          unit: (b.unit === "usd" || b.unit === "credits" || b.unit === "requests" || b.unit === "tokens") ? b.unit : "credits",
+          resetsAt: b.resetsAt ?? null,
+          tone: b.tone ?? null,
+        }));
+        if (!windows.length && !balances.length && p.status === "unavailable") continue; // provider not signed in there
+        const key = [
+          p.providerId,
+          p.planLabel ?? "",
+          p.sourceLabel ?? "",
+          ...windows.map((w) => `${w.id}@${w.resetsAt ?? ""}`),
+          ...balances.map((b) => `b:${b.id}@${b.resetsAt ?? ""}`),
+        ].join("|");
         const existing = accounts.get(key);
         if (existing) existing.hosts.push(label);
         else
@@ -91,6 +126,7 @@ export class UsageService {
             status: String(p.status),
             error: p.error ?? null,
             windows,
+            ...(balances.length ? { balances } : {}),
             hosts: [label],
           });
       }

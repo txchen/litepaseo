@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { AgentSummary, WorkspaceSummary } from "../shared/wire.ts";
 import Icon from "./Icon.vue";
 import type { WorkspaceTabs } from "./use-workspace-tabs.ts";
@@ -30,7 +30,9 @@ const emit = defineEmits<{
   selectAgent: [key: string];
   subagents: [];
   menu: [event: MouseEvent];
+  newAgent: [];
 }>();
+const statsOpen = ref(false);
 const { panel, togglePanel, terminalOpen, terminalActive, openTerminal, closeTerminal, showConversation, openFiles, activeFile, closeFile } = props.tabs;
 
 const project = computed(() => {
@@ -67,6 +69,23 @@ function showAgent(key: string) {
       <Icon name="back" :size="12" /><span>{{ parent.title || "Parent agent" }}</span>
     </button>
     <span class="grow"></span>
+    <div v-if="agent.sessionMetrics?.length" class="session-stats-wrap">
+      <button
+        type="button"
+        class="chat-chip session-stats-chip"
+        :aria-expanded="statsOpen"
+        :title="agent.sessionMetrics.map((m) => m.label + ': ' + m.value).join(' · ')"
+        @click="statsOpen = !statsOpen"
+      >
+        <Icon name="gauge" :size="13" /><span>{{ agent.sessionMetrics.slice(0, 2).map((m) => m.value).join(" · ") }}</span>
+      </button>
+      <div v-if="statsOpen" class="session-stats-popover" role="region" aria-label="Session stats">
+        <div v-for="(m, i) in agent.sessionMetrics" :key="i" class="turn-metric" :class="m.tone && 'is-' + m.tone">
+          <span class="turn-metric-label">{{ m.label }}</span>
+          <span class="turn-metric-value">{{ m.value }}</span>
+        </div>
+      </div>
+    </div>
     <button
       v-if="subagents"
       class="chat-chip chat-subagents"
@@ -119,6 +138,15 @@ function showAgent(key: string) {
       <Icon name="terminal" :size="16" />
     </button>
     <button
+      v-if="agent.workspaceId"
+      class="icon-btn head-tool"
+      aria-label="New agent in this workspace"
+      title="New agent in this workspace"
+      @click="emit('newAgent')"
+    >
+      <Icon name="plus" :size="16" />
+    </button>
+    <button
       v-if="thread"
       class="icon-btn head-tool"
       aria-label="Thread actions"
@@ -152,6 +180,16 @@ function showAgent(key: string) {
       </button>
       <button type="button" class="tab-close" :aria-label="'Close ' + f" :title="'Close ' + f" @click="closeFile(f)"><Icon name="close" :size="11" /></button>
     </div>
+    <button
+      v-if="agent.workspaceId"
+      type="button"
+      class="agent-tab-add"
+      title="New agent in this workspace"
+      aria-label="New agent in this workspace"
+      @click="emit('newAgent')"
+    >
+      <Icon name="plus" :size="13" />
+    </button>
     <div v-if="terminalOpen" class="file-tab" :class="{ chosen: terminalActive }">
       <button type="button" class="file-tab-open" :aria-current="terminalActive ? 'page' : undefined" @click="openTerminal()">
         <Icon name="terminal" :size="13" /><span class="agent-tab-name">Terminal</span>

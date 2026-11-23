@@ -7,7 +7,7 @@ import {
   AgentSkillSelectionSchema,
 } from "@getpaseo/protocol/messages";
 import type { Hosts } from "./hosts.ts";
-import type { HostProviderInfo } from "../shared/wire.ts";
+import type { HostProviderInfo, ProviderInstallationInfo, ProviderUpdateCheckResult, ProviderUpdateResult } from "../shared/wire.ts";
 
 // A deliberately bounded projection: never return daemon credentials or environment overrides.
 export const SETTINGS_KEYS = [
@@ -80,6 +80,7 @@ export function projectProviderEntry(entry: any): HostProviderInfo {
     id: entry.provider,
     label: entry.label ?? entry.provider,
     ...(entry.description ? { description: entry.description } : {}),
+    ...(typeof entry.docsUrl === "string" && /^https?:\/\//.test(entry.docsUrl) ? { docsUrl: entry.docsUrl } : {}),
     source: entry.source === "custom" ? "custom" : "builtin",
     enabled: entry.enabled !== false,
     status: entry.status,
@@ -288,6 +289,73 @@ export function registerHostSettings<E extends Env>(app: Hono<E>, hosts: Hosts) 
     return c.json(
       await hosts.get(c.req.param("host")).driver.getProviderDiagnostic(c.req.param("provider")),
     );
+  });
+  app.get("/api/hosts/:host/settings/providers/:provider/installation", async (c) => {
+    const driver = hosts.get(c.req.param("host")).driver;
+    const provider = c.req.param("provider");
+    const refresh = c.req.query("refresh") === "1";
+    const features = driver.getLastServerInfoMessage()?.features as Record<string, unknown> | undefined;
+    if (features?.providerInstallation !== true || typeof driver.inspectProviderInstallation !== "function") {
+      return c.json({
+        provider,
+        installedVersion: null,
+        canCheckUpdates: false,
+        canUpdate: false,
+      } satisfies ProviderInstallationInfo);
+    }
+    const res = await driver.inspectProviderInstallation(provider as never, { refresh });
+    if (res.error) return c.json({ error: res.error }, 502);
+    const inst = res.installation;
+    const insp = inst?.inspection;
+    return c.json({
+      provider,
+      installedVersion: insp?.status === "installed" ? (insp.version ?? null) : null,
+      installUrl: inst?.installUrl ?? null,
+      docsUrl: inst?.updateUrl ?? null,
+      canCheckUpdates: !!inst,
+      canUpdate: inst?.canUpdate === true,
+      status: insp?.status,
+      error: insp?.status === "error" ? insp.message : null,
+    } satisfies ProviderInstallationInfo);
+  });
+  app.post("/api/hosts/:host/settings/providers/:provider/check-updates", async (c) => {
+    const driver = hosts.get(c.req.param("host")).driver;
+    const provider = c.req.param("provider");
+    const features = driver.getLastServerInfoMessage()?.features as Record<string, unknown> | undefined;
+    if (features?.providerInstallation !== true || typeof driver.checkProviderUpdates !== "function") {
+      return c.json({ provider, status: "unsupported", message: "Host does not support provider update checks." } satisfies ProviderUpdateCheckResult);
+    }
+    const res = await driver.checkProviderUpdates(provider as never, { refresh: true });
+    if (res.error) return c.json({ error: res.error }, 502);
+    const check = res.updateCheck;
+    if (!check) return c.json({ provider, status: "unsupported" } satisfies ProviderUpdateCheckResult);
+    return c.json({
+      provider,
+      status: check.status,
+      ...("versions" in check && check.versions ? { versions: check.versions } : {}),
+      ...("message" in check && check.message ? { message: check.message } : {}),
+    } satisfies ProviderUpdateCheckResult);
+  });
+  app.post("/api/hosts/:host/settings/providers/:provider/update", async (c) => {
+    const driver = hosts.get(c.req.param("host")).driver;
+    const provider = c.req.param("provider");
+    const features = driver.getLastServerInfoMessage()?.features as Record<string, unknown> | undefined;
+    if (features?.providerInstallation !== true || typeof driver.updateProvider !== "function") {
+      return c.json({ error: "This host does not support updating providers." }, 409);
+    }
+    const res = await driver.updateProvider(provider as never);
+    if (res.error) return c.json({ error: res.error }, 502);
+    const op = res.update?.operation;
+    if (!op) return c.json({ error: "Provider did not start an update." }, 502);
+    return c.json({
+      provider,
+      status: op.status,
+      id: op.id,
+      startedAt: op.startedAt,
+      ...("finishedAt" in op ? { finishedAt: op.finishedAt } : {}),
+      ...("message" in op && op.message ? { message: op.message } : {}),
+      ...(res.update?.output ? { output: res.update.output } : {}),
+    } satisfies ProviderUpdateResult);
   });
   app.get("/api/hosts/:host/skills", async (c) =>
     c.json(await hosts.get(c.req.param("host")).driver.getAgentSkillsStatus()),

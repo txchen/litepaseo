@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onActivated, onDeactivated, onUnmounted, provide, ref, shallowRef, watch } from "vue";
 import { SUGGESTIONS } from "./suggestions.ts";
-import type { AgentSummary, PromptIndex, PromptMarker, ProviderSubagent, TimelineMessage, TimelinePage, TimelineRow, TimelineSnapshot, TimelineStreamMessage } from "../shared/wire.ts";
+import type { AgentBackgroundWorkItem, AgentSummary, PromptIndex, PromptMarker, ProviderSubagent, TimelineMessage, TimelinePage, TimelineRow, TimelineSnapshot, TimelineStreamMessage } from "../shared/wire.ts";
 import { TimelineStore, type RowRef } from "./timeline-store.ts";
 import { PAGE_STEP, pageHistory, RENDER_WINDOW } from "./timeline-window.ts";
 import { openStream } from "./event-stream.ts";
@@ -12,6 +12,7 @@ import TimelineRowView from "./TimelineRowView.vue";
 import ChatOutline from "./ChatOutline.vue";
 import ProviderIcon from "./ProviderIcon.vue";
 import Icon from "./Icon.vue";
+import { prefs } from "./preferences.ts";
 
 /**
  * One agent's conversation: its live timeline stream, history paging in both directions, the
@@ -33,12 +34,15 @@ const props = defineProps<{
   settled: boolean;
   /** Model name for turn footers, as the composer chip names it. */
   footerModel: string;
+  /** Native LitePaseo next-message suggestion service is configured. */
+  suggestionsReady?: boolean;
 }>();
 const emit = defineEmits<{
   /** A failed history read or jump, for the app's error line. */
   error: [message: string];
   /** Both carry the agent key: a cached conversation's late event must not act for the open one. */
   subagents: [key: string, subagents: ProviderSubagent[]];
+  backgroundWork: [key: string, items: AgentBackgroundWorkItem[]];
   /** The first rows arrived (read marking waits for them). */
   ready: [key: string];
   /** A click in the timeline (images open full size, local links open in the app). */
@@ -53,6 +57,7 @@ const base = () => `/hosts/${encodeURIComponent(props.agent.hostId)}/agents/${en
 // Rows read this conversation's context, with its own subagents. Coming back to a cached
 // conversation brings an equal but new context object: replacing it would re-render every row.
 const subagents = shallowRef<ProviderSubagent[]>([]);
+const backgroundWork = shallowRef<AgentBackgroundWorkItem[]>([]);
 const context = shallowRef<TimelineContext>({ base: "", cwd: "" });
 const contextKey = (c: TimelineContext) => JSON.stringify([c.base, c.cwd, c.session, c.workspace, c.localHost, c.rewindModes]);
 watch(() => props.context, (value) => {
@@ -89,6 +94,84 @@ const visibleRows = computed(() => {
   s.membership.value;
   return s.rows.slice(-RENDER_WINDOW);
 });
+const turnsWithNativeMetrics = computed(() => {
+  const set = new Set<string>();
+  for (const r of visibleRows.value) {
+    if (r.row.value.turnId && r.row.value.turnMetrics?.length) set.add(r.row.value.turnId);
+  }
+  return set;
+});
+const displayRows = computed(() => {
+  const density = prefs.chatDensity;
+  const nativeTurns = turnsWithNativeMetrics.value;
+  return visibleRows.value.filter((r) => {
+    const row = r.row.value;
+    const item = row.item as Record<string, unknown>;
+    // Avoid duplicating legacy turn-speed plugin rows when native turnMetrics exist.
+    if (item.type === "plugin" && item.pluginId === "turn-speed" && row.turnId && nativeTurns.has(row.turnId)) return false;
+    if (density === "full") return true;
+    if (item.type === "user_message" || item.type === "assistant_message" || item.type === "error" || item.type === "notification" || item.type === "compaction") return true;
+    if (item.type === "tool_call" && (item.status === "failed" || item.status === "running")) return true;
+    if (density === "collapse-tools" && (item.type === "todo" || item.type === "plugin")) return true;
+    return false;
+  });
+});
+const openMetrics = ref<number | null>(null);
+
+// ---- Native next-message suggestion (no daemon plugin required) ------------------------------
+const RISKY_SUGGESTION = /[`$|<>]|(^|\s)[.~]?\/[\w.-]|https?:|www\.|\b(rm|sudo|delete|drop|remove|reset|force|push|deploy|publish|release|merge|token|password|passwd|secret|credential|api[ _-]?key|ssh)\b|删除|推送|部署|发布|密码|密钥|令牌/i;
+const nativeSuggestion = ref<{ seqEnd: number; status: "loading" | "ready"; text: string } | null>(null);
+const nativeSuggestionRisky = computed(() => !!nativeSuggestion.value?.text && RISKY_SUGGESTION.test(nativeSuggestion.value.text));
+let suggestionTimer: ReturnType<typeof setTimeout> | undefined;
+let suggestionRequestedSeq = -1;
+
+const suggestionTarget = computed(() => {
+  if (!props.suggestionsReady || !props.settled || historyRows.value || !store.value.ready) return null;
+  const rows = visibleRows.value.map((r) => r.row.value);
+  if (!rows.length) return null;
+  // Skip if the legacy next-input daemon plugin already appended a suggestion row at the tail.
+  const tail = rows.slice(-3);
+  if (tail.some((r) => r.item.type === "plugin" && (r.item as Record<string, unknown>).pluginId === "next-input")) return null;
+  const lastMsg = [...rows].reverse().find((r) => r.item.type === "assistant_message" || r.item.type === "user_message");
+  if (!lastMsg || lastMsg.item.type !== "assistant_message" || !String(lastMsg.item.text ?? "").trim()) return null;
+  const messages: { role: "user" | "assistant"; text: string }[] = [];
+  for (const r of rows) {
+    if (r.item.type === "user_message" && String(r.item.text ?? "").trim()) messages.push({ role: "user", text: String(r.item.text) });
+    else if (r.item.type === "assistant_message" && String(r.item.text ?? "").trim()) messages.push({ role: "assistant", text: String(r.item.text) });
+  }
+  if (!messages.some((m) => m.role === "user")) return null;
+  return { seqEnd: lastMsg.seqEnd, seqStart: lastMsg.seqStart, messages: messages.slice(-12) };
+});
+
+watch(suggestionTarget, (target) => {
+  clearTimeout(suggestionTimer);
+  if (!target) {
+    nativeSuggestion.value = null;
+    return;
+  }
+  if (target.seqEnd === suggestionRequestedSeq) return;
+  nativeSuggestion.value = null;
+  const seqEnd = target.seqEnd;
+  const seqStart = target.seqStart;
+  const messages = target.messages;
+  suggestionTimer = setTimeout(async () => {
+    if (disposed || !inView || suggestionTarget.value?.seqEnd !== seqEnd) return;
+    suggestionRequestedSeq = seqEnd;
+    nativeSuggestion.value = { seqEnd, status: "loading", text: "" };
+    try {
+      const res = await props.api(base() + "/next-suggestion", "POST", { lastSeqEnd: seqEnd, messages }, 20_000);
+      if (disposed || suggestionTarget.value?.seqEnd !== seqEnd) return;
+      if (res?.status === "ready" && typeof res.text === "string" && res.text.trim()) {
+        nativeSuggestion.value = { seqEnd, status: "ready", text: res.text.trim() };
+        emit("suggestion", props.agent.key, seqStart, res.text.trim());
+      } else {
+        nativeSuggestion.value = null;
+      }
+    } catch {
+      if (!disposed && nativeSuggestion.value?.seqEnd === seqEnd) nativeSuggestion.value = null;
+    }
+  }, 600);
+}, { immediate: true });
 // Finished turns get a footer (copy, completion time, duration), as in Paseo. Recomputed per
 // timeline flush over the rendered window only (≤ RENDER_WINDOW rows).
 const turnMeta = computed(() => {
@@ -226,6 +309,11 @@ function receive(data: unknown) {
   if (message.type === "subagents") {
     subagents.value = message.subagents;
     if (inView) emit("subagents", props.agent.key, message.subagents);
+    return;
+  }
+  if (message.type === "background-work") {
+    backgroundWork.value = message.items;
+    if (inView) emit("backgroundWork", props.agent.key, message.items);
     return;
   }
   const ops = (data as TimelineMessage).ops;
@@ -663,6 +751,7 @@ onDeactivated(() => {
   stream?.close();
   stream = null;
   clearTimeout(elapsedTimer);
+  clearTimeout(suggestionTimer);
   cancelAnimationFrame(activeFrame);
   activeFrame = 0;
   pagingIntent = null;
@@ -676,6 +765,7 @@ onActivated(() => {
   }
   if (store.value.ready) emit("ready", props.agent.key);
   if (subagents.value.length) emit("subagents", props.agent.key, subagents.value);
+  emit("backgroundWork", props.agent.key, backgroundWork.value);
   // Still opening: the first rows connect the stream when they land.
   if (!loadingLatest) stream = connect();
   syncElapsedClock();
@@ -689,6 +779,7 @@ onUnmounted(() => {
   stream?.close();
   clearTimeout(elapsedTimer);
   clearTimeout(copiedTimer);
+  clearTimeout(suggestionTimer);
   cancelAnimationFrame(activeFrame);
   document.removeEventListener("visibilitychange", syncElapsedClock);
 });
@@ -711,7 +802,7 @@ defineExpose({
           <button v-else class="btn btn-ghost" @click="moveHistory('before')">Show earlier messages</button>
         </div>
         <p v-if="timelineNotice" class="notice"><Icon name="alert" :size="14" />{{ timelineNotice }}</p>
-        <template v-for="r in visibleRows" :key="`${store.epoch}:${r.seqStart}`">
+        <template v-for="r in displayRows" :key="`${store.epoch}:${r.seqStart}`">
           <TimelineRowView :entry="r.row" :final="r.seqStart !== lastTimelineSeq || settled" :data-seq-start="r.seqStart" />
           <div v-if="turnMeta.get(r.seqStart)" class="turn-footer">
             <button
@@ -731,11 +822,43 @@ defineExpose({
             <span v-if="turnMeta.get(r.seqStart)!.took" class="turn-item" :title="'Worked for ' + turnMeta.get(r.seqStart)!.took">
               <Icon name="hourglass" :size="14" />{{ turnMeta.get(r.seqStart)!.took }}
             </span>
+            <button
+              v-if="r.row.value.turnMetrics?.length"
+              type="button"
+              class="turn-item turn-stats-btn"
+              :aria-expanded="openMetrics === r.seqStart"
+              :title="r.row.value.turnMetrics.map((m) => m.label + ': ' + m.value).join(' · ')"
+              @click="openMetrics = openMetrics === r.seqStart ? null : r.seqStart"
+            >
+              <Icon name="gauge" :size="13" />{{ r.row.value.turnMetrics.slice(0, 2).map((m) => m.value).join(" · ") }}
+            </button>
+          </div>
+          <div v-if="r.row.value.turnMetrics?.length && openMetrics === r.seqStart" class="turn-metrics-card" role="region" aria-label="Turn stats">
+            <div v-for="(m, mi) in r.row.value.turnMetrics" :key="mi" class="turn-metric" :class="m.tone && 'is-' + m.tone">
+              <span class="turn-metric-label">{{ m.label }}</span>
+              <span class="turn-metric-value">{{ m.value }}</span>
+            </div>
           </div>
         </template>
         <div v-if="historyRows" class="older">
           <span v-if="paging === 'after'" class="older-loading" role="status"><span class="spinner"></span>Loading newer messages…</span>
           <button v-else class="btn btn-ghost" @click="showLatest">Back to latest</button>
+        </div>
+        <div v-if="nativeSuggestion && !working" class="row row-suggestion" :class="'is-' + nativeSuggestion.status">
+          <template v-if="nativeSuggestion.status === 'loading'">
+            <span class="spinner spinner-sm"></span><span class="suggestion-wait">Thinking of a next message…</span>
+          </template>
+          <template v-else>
+            <button class="suggestion-text" title="Put in the message box to edit (or press Tab)" @click="suggestions?.use(nativeSuggestion.text)">{{ nativeSuggestion.text }}</button>
+            <span class="suggestion-actions">
+              <button class="icon-btn" title="Edit in the message box" aria-label="Edit suggestion" @click="suggestions?.use(nativeSuggestion.text)">
+                <Icon name="edit" :size="14" />
+              </button>
+              <button v-if="!nativeSuggestionRisky" class="icon-btn" title="Send this message" aria-label="Send suggestion" @click="suggestions?.send(nativeSuggestion.text)">
+                <Icon name="send" :size="14" />
+              </button>
+            </span>
+          </template>
         </div>
         <div v-if="working" class="timeline-working" role="status" aria-label="Agent is working">
           <span
@@ -751,6 +874,6 @@ defineExpose({
         </div>
       </div>
     </div>
-    <ChatOutline v-if="outlinePrompts.length >= 2 && canHoverOutline" :prompts="outlinePrompts" :active-seq="activePromptSeq" @jump="jumpToPrompt" />
+    <ChatOutline v-if="prefs.showChatOutline && outlinePrompts.length >= 2 && canHoverOutline" :prompts="outlinePrompts" :active-seq="activePromptSeq" @jump="jumpToPrompt" />
   </div>
 </template>

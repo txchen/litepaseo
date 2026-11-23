@@ -1,14 +1,16 @@
 import { z } from "zod";
 import { AgentPermissionResponseSchema } from "@getpaseo/protocol/messages";
 import { UnknownHostError } from "./hosts.ts";
-import { type App, type RouteContext } from "./route-context.ts";
+import { errorMessage, hostPath, type App, type RouteContext } from "./route-context.ts";
 import type {
   AgentConfigChange,
   AgentConfigOptions,
   AgentFeatureOption,
+  CheckoutWorktreeOption,
   CreateSessionRequest,
   ProjectOption,
   ProviderOption,
+  SlashCommandOption,
 } from "../shared/wire.ts";
 
 /** Starting sessions, the composer's model/mode/feature switches, and controlling an agent. */
@@ -70,10 +72,11 @@ export function registerAgentRoutes(app: App, { hosts }: RouteContext) {
         featureValues: z.record(z.string(), z.unknown()).optional(),
         prompt: z.string().max(100000).optional(),
         worktreeBranch: z.string().trim().min(1).max(200).optional(),
+        workspaceId: z.string().trim().min(1).max(200).optional(),
       })
       .parse(await c.req.json()) satisfies CreateSessionRequest;
     const hostId = c.req.param("host");
-    const { api } = hosts.get(hostId);
+    const { api, driver } = hosts.get(hostId);
     try {
       let model = input.model;
       if (!model) {
@@ -83,18 +86,30 @@ export function registerAgentRoutes(app: App, { hosts }: RouteContext) {
         model = models.find((m) => m.isDefault)?.id ?? models[0]?.id;
         if (!model) return c.json({ error: "No selectable model is available for this provider. Refresh providers and select a model." }, 400);
       }
-      const agent = await api.agents.create({
-        idempotencyKey: input.idempotencyKey,
-        cwd: input.cwd,
-        config: {
-          provider: `${input.provider}/${model}`,
-          ...(input.featureValues ? { featureValues: input.featureValues } : {}),
-          ...(input.modeId ? { modeId: input.modeId } : {}),
-          ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
-        },
-        ...(input.prompt?.trim() ? { prompt: input.prompt } : {}),
-        ...(input.worktreeBranch ? { worktree: { mode: "branch-off" as const, newBranch: input.worktreeBranch } } : {}),
-      });
+      const agent = input.workspaceId
+        ? await driver.createAgent({
+            idempotencyKey: input.idempotencyKey,
+            workspaceId: input.workspaceId,
+            cwd: input.cwd,
+            provider: input.provider as never,
+            model,
+            ...(input.featureValues ? { featureValues: input.featureValues } : {}),
+            ...(input.modeId ? { modeId: input.modeId } : {}),
+            ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
+            ...(input.prompt?.trim() ? { initialPrompt: input.prompt } : {}),
+          })
+        : await api.agents.create({
+            idempotencyKey: input.idempotencyKey,
+            cwd: input.cwd,
+            config: {
+              provider: `${input.provider}/${model}`,
+              ...(input.featureValues ? { featureValues: input.featureValues } : {}),
+              ...(input.modeId ? { modeId: input.modeId } : {}),
+              ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
+            },
+            ...(input.prompt?.trim() ? { prompt: input.prompt } : {}),
+            ...(input.worktreeBranch ? { worktree: { mode: "branch-off" as const, newBranch: input.worktreeBranch } } : {}),
+          });
       return c.json({ id: agent.id, key: `${hostId}:${agent.id}` }, 201);
     } catch (error) {
       return c.json(
@@ -105,6 +120,75 @@ export function registerAgentRoutes(app: App, { hosts }: RouteContext) {
         },
         502,
       );
+    }
+  });
+
+  // ---- Slash commands & skills for `/` autocomplete --------------------------------------------
+  const mapCommands = (commands: { name: string; description?: string; argumentHint?: string; kind?: string }[]): SlashCommandOption[] =>
+    commands.map((cmd) => ({
+      name: cmd.name,
+      description: cmd.description ?? "",
+      argumentHint: cmd.argumentHint ?? "",
+      kind: cmd.kind === "skill" ? "skill" : "command",
+    }));
+
+  app.get("/api/hosts/:host/agents/:agent/commands", async (c) => {
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.listCommands !== "function") return c.json([] satisfies SlashCommandOption[]);
+    try {
+      const res = await driver.listCommands({ agentId: c.req.param("agent") });
+      return c.json(res.error ? [] : mapCommands(res.commands ?? []));
+    } catch {
+      return c.json([] satisfies SlashCommandOption[]);
+    }
+  });
+
+  app.post("/api/hosts/:host/commands", async (c) => {
+    const input = z
+      .object({
+        provider: z.string().trim().min(1).max(200),
+        cwd: hostPath,
+        model: z.string().trim().min(1).max(300).optional(),
+        modeId: z.string().trim().min(1).max(200).optional(),
+        thinkingOptionId: z.string().trim().min(1).max(200).optional(),
+      })
+      .parse(await c.req.json());
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.listCommands !== "function") return c.json([] satisfies SlashCommandOption[]);
+    try {
+      const res = await driver.listCommands({
+        agentId: "__draft__",
+        draftConfig: {
+          provider: input.provider as never,
+          cwd: input.cwd,
+          ...(input.model ? { model: input.model } : {}),
+          ...(input.modeId ? { modeId: input.modeId } : {}),
+          ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
+        },
+      });
+      return c.json(res.error ? [] : mapCommands(res.commands ?? []));
+    } catch {
+      return c.json([] satisfies SlashCommandOption[]);
+    }
+  });
+
+  // ---- Existing git worktrees for a repository -------------------------------------------------
+  app.get("/api/hosts/:host/worktrees", async (c) => {
+    const cwd = hostPath.parse(c.req.query("cwd"));
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.listCheckoutWorktrees !== "function") return c.json([] satisfies CheckoutWorktreeOption[]);
+    try {
+      const worktrees = await driver.listCheckoutWorktrees(cwd);
+      const out: CheckoutWorktreeOption[] = (worktrees ?? []).map((wt) => ({
+        path: wt.path,
+        branchName: wt.branchName ?? null,
+        head: wt.head ?? null,
+        createdAt: wt.createdAt,
+        containsCwd: wt.containsCwd === true,
+      }));
+      return c.json(out);
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not list worktrees") }, 502);
     }
   });
 

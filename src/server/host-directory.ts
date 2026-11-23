@@ -381,6 +381,9 @@ export function summarize(
     modeId: agent.currentModeId ?? null,
     contextUsed: agent.lastUsage?.contextWindowUsedTokens ?? null,
     contextMax: agent.lastUsage?.contextWindowMaxTokens ?? null,
+    ...(Array.isArray((agent as { sessionMetrics?: unknown }).sessionMetrics) && (agent as { sessionMetrics: unknown[] }).sessionMetrics.length
+      ? { sessionMetrics: (agent as { sessionMetrics: AgentSummary["sessionMetrics"] }).sessionMetrics }
+      : {}),
     rewind: rewindModes(agent.capabilities),
     ...(parentAgentId ? { parentAgentId } : {}),
   };

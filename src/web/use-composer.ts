@@ -2,6 +2,7 @@ import { computed, nextTick, onUnmounted, provide, reactive, ref, watch, type Re
 import type { AgentSummary, MessageDeliveryMode, Permission, ServerQueuedMessage as QueuedMessage } from "../shared/wire.ts";
 import { AttachmentStore, type LocalAttachment } from "./attachment-store.ts";
 import { ComposerStore } from "./composer-store.ts";
+import { prefs } from "./preferences.ts";
 import { openStream } from "./event-stream.ts";
 import { newId } from "./id.ts";
 import { localStorageOrNull, safeSetItem } from "./safe-storage.ts";
@@ -159,8 +160,10 @@ export function useComposer({ active, selectedKey, authenticated, api, action, b
   const running = computed(() => active.value?.status === "running");
   const deliveryModes = computed<MessageDeliveryMode[]>(() => active.value?.deliveryModes ?? ["queue", "interrupt"]);
   const deliveryMode = computed(() => deliveryModes.value.includes(behavior.value) ? behavior.value : "queue");
-  watch([() => active.value?.key, () => deliveryModes.value.includes("steer")], ([, canSteer]) => {
-    behavior.value = canSteer ? "steer" : "queue";
+  watch([() => active.value?.key, () => deliveryModes.value.includes("steer"), () => prefs.defaultDeliveryMode], ([, canSteer, pref]) => {
+    if (pref === "interrupt") behavior.value = "interrupt";
+    else if (pref === "queue") behavior.value = "queue";
+    else behavior.value = canSteer ? "steer" : "queue";
   }, { immediate: true });
 
   // ---- Next-input suggestions ---------------------------------------------------------------------

@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import Icon from "./Icon.vue";
 import { confirmAction } from "./confirm.ts";
 import { PALETTES, applyPalette, applyTheme, palette, theme } from "./theme.ts";
+import { prefs as uiPrefs } from "./preferences.ts";
 import {
   currentSubscription,
   disablePush,
@@ -21,7 +22,7 @@ const props = defineProps<{
   totpEnabled: boolean;
   instanceName: string;
 }>();
-const emit = defineEmits<{ instanceChanged: [name: string]; back: []; signedOut: []; totpChanged: [enabled: boolean]; dictationChanged: [configured: boolean] }>();
+const emit = defineEmits<{ instanceChanged: [name: string]; back: []; signedOut: []; totpChanged: [enabled: boolean]; dictationChanged: [configured: boolean]; suggestionsChanged: [configured: boolean] }>();
 
 const nameDraft = ref(props.instanceName);
 const nameBusy = ref(false), nameError = ref(""), nameSaved = ref(false);
@@ -83,6 +84,49 @@ function cancelVoice() {
   if (voice.value) showVoice(voice.value);
   voiceEditing.value = false;
   voiceError.value = "";
+}
+
+// ---- next message suggestions ---------------------------------------------------------------
+type SuggestionSettings = { configured: boolean; baseUrl: string; model: string; keyHint: string };
+const suggestion = ref<SuggestionSettings | null>(null);
+const suggestionForm = ref({ baseUrl: "", apiKey: "", model: "" });
+const suggestionEditing = ref(false);
+const suggestionBusy = ref(false);
+const suggestionError = ref("");
+const suggestionMessage = ref("");
+function showSuggestion(settings: SuggestionSettings) {
+  suggestion.value = settings;
+  suggestionForm.value = { baseUrl: settings.baseUrl, apiKey: "", model: settings.model };
+  emit("suggestionsChanged", settings.configured);
+}
+async function suggestionAction(fn: () => Promise<void>) {
+  suggestionBusy.value = true;
+  suggestionError.value = suggestionMessage.value = "";
+  try {
+    await fn();
+  } catch (e) {
+    suggestionError.value = (e as Error).message;
+  } finally {
+    suggestionBusy.value = false;
+  }
+}
+const saveSuggestion = () =>
+  suggestionAction(async () => {
+    const f = suggestionForm.value;
+    showSuggestion(await props.request("/next-suggestion", "PUT", { baseUrl: f.baseUrl, apiKey: f.apiKey, model: f.model }));
+    suggestionEditing.value = false;
+    suggestionMessage.value = "Saved. Next-message suggestions will appear after completed replies (Tab to accept).";
+  });
+const removeSuggestion = () =>
+  suggestionAction(async () => {
+    if (!(await confirmAction({ title: "Remove the suggestion service?", message: "Next-message suggestions turn off on every device.", confirmLabel: "Remove", danger: true }))) return;
+    showSuggestion(await props.request("/next-suggestion", "DELETE"));
+    suggestionEditing.value = false;
+  });
+function cancelSuggestion() {
+  if (suggestion.value) showSuggestion(suggestion.value);
+  suggestionEditing.value = false;
+  suggestionError.value = "";
 }
 
 // ---- notifications ---------------------------------------------------------------------------
@@ -211,6 +255,7 @@ onMounted(() => {
   void refreshPush().catch(() => {});
   void loadDevices().catch(() => {});
   void props.request("/dictation").then(showVoice).catch(() => {});
+  void props.request("/next-suggestion").then(showSuggestion).catch(() => {});
 });
 </script>
 
@@ -263,6 +308,57 @@ onMounted(() => {
             </div>
           </div>
         </div>
+      </div>
+
+      <h2 class="section-label">Reading &amp; Chat</h2>
+      <div class="card">
+        <div class="card-row">
+          <div class="grow"><div class="row-title">Content width</div><div class="row-sub">Resize conversations and composer to fit your screen.</div></div>
+          <div class="segmented segmented-sm" role="radiogroup" aria-label="Content width">
+            <button v-for="w in (['default', 'wide', 'full'] as const)" :key="w" type="button" role="radio" :aria-checked="uiPrefs.contentWidth === w" :class="{ chosen: uiPrefs.contentWidth === w }" @click="uiPrefs.contentWidth = w">
+              {{ w === 'default' ? 'Default' : w === 'wide' ? 'Wide' : 'Full' }}
+            </button>
+          </div>
+        </div>
+        <div class="card-row">
+          <div class="grow"><div class="row-title">Text size</div><div class="row-sub">Adjust conversation and code text size.</div></div>
+          <div class="segmented segmented-sm" role="radiogroup" aria-label="Text size">
+            <button v-for="s in (['small', 'default', 'large'] as const)" :key="s" type="button" role="radio" :aria-checked="uiPrefs.fontSize === s" :class="{ chosen: uiPrefs.fontSize === s }" @click="uiPrefs.fontSize = s">
+              {{ s === 'small' ? 'Small' : s === 'default' ? 'Default' : 'Large' }}
+            </button>
+          </div>
+        </div>
+        <div class="card-row">
+          <div class="grow"><div class="row-title">Send shortcut</div><div class="row-sub">Desktop keyboard shortcut to submit messages (touch keyboards keep Enter for new lines).</div></div>
+          <div class="segmented segmented-sm" role="radiogroup" aria-label="Send shortcut">
+            <button type="button" role="radio" :aria-checked="uiPrefs.sendShortcut === 'enter'" :class="{ chosen: uiPrefs.sendShortcut === 'enter' }" @click="uiPrefs.sendShortcut = 'enter'">Enter</button>
+            <button type="button" role="radio" :aria-checked="uiPrefs.sendShortcut === 'mod-enter'" :class="{ chosen: uiPrefs.sendShortcut === 'mod-enter' }" @click="uiPrefs.sendShortcut = 'mod-enter'">⌘/Ctrl+Enter</button>
+          </div>
+        </div>
+        <div class="card-row">
+          <div class="grow"><div class="row-title">Default delivery while running</div><div class="row-sub">Falls back to Queue when a provider does not support native steering.</div></div>
+          <div class="segmented segmented-sm" role="radiogroup" aria-label="Default delivery mode">
+            <button v-for="m in (['auto', 'steer', 'queue', 'interrupt'] as const)" :key="m" type="button" role="radio" :aria-checked="uiPrefs.defaultDeliveryMode === m" :class="{ chosen: uiPrefs.defaultDeliveryMode === m }" @click="uiPrefs.defaultDeliveryMode = m">
+              {{ m === 'auto' ? 'Auto' : m === 'steer' ? 'Steer' : m === 'queue' ? 'Queue' : 'Interrupt' }}
+            </button>
+          </div>
+        </div>
+        <div class="card-row">
+          <div class="grow"><div class="row-title">Chat detail</div><div class="row-sub">Show full timeline, hide non-failing tool rows, or show only prompts and final replies.</div></div>
+          <div class="segmented segmented-sm" role="radiogroup" aria-label="Chat detail">
+            <button type="button" role="radio" :aria-checked="uiPrefs.chatDensity === 'full'" :class="{ chosen: uiPrefs.chatDensity === 'full' }" @click="uiPrefs.chatDensity = 'full'">Full</button>
+            <button type="button" role="radio" :aria-checked="uiPrefs.chatDensity === 'collapse-tools'" :class="{ chosen: uiPrefs.chatDensity === 'collapse-tools' }" @click="uiPrefs.chatDensity = 'collapse-tools'">Compact</button>
+            <button type="button" role="radio" :aria-checked="uiPrefs.chatDensity === 'collapse-turns'" :class="{ chosen: uiPrefs.chatDensity === 'collapse-turns' }" @click="uiPrefs.chatDensity = 'collapse-turns'">Replies</button>
+          </div>
+        </div>
+        <label class="card-row toggle-row">
+          <div class="grow"><div class="row-title">Auto-expand thinking</div><div class="row-sub">Open reasoning blocks automatically as they appear.</div></div>
+          <input type="checkbox" v-model="uiPrefs.autoExpandReasoning" />
+        </label>
+        <label class="card-row toggle-row">
+          <div class="grow"><div class="row-title">Chat outline rail</div><div class="row-sub">Show the prompt jump rail on wide screens.</div></div>
+          <input type="checkbox" v-model="uiPrefs.showChatOutline" />
+        </label>
       </div>
 
       <h2 class="section-label">Notifications</h2>
@@ -361,6 +457,52 @@ onMounted(() => {
       </div>
       <p v-if="voiceMessage" class="setting-note" role="status">{{ voiceMessage }}</p>
       <p v-if="voiceError" class="setting-note is-error" role="alert">{{ voiceError }}</p>
+
+      <h2 class="section-label">Next message suggestions</h2>
+      <div class="card">
+        <div class="card-row">
+          <span class="setting-icon"><Icon name="sparkle" :size="16" /></span>
+          <div class="grow">
+            <div class="row-title">Prediction service</div>
+            <div class="row-sub">
+              <template v-if="suggestion?.configured">{{ suggestion.model }} · {{ suggestion.baseUrl.replace(/^https?:\/\//, "") }} · key {{ suggestion.keyHint }}</template>
+              <template v-else>Any OpenAI-compatible chat API. Predicts one editable next message after each reply without any daemon plugin.</template>
+            </div>
+          </div>
+          <button v-if="!suggestionEditing" class="btn btn-outline" :disabled="suggestionBusy || !suggestion" @click="suggestionEditing = true">
+            {{ suggestion?.configured ? "Edit" : "Configure" }}
+          </button>
+        </div>
+        <form v-if="suggestionEditing" class="card-row voice-form" @submit.prevent="saveSuggestion">
+          <label class="field"><span>Base URL</span>
+            <input v-model="suggestionForm.baseUrl" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false" />
+          </label>
+          <div class="field-grid">
+            <label class="field"><span>API key</span>
+              <input
+                v-model="suggestionForm.apiKey"
+                type="password"
+                autocomplete="off"
+                :placeholder="suggestion?.configured ? 'Unchanged (' + suggestion.keyHint + ')' : 'sk-…'"
+                :required="!suggestion?.configured"
+              />
+            </label>
+            <label class="field"><span>Model</span>
+              <input v-model="suggestionForm.model" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false" />
+            </label>
+          </div>
+          <p class="row-sub">
+            The key stays on this server; browsers never see it. Only the visible recent user and assistant messages of the open conversation are sent on demand (no tool outputs, reasoning, or attachments).
+          </p>
+          <div class="form-actions">
+            <button v-if="suggestion?.configured" type="button" class="btn btn-ghost voice-remove" :disabled="suggestionBusy" @click="removeSuggestion">Remove</button>
+            <button type="button" class="btn btn-ghost" :disabled="suggestionBusy" @click="cancelSuggestion">Cancel</button>
+            <button class="btn btn-primary" :disabled="suggestionBusy">Save</button>
+          </div>
+        </form>
+      </div>
+      <p v-if="suggestionMessage" class="setting-note" role="status">{{ suggestionMessage }}</p>
+      <p v-if="suggestionError" class="setting-note is-error" role="alert">{{ suggestionError }}</p>
 
       <h2 class="section-label">App</h2>
       <div class="card">

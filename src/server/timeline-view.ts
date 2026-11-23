@@ -9,6 +9,7 @@ interface FetchedEntry {
   timestamp: string;
   seqStart: number;
   seqEnd: number;
+  turnMetrics?: TimelineRow["turnMetrics"];
 }
 interface TimelinePayload {
   epoch: string;
@@ -428,11 +429,13 @@ export class TimelineView {
       provider: entry.provider,
       ...(entry.turnId ? { turnId: entry.turnId } : {}),
       item: entry.item,
+      ...(entry.turnMetrics?.length ? { turnMetrics: entry.turnMetrics } : {}),
     };
     const existing = this.bySeqStart.get(row.seqStart);
     if (existing) {
       Object.assign(existing, row);
       if (!row.turnId) delete existing.turnId;
+      if (!row.turnMetrics?.length) delete existing.turnMetrics;
       this.noteIdentity(existing);
       if (notify) this.mark(existing.seqStart, true);
       return;

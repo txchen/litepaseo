@@ -7,6 +7,7 @@ import { TIMELINE_CONTEXT, editDiff, formatMessageTimestamp, reasoningHeadline, 
 import Icon from "./Icon.vue";
 import PluginRow from "./PluginRow.vue";
 import RewindMenu from "./RewindMenu.vue";
+import { prefs } from "./preferences.ts";
 import type { RewindMode } from "../shared/wire.ts";
 
 // Receives the row's own ref: only this component re-renders when the row changes.
@@ -14,7 +15,7 @@ const props = defineProps<{ entry: ShallowRef<TimelineRow>; final: boolean }>();
 const context = inject(TIMELINE_CONTEXT, null);
 const row = computed(() => props.entry.value);
 const item = computed(() => row.value.item as Record<string, any>);
-const open = ref(false);
+const open = ref(item.value.type === "reasoning" && prefs.autoExpandReasoning);
 /** Large outputs are cut for display: a 2 MB log must not freeze the page when expanded. */
 const MAX_DETAIL = 20_000;
 const MAX_DIFF_LINES = 600;
@@ -145,7 +146,7 @@ async function copyMessage() {
     <div v-else class="prose" v-html="fallbackHtml"></div>
   </div>
 
-  <details v-else-if="item.type === 'reasoning'" class="row row-line row-reasoning" :class="{ 'is-static': !expandable }" @toggle="onToggle">
+  <details v-else-if="item.type === 'reasoning'" class="row row-line row-reasoning" :class="{ 'is-static': !expandable }" :open="open || undefined" @toggle="onToggle">
     <summary :tabindex="expandable ? undefined : -1" @pointerenter="measureHeadline" @focus="measureHeadline" @click="onReasoningClick">
       <span class="line-icon"><Icon name="bulb" :size="15" /></span>
       <span class="line-text">{{ headline || "Thinking" }}</span>

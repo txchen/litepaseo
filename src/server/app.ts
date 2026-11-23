@@ -29,6 +29,7 @@ import { registerTimelineRoutes } from "./timeline-routes.ts";
 import { registerMessageRoutes } from "./message-routes.ts";
 import { registerProjectRoutes } from "./project-routes.ts";
 import { registerDictationRoutes } from "./dictation-routes.ts";
+import { registerSuggestionRoutes } from "./suggestion-routes.ts";
 import { registerBoardRoutes } from "./board-routes.ts";
 import { registerWorkspaceRoutes } from "./workspace-routes.ts";
 
@@ -139,6 +140,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
   registerMessageRoutes(app, ctx);
   registerProjectRoutes(app, ctx);
   registerDictationRoutes(app, ctx, dictationStreams);
+  registerSuggestionRoutes(app, ctx);
   const stopHostSettings = registerHostSettings(app, hosts);
   registerWorkspaceRoutes(app, ctx);
   app.get("/api/usage", async (c) => c.json(await usage.report(c.req.query("refresh") === "1")));

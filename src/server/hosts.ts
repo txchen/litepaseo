@@ -8,7 +8,8 @@ import { VersionedCollection } from "./versioned-collection.ts";
 import { HostDirectory, HostWorkspaces, type DirectoryDriver, type ProjectUpdatePayload, type Transition } from "./host-directory.ts";
 import { TimelineView, type TimelineDriver, type TimelineResume } from "./timeline-view.ts";
 import { HostSubagents, type SubagentDriver } from "./subagents.ts";
-import type { ProviderSubagent } from "../shared/wire.ts";
+import { HostBackgroundWork, type BackgroundWorkDriver } from "./background-work.ts";
+import type { AgentBackgroundWorkItem, ProviderSubagent } from "../shared/wire.ts";
 import { HostLiveness, forceReconnect, type LivenessDriver } from "./host-liveness.ts";
 import { logEvent } from "./log-event.ts";
 
@@ -26,6 +27,7 @@ interface Client {
   directory: HostDirectory;
   workspaces: HostWorkspaces;
   subagents: HostSubagents;
+  backgroundWork: HostBackgroundWork;
   liveness?: HostLiveness;
   stopStatus: () => void;
   stopProjects?: () => void;
@@ -105,6 +107,7 @@ export class Hosts {
       if (state.status === "connected") {
         if (previous.error) logEvent("host_reconnected", { hostId, after: previous.error.code });
         this.diagnostics.set(hostId, { lastConnectedAt: new Date().toISOString() });
+        this.clients.get(hostId)?.backgroundWork.reconnect();
       }
       else if (state.status === "connecting") this.diagnostics.set(hostId, { ...previous, nextRetryAt: undefined, attempt: state.attempt });
       else if (state.status === "disconnected") {
@@ -117,13 +120,14 @@ export class Hosts {
     const stopStatus = driver.subscribeConnectionStatus(update);
     update(driver.getConnectionState());
     const subagents = new HostSubagents(driver as unknown as SubagentDriver);
+    const backgroundWork = new HostBackgroundWork(driver as unknown as BackgroundWorkDriver);
     const liveness = typeof (driver as unknown as Partial<LivenessDriver>).ping === "function"
       ? new HostLiveness(driver as unknown as LivenessDriver, hostId, () => forceReconnect(driver))
       : undefined;
     const stopProjects = typeof api.projects?.subscribe === "function"
       ? api.projects.subscribe((payload) => workspaces.onProjectUpdate(payload as ProjectUpdatePayload))
       : undefined;
-    this.clients.set(hostId, { driver, api, directory, workspaces, subagents, liveness, stopStatus, stopProjects });
+    this.clients.set(hostId, { driver, api, directory, workspaces, subagents, backgroundWork, liveness, stopStatus, stopProjects });
     directory.start();
     // Daemons that predate workspaces simply have none; agents still list.
     if ((driver as unknown as DirectoryDriver).observeWorkspaces) workspaces.start();
@@ -173,7 +177,7 @@ export class Hosts {
         c.stopStatus();
         c.stopProjects?.();
         const settled = [
-          ...(await Promise.allSettled([...releases, c.directory.dispose(), c.workspaces.dispose(), c.subagents.dispose()])),
+          ...(await Promise.allSettled([...releases, c.directory.dispose(), c.workspaces.dispose(), c.subagents.dispose(), c.backgroundWork?.dispose()])),
           ...(await Promise.allSettled([c.api.dispose()])),
           ...(await Promise.allSettled([c.driver.close()])),
         ];
@@ -223,6 +227,15 @@ export class Hosts {
   /** The provider subagents of one agent, as they change. */
   watchSubagents(hostId: string, agentId: string, listener: (subagents: ProviderSubagent[]) => void) {
     return this.get(hostId).subagents.watch(agentId, listener);
+  }
+
+  /** Background tasks and heartbeats of one agent, as they change. */
+  watchBackgroundWork(hostId: string, agentId: string, listener: (items: AgentBackgroundWorkItem[]) => void) {
+    return this.get(hostId).backgroundWork.watch(agentId, listener);
+  }
+
+  stopBackgroundWork(hostId: string, agentId: string, item: AgentBackgroundWorkItem) {
+    return this.get(hostId).backgroundWork.stop(agentId, item);
   }
 
   /**

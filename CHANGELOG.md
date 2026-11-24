@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.4
+
+- **Close individual agent session tabs in a workspace**:
+  - When a workspace has multiple active agent sessions, each agent tab now shows a close (`×`) button and supports middle-click to close (archive) that session without archiving the entire workspace.
+  - Always prompts for confirmation before closing (with an active-session warning when running or waiting for input); host history is preserved, and closing the active tab immediately switches to another session in the workspace.
+  - Add **Close current agent session** to the Command Center when multiple sessions are open in the workspace, and raise the per-workspace displayed agent tab cap from 12 to 50.
+
 ## 0.13.3
 
 - **Instant 0 ms send feedback (optimistic user messages)**:

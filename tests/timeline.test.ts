@@ -291,7 +291,7 @@ test("rewind without epoch change and >TAIL_LIMIT gaps trigger clean resets inst
   await view.dispose();
 });
 
-test("in-flight pull preserves pendingSettle on turn end, and wake(true) stops after one follow-up", async () => {
+test("in-flight pull preserves pendingSettle on turn end, and wake(true) fast-bursts then stops cleanly", async () => {
   const daemon = new ReferenceDaemon();
   daemon.append({ type: "user_message", text: "Go" }, "t1");
   daemon.append({ type: "assistant_message", text: "Working" }, "t1");
@@ -325,15 +325,33 @@ test("in-flight pull preserves pendingSettle on turn end, and wake(true) stops a
   await sleep(700);
   assert.deepEqual(store.rows[1]!.row.value.turnMetrics, metrics);
 
-  // wake(true) while idle does immediate + 1 follow-up at 500ms, then stays completely quiet.
-  const beforeWake = fetchCount;
+  // Fast burst while active: user submits a prompt and agent flips running before the daemon writes it.
+  // The fast burst picks up the new row at 300 ms (not 1500 ms), then drops back to 1500 ms cadence.
+  view.setActive(true);
+  await settle();
   view.wake(true);
   await settle();
-  assert.equal(fetchCount, beforeWake + 1);
-  await sleep(500);
-  assert.equal(fetchCount, beforeWake + 2);
+  daemon.append({ type: "user_message", text: "Fast prompt" }, "t2");
+  await sleep(300);
+  assert.equal(store.rows.at(-1)!.row.value.item.text, "Fast prompt");
+  const afterFastHit = fetchCount;
+  // Exited fast burst early: no pull 300 ms later, next steady pull is at 1500 ms.
+  await sleep(600);
+  assert.equal(fetchCount, afterFastHit, "fast burst exits immediately once new rows land");
+  await sleep(900);
+  assert.equal(fetchCount, afterFastHit + 1, "resumes steady 1500 ms cadence while active");
+
+  // wake(true) while idle bursts up to 6 fast follow-ups (300 ms each), then stops completely with zero leaks.
+  view.setActive(false);
+  await settle();
+  const beforeIdleWake = fetchCount;
+  view.wake(true);
+  await settle();
+  assert.equal(fetchCount, beforeIdleWake + 1);
+  for (let i = 0; i < 6; i++) await sleep(300);
+  assert.equal(fetchCount, beforeIdleWake + 7, "burst ran 6 bounded follow-up checks");
   await sleep(10_000);
-  assert.equal(fetchCount, beforeWake + 2, "no polling leaks after wake(true)");
+  assert.equal(fetchCount, beforeIdleWake + 7, "no polling leaks after fast burst expires");
   await view.dispose();
 });
 

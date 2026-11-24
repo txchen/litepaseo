@@ -3,6 +3,7 @@ import { computed, inject, nextTick, onActivated, onDeactivated, onUnmounted, pr
 import { SUGGESTIONS } from "./suggestions.ts";
 import type { AgentBackgroundWorkItem, AgentSummary, PromptIndex, PromptMarker, ProviderSubagent, TimelineMessage, TimelinePage, TimelineRow, TimelineSnapshot, TimelineStreamMessage } from "../shared/wire.ts";
 import { TimelineStore, type RowRef } from "./timeline-store.ts";
+import { findMatchedOptimisticIds, type OptimisticStore } from "./optimistic-messages.ts";
 import { PAGE_STEP, pageHistory, RENDER_WINDOW } from "./timeline-window.ts";
 import { openStream } from "./event-stream.ts";
 import { TIMELINE_CONTEXT, turnFooters, type TimelineContext } from "./timeline-display.ts";
@@ -36,6 +37,8 @@ const props = defineProps<{
   footerModel: string;
   /** Native LitePaseo next-message suggestion service is configured. */
   suggestionsReady?: boolean;
+  /** Optimistic user messages shown at 0 ms until daemon timeline rows replace them. */
+  optimistic?: OptimisticStore;
 }>();
 const emit = defineEmits<{
   /** A failed history read or jump, for the app's error line. */
@@ -94,6 +97,21 @@ const visibleRows = computed(() => {
   s.membership.value;
   return s.rows.slice(-RENDER_WINDOW);
 });
+/** Optimistic bubbles not yet represented in the daemon timeline (zero duplicate frames). */
+const pendingMessages = computed(() => {
+  if (historyRows.value || !props.optimistic) return [];
+  const list = props.optimistic.list(props.agent.key);
+  if (!list.length) return [];
+  const realRows = visibleRows.value.map((r) => r.row.value);
+  const matched = findMatchedOptimisticIds(list, realRows);
+  return matched.size ? list.filter((m) => !matched.has(m.messageId)) : list;
+});
+watch(
+  () => pendingMessages.value.length,
+  (len, prev) => {
+    if (len > (prev ?? 0) && inView) scrollToBottom();
+  },
+);
 const turnsWithNativeMetrics = computed(() => {
   const set = new Set<string>();
   for (const r of visibleRows.value) {
@@ -224,6 +242,7 @@ async function copyTurn(seqStart: number, messages: number[]) {
 
 // ---- Working indicator: a 1 s clock runs only while the agent works and the page is visible ----
 const working = computed(() => !historyRows.value && props.agent.state === "running");
+const waitingForReply = computed(() => !historyRows.value && pendingMessages.value.some((m) => m.status === "sent"));
 const clockNow = ref(Date.now());
 const turnStartedAt = computed(() => (working.value ? props.agent.turnStartedAt ?? null : null));
 const elapsed = computed(() => (turnStartedAt.value ? formatElapsed(clockNow.value - turnStartedAt.value) : ""));
@@ -341,6 +360,10 @@ function receive(data: unknown) {
   const epoch = s.epoch;
   const wasReady = s.ready;
   s.apply(ops);
+  if (props.optimistic) {
+    if (epoch && epoch !== s.epoch) props.optimistic.clearAgent(props.agent.key, true);
+    props.optimistic.reconcile(props.agent.key, s.rows.map((r) => r.row.value));
+  }
   // Rows that land while cached out of view report ready when the conversation comes back.
   if (!wasReady && s.ready && inView) emit("ready", props.agent.key);
   if (s.epoch && s.epoch !== promptEpoch) void loadPrompts(s);
@@ -804,6 +827,8 @@ defineExpose({
   showLatest,
   /** The conversation's epoch; a search result from another one cannot be jumped to. */
   epoch: () => store.value.epoch,
+  /** Highest known seqEnd in the live timeline, for optimistic fallback deduplication. */
+  latestSeqEnd: () => store.value.rows.at(-1)?.row.value.seqEnd ?? -1,
 });
 </script>
 
@@ -859,28 +884,6 @@ defineExpose({
               <Icon name="gauge" :size="13" />{{ turnMetricsSummary(r.row.value.turnMetrics) }}
             </button>
           </div>
-          <div v-else-if="r.row.value.turnMetrics?.length" class="turn-footer">
-            <button
-              type="button"
-              class="turn-item turn-stats-btn"
-              :aria-expanded="openMetrics === r.seqStart"
-              :title="r.row.value.turnMetrics.map((m) => m.label + ': ' + m.value).join(' · ')"
-              @click="openMetrics = openMetrics === r.seqStart ? null : r.seqStart"
-            >
-              <Icon name="gauge" :size="13" />{{ turnMetricsSummary(r.row.value.turnMetrics) }}
-            </button>
-          </div>
-          <div v-else-if="r.row.value.turnMetrics?.length" class="turn-footer">
-            <button
-              type="button"
-              class="turn-item turn-stats-btn"
-              :aria-expanded="openMetrics === r.seqStart"
-              :title="r.row.value.turnMetrics.map((m) => m.label + ': ' + m.value).join(' · ')"
-              @click="openMetrics = openMetrics === r.seqStart ? null : r.seqStart"
-            >
-              <Icon name="gauge" :size="13" />{{ turnMetricsSummary(r.row.value.turnMetrics) }}
-            </button>
-          </div>
           <div v-if="(turnMeta.get(r.seqStart)?.metrics ?? r.row.value.turnMetrics)?.length && openMetrics === r.seqStart" class="turn-metrics-card" role="region" aria-label="Turn stats">
             <div v-for="(m, mi) in (turnMeta.get(r.seqStart)?.metrics ?? r.row.value.turnMetrics)!" :key="mi" class="turn-metric" :class="m.tone && 'is-' + m.tone">
               <span class="turn-metric-label">{{ m.label }}</span>
@@ -888,11 +891,26 @@ defineExpose({
             </div>
           </div>
         </template>
+        <div v-for="m in pendingMessages" :key="'opt:' + m.messageId" class="row row-user row-optimistic" :class="{ 'is-sending': m.status === 'sending' }">
+          <div class="bubble" tabindex="-1">
+            <div v-if="m.images.length" class="user-images">
+              <img v-for="(url, index) in m.images" :key="url" :src="url" :alt="`Attached image ${index + 1}`" />
+            </div>
+            <div v-if="m.attachmentNames.length" class="optimistic-files">
+              <span v-for="(name, index) in m.attachmentNames" :key="index" class="optimistic-file">
+                <Icon name="file" :size="12" />{{ name }}
+              </span>
+            </div>{{ m.text }}
+          </div>
+          <div class="user-actions user-actions-status">
+            <span class="user-time">{{ m.status === "sending" ? "Sending…" : "Sent" }}</span>
+          </div>
+        </div>
         <div v-if="historyRows" class="older">
           <span v-if="paging === 'after'" class="older-loading" role="status"><span class="spinner"></span>Loading newer messages…</span>
           <button v-else class="btn btn-ghost" @click="showLatest">Back to latest</button>
         </div>
-        <div v-if="nativeSuggestion && !working" class="row row-suggestion" :class="'is-' + nativeSuggestion.status">
+        <div v-if="nativeSuggestion && !working && !pendingMessages.length" class="row row-suggestion" :class="'is-' + nativeSuggestion.status">
           <template v-if="nativeSuggestion.status === 'loading'">
             <span class="spinner spinner-sm"></span><span class="suggestion-wait">Thinking of a next message…</span>
           </template>
@@ -908,7 +926,7 @@ defineExpose({
             </span>
           </template>
         </div>
-        <div v-if="working" class="timeline-working" role="status" aria-label="Agent is working">
+        <div v-if="working || waitingForReply" class="timeline-working" role="status" aria-label="Agent is working">
           <span
             class="spinner spinner-ticked"
             :style="elapsed ? { transform: `rotate(${turnSeconds * 90}deg)` } : undefined"
@@ -916,7 +934,7 @@ defineExpose({
           <span v-if="elapsed" class="timeline-elapsed" aria-hidden="true">{{ elapsed }}</span>
           <span v-else>Working…</span>
         </div>
-        <div v-if="!visibleRows.length" class="timeline-empty">
+        <div v-if="!visibleRows.length && !pendingMessages.length" class="timeline-empty">
           <span v-if="!store.ready" class="spinner"></span>
           {{ store.ready ? "No messages yet." : timelineWait === "server" ? "Still connecting to LitePaseo…" : timelineWait === "network" ? "Connected, waiting for the network to deliver data…" : timelineWait === "loading" ? "Still loading this conversation…" : timelineWait === "host" ? `Waiting for ${hostLabel || "the host"} to load this conversation…` : "Loading conversation…" }}
         </div>

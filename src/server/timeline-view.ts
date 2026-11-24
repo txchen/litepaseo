@@ -39,6 +39,10 @@ const RESET_ROWS = 200;
 const MAX_JOINERS = 64;
 /** Low-frequency pull interval while an agent is actively running and watched. */
 const DEFAULT_POLL_MS = 1500;
+/** Short burst interval right after sending a message or rewind so the new row lands quickly. */
+const FAST_POLL_MS = 300;
+/** Max fast-burst follow-up polls (~1.8 s at 300 ms); exits early as soon as rows change. */
+const FAST_BURST_POLLS = 6;
 /** Retry delay when the initial load fails. */
 const RETRY_MS = 2000;
 /** One-shot follow-up delay after a turn ends if turnMetrics have not landed yet. */
@@ -133,7 +137,7 @@ export class TimelineView {
   private pollTimer?: ReturnType<typeof setTimeout>;
   private retryTimer?: ReturnType<typeof setTimeout>;
   private settleTimer?: ReturnType<typeof setTimeout>;
-  private followUpTimer?: ReturnType<typeof setTimeout>;
+  private fastPollsLeft = 0;
   private inFlight = false;
   private pendingPull = false;
   private pendingSettle = false;
@@ -147,12 +151,14 @@ export class TimelineView {
   private readonly agentId: string;
   private readonly report?: TimelineLoadReporter;
   private readonly pollMs: number;
+  private readonly fastPollMs: number;
 
   constructor(driver: TimelineDriver, agentId: string, report?: TimelineLoadReporter, pollMs = DEFAULT_POLL_MS) {
     this.driver = driver;
     this.agentId = agentId;
     this.report = report;
     this.pollMs = pollMs;
+    this.fastPollMs = Math.min(pollMs, FAST_POLL_MS);
   }
 
   get watcherCount() {
@@ -184,8 +190,10 @@ export class TimelineView {
         this.schedulePoll();
       }
     } else {
-      clearTimeout(this.pollTimer);
-      this.pollTimer = undefined;
+      if (!this.inFastBurst()) {
+        clearTimeout(this.pollTimer);
+        this.pollTimer = undefined;
+      }
       if (wasActive && this.state === "live") {
         void this.pull(false, true);
       }
@@ -194,22 +202,21 @@ export class TimelineView {
 
   /**
    * Requests an immediate pull (e.g. after a message send, rewind, reconnect, or state update).
-   * With `followUp = true`, schedules one short 500ms follow-up pull if idle so instant commands
-   * or newly written prompts are never missed without starting an unbounded polling loop.
+   * With `followUp = true`, opens a short fast-burst window (up to 2 s at 300 ms cadence) that
+   * runs regardless of `active` so a newly submitted user_message lands quickly instead of
+   * waiting for the 1.5 s steady-state poll, and exits early as soon as rows change.
    */
   wake(followUp = false) {
     if (this.state === "disposed") return;
+    if (followUp) {
+      this.fastPollsLeft = FAST_BURST_POLLS;
+      // Drop any slower steady-state timer so the fast cadence takes effect immediately.
+      clearTimeout(this.pollTimer);
+      this.pollTimer = undefined;
+    }
     if (this.state === "idle" || this.state === "failed") return this.start();
     if (this.state === "live") void this.pull(false);
     else this.pendingPull = true;
-    if (followUp) {
-      clearTimeout(this.followUpTimer);
-      this.followUpTimer = setTimeout(() => {
-        this.followUpTimer = undefined;
-        if (this.state === "live" && !this.active) void this.pull(false);
-      }, 500);
-      this.followUpTimer.unref?.();
-    }
   }
 
   /** Backwards-compatible alias for one-shot tail refresh. */
@@ -226,7 +233,7 @@ export class TimelineView {
       } else {
         watcher([this.resetOp()]);
       }
-      if (this.active) this.schedulePoll();
+      if (this.active || this.inFastBurst()) this.schedulePoll();
       else if (since && now() - this.lastPullAt >= RESUME_VERIFY_MS) this.wake();
     } else if (this.state === "loading" && this.joiners.length < MAX_JOINERS) {
       this.joiners.push(now());
@@ -243,22 +250,31 @@ export class TimelineView {
   dispose(): Promise<void> {
     this.state = "disposed";
     this.token++;
+    this.fastPollsLeft = 0;
     clearTimeout(this.pollTimer);
     clearTimeout(this.retryTimer);
     clearTimeout(this.settleTimer);
-    clearTimeout(this.followUpTimer);
-    this.pollTimer = this.retryTimer = this.settleTimer = this.followUpTimer = undefined;
+    this.pollTimer = this.retryTimer = this.settleTimer = undefined;
     this.watchers.clear();
     return Promise.resolve();
   }
 
+  private inFastBurst() {
+    return this.fastPollsLeft > 0;
+  }
+
   private schedulePoll() {
-    if (this.state !== "live" || !this.active || !this.watchers.size || this.pollTimer) return;
+    if (this.state !== "live" || !this.watchers.size || this.pollTimer) return;
+    const fast = this.inFastBurst();
+    if (!this.active && !fast) return;
+    const delay = fast ? this.fastPollMs : this.pollMs;
     this.pollTimer = setTimeout(() => {
       this.pollTimer = undefined;
-      if (this.state !== "live" || !this.active || !this.watchers.size) return;
+      if (this.state !== "live" || !this.watchers.size) return;
+      if (fast && this.fastPollsLeft > 0) this.fastPollsLeft--;
+      if (!this.active && !fast) return;
       void this.pull(false);
-    }, this.pollMs);
+    }, delay);
     this.pollTimer.unref?.();
   }
 
@@ -296,10 +312,19 @@ export class TimelineView {
         this.replaceWith(page);
         this.state = "live";
         this.loaded();
+        // A newly created empty conversation gets one short fast burst while its initial prompt lands.
+        if (initial && page.entries.length === 0 && this.watchers.size > 0) {
+          this.fastPollsLeft = Math.max(this.fastPollsLeft, FAST_BURST_POLLS);
+        } else if (page.entries.length > 0) {
+          this.fastPollsLeft = 0;
+        }
         this.broadcast([this.resetOp()]);
       } else {
         const ops = this.mergeTail(page);
-        if (ops.length) this.broadcast(ops);
+        if (ops.length) {
+          this.fastPollsLeft = 0;
+          this.broadcast(ops);
+        }
       }
 
       if (checkMetricsSettle && !this.active) {
@@ -340,7 +365,7 @@ export class TimelineView {
           this.pendingPull = false;
           this.pendingSettle = false;
           void this.pull(false, settle);
-        } else if (this.active && this.watchers.size) {
+        } else if ((this.active || this.inFastBurst()) && this.watchers.size) {
           this.schedulePoll();
         }
       }

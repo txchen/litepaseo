@@ -152,8 +152,35 @@
   transition: opacity 0.12s;
 }
 .row-user:hover .user-actions,
-.row-user:focus-within .user-actions {
+.row-user:focus-within .user-actions,
+.user-actions-status {
   opacity: 1;
+}
+.row-optimistic .bubble {
+  transition: opacity 0.14s ease-out;
+}
+.row-optimistic.is-sending .bubble {
+  opacity: 0.72;
+}
+.optimistic-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.optimistic-files:last-child {
+  margin-bottom: 0;
+}
+.optimistic-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--fg-muted);
 }
 .user-time {
   margin-right: 4px;

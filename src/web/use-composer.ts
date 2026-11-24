@@ -2,6 +2,7 @@ import { computed, nextTick, onUnmounted, provide, reactive, ref, watch, type Re
 import type { AgentSummary, MessageDeliveryMode, Permission, ServerQueuedMessage as QueuedMessage } from "../shared/wire.ts";
 import { AttachmentStore, type LocalAttachment } from "./attachment-store.ts";
 import { ComposerStore } from "./composer-store.ts";
+import { OptimisticStore } from "./optimistic-messages.ts";
 import { prefs } from "./preferences.ts";
 import { openStream } from "./event-stream.ts";
 import { newId } from "./id.ts";
@@ -20,7 +21,7 @@ function turnIdle(a: AgentSummary) {
  * queue, next-input suggestions and short composer notices. It lives as long as the app, so
  * drafts, uploads and queues survive switching pages; ComposerDock renders it.
  */
-export function useComposer({ active, selectedKey, authenticated, api, action, busy, showLatest }: {
+export function useComposer({ active, selectedKey, authenticated, api, action, busy, showLatest, baselineSeqEnd }: {
   active: Readonly<Ref<AgentSummary | null>>;
   selectedKey: Readonly<Ref<string | null>>;
   authenticated: Readonly<Ref<boolean>>;
@@ -29,9 +30,12 @@ export function useComposer({ active, selectedKey, authenticated, api, action, b
   busy: Readonly<Ref<boolean>>;
   /** Scrolls the open conversation to its newest message. */
   showLatest: () => void;
+  /** Highest known timeline seqEnd of the open conversation, used for fallback deduplication. */
+  baselineSeqEnd?: () => number;
 }) {
   const drafts = new ComposerStore(() => localStorage);
   const attachments = new AttachmentStore();
+  const optimistic = new OptimisticStore();
   /** The composer textarea (ComposerDock binds it). */
   const element = ref<HTMLTextAreaElement | null>(null);
   function autosize() {
@@ -236,19 +240,50 @@ export function useComposer({ active, selectedKey, authenticated, api, action, b
     const sent = { text, messageId: newId(),
       attachmentIds: selected.map(e => e.id!), attachmentNames: selected.map(e => e.file.name) };
     drafts.begin(a.key, sent);
+    // Show the user's message at 0 ms with its own image blob URLs so revoking staged
+    // attachment previews on send never breaks the optimistic bubble before the real row lands.
+    const optimisticImages = selected.filter(e => !!e.preview).map(e => URL.createObjectURL(e.file));
+    const optimisticFiles = selected.filter(e => !e.preview).map(e => e.file.name);
+    optimistic.add({
+      messageId: sent.messageId,
+      agentKey: a.key,
+      text,
+      images: optimisticImages,
+      attachmentNames: optimisticFiles,
+      baselineSeqEnd: selectedKey.value === a.key ? (baselineSeqEnd?.() ?? -1) : -1,
+    });
+    if (selectedKey.value === a.key) showLatest();
     let delivered = false;
     await action(async () => {
       try {
         await api(path(a) + "/messages", "POST", { ...sent, behavior: mode });
         delivered = true;
-        if (generation !== drafts.generation) return;
+        if (generation !== drafts.generation) {
+          optimistic.remove(a.key, sent.messageId);
+          return;
+        }
+        optimistic.markSent(a.key, sent.messageId);
         drafts.resolve(a.key, sent.messageId);
         for (const entry of selected) attachments.remove(a.key, entry, true);
         suggestions.delete(a.key);
         void nextTick(autosize);
         if (selectedKey.value === a.key) showLatest();
       } catch (e) {
-        if (generation !== drafts.generation) return;
+        if (generation !== drafts.generation) {
+          optimistic.remove(a.key, sent.messageId);
+          return;
+        }
+        // On flaky mobile networks the real timeline row can arrive over SSE even when the
+        // HTTP response drops or times out: treat that positive proof as delivered.
+        if (optimistic.wasConfirmed(sent.messageId)) {
+          delivered = true;
+          drafts.resolve(a.key, sent.messageId);
+          for (const entry of selected) attachments.remove(a.key, entry, true);
+          suggestions.delete(a.key);
+          void nextTick(autosize);
+          return;
+        }
+        optimistic.remove(a.key, sent.messageId);
         const notSent = (e as { delivery?: string }).delivery === "not-sent";
         if (notSent) {
           drafts.resolve(a.key, sent.messageId);
@@ -286,6 +321,7 @@ export function useComposer({ active, selectedKey, authenticated, api, action, b
       queued.value = [];
       queueRead++;
       attachments.clear();
+      optimistic.clearAll();
       suggestions.clear();
       queueAttempts.clear();
       safeSetItem("litepaseo-composer-signout", newId());
@@ -299,6 +335,7 @@ export function useComposer({ active, selectedKey, authenticated, api, action, b
     clearTimeout(noticeTimer);
     clearInterval(deliveryTimer);
     attachments.clear();
+    optimistic.clearAll();
     window.removeEventListener("storage", onStorage);
     queueSummaryStream?.close();
     queueStream?.close();
@@ -307,6 +344,7 @@ export function useComposer({ active, selectedKey, authenticated, api, action, b
   return {
     element, autosize,
     attachments, selectedAttachments, attachmentsReady,
+    optimistic,
     prompt, composerHasContent, uncertain, savedDrafts, restoreDraft, warning: drafts.warning,
     checkingDelivery, deliveryNotice, checkDelivery, acknowledgeMessage,
     queued, queueSummary, editingQueued, queuedText, controlQueue, removeQueued, editQueued, interruptWith,

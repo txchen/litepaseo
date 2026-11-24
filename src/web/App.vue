@@ -129,7 +129,16 @@ function openSubagent(id: string | null) {
   panel.value = "subagents";
 }
 
-const composer = useComposer({ active, selectedKey, authenticated, api, action, busy, showLatest: () => conversation.value?.showLatest() });
+const composer = useComposer({
+  active,
+  selectedKey,
+  authenticated,
+  api,
+  action,
+  busy,
+  showLatest: () => conversation.value?.showLatest(),
+  baselineSeqEnd: () => conversation.value?.latestSeqEnd() ?? -1,
+});
 const { prompt, autosize, queueSummary, offerSuggestion, dictationReady, showNotice } = composer;
 const suggestionsReady = ref(false);
 watch(authenticated, (ok) => {
@@ -900,6 +909,7 @@ onUnmounted(() => {
             :settled="markdownSettled"
             :footer-model="footerModel"
             :suggestions-ready="suggestionsReady"
+            :optimistic="composer.optimistic"
             @error="(message) => (error = message)"
             @subagents="(key, list) => key === active?.key && (providerSubagents = list)"
             @background-work="(key, list) => key === active?.key && (backgroundWork = list)"

@@ -138,6 +138,7 @@ try {
         key: "alpha:new-1",
         value: { ...summary("alpha", []), key: "alpha:new-1", id: "new-1", workspaceId: "w-new", title: "Brand new session", activityAt: 9 },
       });
+    for (const a of archivedAgents) changes.push({ key: `${a.host}:${a.agentId}`, value: null });
     return route.fulfill(
       changes.length
         ? sse(hostsEvent, { type: "changes", generation: "gen-1", seq: 2 + changes.length, changes })
@@ -148,6 +149,7 @@ try {
   /** Hosts whose timeline stream was requested, in order (each conversation reconnects while open). */
   const timelineOpens = [];
   const creations = [],
+    archivedAgents = [],
     predictions = [],
     reads = [];
   await page.route("**/api/usage**", (route) =>
@@ -272,6 +274,10 @@ try {
     if (p.endsWith("/timeline/stream")) {
       timelineOpens.push(host);
       return route.fulfill(sse({ type: "ops", ops: [timelineReset(host)] }));
+    }
+    if (p.includes("/agents/") && p.endsWith("/archive")) {
+      archivedAgents.push({ host, agentId: p.split("/")[5] });
+      return route.fulfill({ json: { ok: true } });
     }
     if (p.includes("/workspaces/")) {
       threadActions.push({ host, action: p.split("/").pop(), ...(route.request().postDataJSON() ?? {}) });
@@ -494,7 +500,7 @@ try {
   await page.waitForFunction(() => performance.getEntriesByType('resource').some(r => /addon-unicode11/.test(r.name)));
   await page.waitForTimeout(150);
   assert.ok(terminalInput.some(input => input.data?.includes('echo hello')));
-  await page.locator('.agent-tabs > button').first().click();
+  await page.locator('.agent-tabs .agent-tab .file-tab-open').first().click();
   assert.equal(await page.locator('.terminals').isVisible(), false);
   await page.locator('.agent-tabs .file-tab-open').filter({ hasText: 'Terminal' }).click();
   assert.equal(await page.locator('.terminals').isVisible(), true);
@@ -683,12 +689,20 @@ try {
     { host: "beta", action: "archive" },
   ]);
 
-  // A thread with two agents shows tabs to switch between them.
+  // A thread with two agents shows tabs to switch between them, and each can be closed after confirming.
   await betaRow.click();
   await page.getByRole("navigation", { name: "Tabs" }).waitFor();
-  await page.getByRole("button", { name: "beta helper" }).click();
+  await page.getByRole("button", { name: "beta helper", exact: true }).click();
   await page.waitForFunction(() => document.querySelector(".agent-tabs .chosen")?.textContent?.includes("beta helper"));
-  await page.getByRole("button", { name: "beta conversation", exact: true }).click();
+  await page.getByRole("button", { name: "Close beta helper" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.equal(archivedAgents.length, 0, "cancelling keeps the agent tab");
+  await page.getByRole("button", { name: "Close beta helper" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Close session", exact: true }).click();
+  for (let i = 0; i < 30 && archivedAgents.length < 1; i++) await page.waitForTimeout(100);
+  assert.deepEqual(archivedAgents, [{ host: "beta", agentId: "helper" }]);
+  await resync();
+  await page.waitForFunction(() => !document.querySelector(".agent-tabs"));
 
   // Plugin rows: turn speed, and a next-input suggestion predicted on demand and taken with Tab.
   await page.locator("button.session", { hasText: "beta conversation" }).click();

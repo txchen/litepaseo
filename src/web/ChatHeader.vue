@@ -31,6 +31,8 @@ const emit = defineEmits<{
   select: [key: string];
   /** Shows another of the thread's agents. */
   selectAgent: [key: string];
+  /** Closes (archives) one of the thread's agents. */
+  closeAgent: [agent: AgentSummary];
   subagents: [];
   menu: [event: MouseEvent];
   newAgent: [];
@@ -162,15 +164,46 @@ function showAgent(key: string) {
   </header>
   <!-- Tabs: the thread's agents, then files opened from the side panel (Paseo's workspace tabs). -->
   <nav v-if="agents.length > 1 || openFiles.length || terminalOpen" class="agent-tabs" aria-label="Tabs">
-    <button
-      v-for="a in agents.length ? agents : [agent]"
-      :key="a.key"
-      :class="{ chosen: a.key === selectedKey && !activeFile && !terminalActive }"
-      @click="showAgent(a.key)"
-    >
-      <span class="status-dot" :class="dot(a, true)"></span>
-      <span class="agent-tab-name">{{ a.title || a.provider }}</span>
-    </button>
+    <template v-if="agents.length > 1">
+      <div
+        v-for="a in agents"
+        :key="a.key"
+        class="file-tab agent-tab"
+        :class="{ chosen: a.key === selectedKey && !activeFile && !terminalActive }"
+        @auxclick.prevent="$event.button === 1 && emit('closeAgent', a)"
+      >
+        <button
+          type="button"
+          class="file-tab-open"
+          :title="a.title || a.provider"
+          :aria-current="a.key === selectedKey && !activeFile && !terminalActive ? 'page' : undefined"
+          @click="showAgent(a.key)"
+        >
+          <span class="status-dot" :class="dot(a, true)"></span>
+          <span class="agent-tab-name">{{ a.title || a.provider }}</span>
+        </button>
+        <button
+          type="button"
+          class="tab-close"
+          :aria-label="'Close ' + (a.title || a.provider)"
+          :title="'Close ' + (a.title || a.provider)"
+          @click="emit('closeAgent', a)"
+        >
+          <Icon name="close" :size="11" />
+        </button>
+      </div>
+    </template>
+    <template v-else>
+      <button
+        v-for="a in agents.length ? agents : [agent]"
+        :key="a.key"
+        :class="{ chosen: a.key === selectedKey && !activeFile && !terminalActive }"
+        @click="showAgent(a.key)"
+      >
+        <span class="status-dot" :class="dot(a, true)"></span>
+        <span class="agent-tab-name">{{ a.title || a.provider }}</span>
+      </button>
+    </template>
     <div
       v-for="f in openFiles"
       :key="'file:' + f"

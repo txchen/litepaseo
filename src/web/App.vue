@@ -28,7 +28,7 @@ import LoginPage from "./LoginPage.vue";
 import type { Board } from "./PlanBoard.vue";
 import type { UsageReport } from "./UsagePanel.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
-import { confirmRequest } from "./confirm.ts";
+import { confirmAction, confirmRequest } from "./confirm.ts";
 import { dialogOpen } from "./use-dialog.ts";
 import { registerServiceWorker, setBadge, setFavicon } from "./pwa.ts";
 import { preloadMarkstream } from "./markstream-loader.ts";
@@ -195,7 +195,7 @@ const subagentSummary = computed(() => {
 /** The open thread's agents, most recent first (tabs when there is more than one). */
 const threadAgents = computed(() => {
   agentDirectory.version.value;
-  return agentDirectory.indexed(selectedThread.value, 12);
+  return agentDirectory.indexed(selectedThread.value, 50);
 });
 const sessionCount = computed(() => {
   directory.version.value;
@@ -527,6 +527,9 @@ const commandActions = computed<CommandAction[]>(() => {
     if (a.workspaceId) {
       list.unshift({ id: "new-agent", label: "New agent in workspace", sub: t?.name || a.project, icon: "bot", run: () => startNewAgentInWorkspace() });
     }
+    if (threadAgents.value.length > 1) {
+      list.push({ id: "close-agent", label: "Close current agent session", sub: a.title || a.provider, icon: "close", run: () => void closeAgent(a) });
+    }
     list.unshift(
       { id: "model", label: "Switch model", sub: footerModel.value || a.provider, icon: "sparkle", shortcut: "⌘/", run: () => composerDock.value?.focusModel() },
       { id: "thinking", label: "Cycle thinking level", sub: a.thinking || "Default", icon: "brain", shortcut: "⌘⇧/", run: () => composerDock.value?.cycleThinking() },
@@ -636,6 +639,21 @@ function startNewAgentInWorkspace() {
     workspaceName: t?.name || a.title || a.project,
   };
   openDetail();
+}
+async function closeAgent(a: AgentSummary) {
+  const name = a.title || a.provider || "this session";
+  const running = a.turnActive || a.attention;
+  const message = running
+    ? "This session is still active. Closing it archives the session and removes its tab; the host keeps its history."
+    : "It leaves this workspace’s tabs; the host keeps its history.";
+  if (!(await confirmAction({ title: `Close “${name}”?`, message, confirmLabel: "Close session", danger: running }))) return;
+  await action(async () => {
+    await api(path(a) + "/archive", "POST", {});
+    if (selectedKey.value === a.key) {
+      const next = threadAgents.value.find((other) => other.key !== a.key);
+      if (next) selectedKey.value = next.key;
+    }
+  });
 }
 async function forkThread(thread: WorkspaceSummary) {
   const agent = agentDirectory.indexed(thread.key, 1)[0] ?? (active.value?.workspaceId === thread.id ? active.value : null);
@@ -869,6 +887,7 @@ onUnmounted(() => {
           @back="closeDetail"
           @select="select"
           @select-agent="(key) => (selectedKey = key)"
+          @close-agent="closeAgent"
           @subagents="openedSubagent = null; togglePanel('subagents')"
           @menu="openHeaderMenu"
           @new-agent="startNewAgentInWorkspace"

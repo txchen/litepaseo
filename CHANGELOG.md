@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.3
+
+- **Instant 0 ms send feedback (optimistic user messages)**:
+  - Submitted messages (`send`, `steer`, `interrupt`) now appear in the conversation immediately at 0 ms with their text, image previews (using owned object URLs), and attachment names, scroll straight to the bottom, and transition seamlessly into the `Working…` indicator once acknowledged.
+  - Deduplication matches daemon `user_message` rows strictly by `clientMessageId`/`messageId` first and falls back to 1-to-1 FIFO content matching guarded by `baselineSeqEnd` (so repeating prompts like `"continue"` never dismiss new bubbles prematurely), with zero duplicate frames.
+  - Mobile flaky-network safety: if the real SSE row arrives before the HTTP response completes or drops, the send is confirmed positively instead of triggering a false `uncertain` warning; failed or unconfirmed sends roll back the optimistic bubble cleanly and revoke owned blob URLs.
+- **Post-send fast burst in `TimelineView`**:
+  - Replace the idle-only 500 ms follow-up with a bounded fast-burst window (up to 6 checks at 300 ms, also active while running or on newly created empty conversations) that exits immediately as soon as the new row lands and returns to the 1.5 s steady-state cadence (0 polling when idle).
+- **Cleanup**:
+  - Remove duplicate `turnMetrics` fallback template branches in `ConversationView.vue`.
+
 ## 0.13.2
 
 - **Wake + Pull single-source-of-truth timeline (`TimelineView`)**:

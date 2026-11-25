@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.2
+
+- **Paste, drag-and-drop, and attach images/files on the first message of a new session**:
+  - `NewSession.vue` now mounts `AttachmentPanel`, adds the `+` attach button, supports pasting screenshots/files (`@paste`), drag-and-drop uploads, and rich-text hyperlink paste, and renders image previews in the optimistic first-message bubble while the session starts.
+  - Added draft attachment staging endpoints (`/api/hosts/:host/draft/:provider/attachments`) and forwarded `images`, file `attachments`, and `clientMessageId` through `POST /api/hosts/:host/agents`, persisting first-message images via `saveMessageImages` so they display and survive reloads.
+
 ## 0.14.1
 
 - **Efficiency & battery-saving fixes**:

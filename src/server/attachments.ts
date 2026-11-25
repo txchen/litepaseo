@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { Hosts } from "./hosts.ts";
 export const MAX_FILE_BYTES = 8 * 1024 * 1024;
+/** Internal scope used for attachments staged while composing a brand-new session. */
+export const DRAFT_AGENT_SCOPE = "__draft__";
 const MAX_TOTAL = 64 * 1024 * 1024, TTL = 20 * 60_000;
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 interface Entry { id: string; owner: string; host: string; agent: string; name: string; mime: string; bytes: Buffer; expires: number; remote?: any }
@@ -82,10 +84,26 @@ export class Attachments {
       files: facts.capabilities?.supportsToolInvocations === true, maxBytes: MAX_FILE_BYTES,
       note: "Images require a vision-capable model. Other files are uploaded to the daemon for the agent to read with its tools." };
   }
+  providerCapabilities(provider: string) {
+    return {
+      images: ["codex", "claude", "pi"].includes(provider),
+      files: true,
+      maxBytes: MAX_FILE_BYTES,
+      note: "Images require a vision-capable model. Other files are uploaded to the daemon for the agent to read with its tools.",
+    };
+  }
   async prepare(hosts: Hosts, owner: string, host: string, agent: string, ids: string[]) {
     const entries = ids.map(id => this.get(id, owner, host, agent));
     if (!entries.length) return { images: [], attachments: [] };
     const caps = await this.capabilities(hosts, host, agent).catch(() => { throw new Error("Could not verify attachment support. Reconnect the host and retry."); });
+    return this.materializeEntries(hosts, host, entries, caps);
+  }
+  async prepareForProvider(hosts: Hosts, owner: string, host: string, provider: string, ids: string[]) {
+    const entries = ids.map(id => this.get(id, owner, host, DRAFT_AGENT_SCOPE));
+    if (!entries.length) return { images: [], attachments: [] };
+    return this.materializeEntries(hosts, host, entries, this.providerCapabilities(provider));
+  }
+  private async materializeEntries(hosts: Hosts, host: string, entries: Entry[], caps: { images: boolean; files: boolean }) {
     const images: { data: string; mimeType: string }[] = [], attachments: any[] = [];
     for (const entry of entries) {
       if (IMAGE_TYPES.has(entry.mime)) {

@@ -642,10 +642,15 @@ try {
   hostConfig.agentProfiles = [];
   assert.equal(creations.length, 1);
   assert.deepEqual(
-    { ...creations[0], idempotencyKey: typeof creations[0].idempotencyKey },
+    {
+      ...creations[0],
+      idempotencyKey: typeof creations[0].idempotencyKey,
+      clientMessageId: typeof creations[0].clientMessageId,
+    },
     {
       host: "alpha",
       idempotencyKey: "string",
+      clientMessageId: "string",
       cwd: "/code/litepaseo",
       provider: "codex",
       model: "gpt-5-codex",

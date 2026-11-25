@@ -154,3 +154,92 @@ test("an image type in any case or spacing is still checked against its content;
     assert.equal(png.mimeType, "image/png");
   } finally { store.close(); }
 });
+
+test("new sessions can stage and send pasted images and files on the first message", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lp-draft-attach-")), store = new Store(root), fixture = fakeHosts();
+  const createdCalls: any[] = [];
+  const client = fixture.hosts.clients.get("h") as any;
+  client.api.agents.create = async (options: any) => {
+    createdCalls.push(options);
+    return { id: "new-1" };
+  };
+  const app = createApp(store, fixture.hosts, "test", root, { pushSender: { async send() {} } });
+  const headers = { authorization: "Bearer test", "content-type": "application/json" };
+  try {
+    // 1. Draft capabilities reflect provider image support.
+    const claudeCaps = await (await app.request("/api/hosts/h/draft/claude/attachments/capabilities", { headers })).json();
+    assert.equal(claudeCaps.images, true);
+    assert.equal(claudeCaps.files, true);
+    const otherCaps = await (await app.request("/api/hosts/h/draft/other/attachments/capabilities", { headers })).json();
+    assert.equal(otherCaps.images, false);
+    assert.equal(otherCaps.files, true);
+
+    // 2. Stage a PNG image and a text file against the draft scope.
+    const pngBytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+    const imgRes = await app.request("/api/hosts/h/draft/claude/attachments", {
+      method: "POST",
+      headers: { authorization: "Bearer test", "content-type": "image/png", "x-file-name": encodeURIComponent("shot.png") },
+      body: pngBytes,
+    });
+    assert.equal(imgRes.status, 201);
+    const img = await imgRes.json();
+
+    const txtRes = await app.request("/api/hosts/h/draft/claude/attachments", {
+      method: "POST",
+      headers: { authorization: "Bearer test", "content-type": "text/plain", "x-file-name": encodeURIComponent("notes.txt") },
+      body: Buffer.from("hello draft"),
+    });
+    assert.equal(txtRes.status, 201);
+    const txt = await txtRes.json();
+
+    // 3. Attempting to send a staged image to a non-image provider fails cleanly before creating an agent.
+    const badProvider = await app.request("/api/hosts/h/agents", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        idempotencyKey: randomUUID(),
+        cwd: "/repo",
+        provider: "other",
+        model: "m1",
+        prompt: "Look at this",
+        attachmentIds: [img.id],
+      }),
+    });
+    assert.equal(badProvider.status, 400);
+    assert.equal((await badProvider.json()).delivery, "not-sent");
+    assert.equal(createdCalls.length, 0);
+
+    // 4. Creating with claude forwards images, uploaded file attachment, and clientMessageId, and persists images.
+    const clientMessageId = randomUUID();
+    const createRes = await app.request("/api/hosts/h/agents", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        idempotencyKey: randomUUID(),
+        clientMessageId,
+        cwd: "/repo",
+        provider: "claude",
+        model: "claude-opus-4",
+        prompt: "",
+        attachmentIds: [img.id, txt.id],
+      }),
+    });
+    assert.equal(createRes.status, 201);
+    assert.equal(createdCalls.length, 1);
+    assert.equal(createdCalls[0].clientMessageId, clientMessageId);
+    assert.equal(createdCalls[0].images.length, 1);
+    assert.equal(createdCalls[0].images[0].data, pngBytes.toString("base64"));
+    assert.equal(createdCalls[0].attachments.length, 1);
+    assert.equal(createdCalls[0].attachments[0].path, "/daemon/upload/file");
+
+    // 5. Persisted image is served via message-images endpoint and staged IDs are consumed.
+    const enriched = withMessageImages(store, "h", "new-1", { type: "user_message", clientMessageId });
+    assert.equal((enriched.imageUrls as string[]).length, 1);
+    const fetched = await app.request((enriched.imageUrls as string[])[0]!, { headers });
+    assert.equal(fetched.status, 200);
+    assert.equal(Buffer.from(await fetched.arrayBuffer()).toString("base64"), pngBytes.toString("base64"));
+
+    const delAfterConsume = await app.request(`/api/hosts/h/draft/claude/attachments/${img.id}`, { method: "DELETE", headers });
+    assert.equal(delAfterConsume.status, 404);
+  } finally { app.dispose(); store.close(); rmSync(root, { recursive: true, force: true }); }
+});

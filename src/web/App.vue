@@ -822,13 +822,14 @@ function closeNewSession() {
   newSession.value = null;
   if (compact.matches) closeDetail();
 }
-function onCreated(created: { key: string; prompt: string; attachmentNames: string[] }) {
-  if (created.prompt.trim() || created.attachmentNames.length) {
-    const msgId = newId();
+function onCreated(created: { key: string; prompt: string; images: string[]; attachmentNames: string[]; messageId: string }) {
+  if (created.prompt.trim() || created.images.length || created.attachmentNames.length) {
+    const msgId = created.messageId || newId();
     composer.optimistic.add({
       messageId: msgId,
       agentKey: created.key,
       text: created.prompt,
+      images: created.images,
       attachmentNames: created.attachmentNames,
       baselineSeqEnd: -1,
     });
@@ -1209,6 +1210,9 @@ onUnmounted(() => {
             <div class="timeline-inner">
               <div v-for="m in pendingSelectionMessages" :key="'opt:' + m.messageId" class="row row-user row-optimistic" :class="{ 'is-sending': m.status === 'sending' }">
                 <div class="bubble" tabindex="-1">
+                  <div v-if="m.images.length" class="user-images">
+                    <img v-for="(url, index) in m.images" :key="url" :src="url" :alt="`Attached image ${index + 1}`" />
+                  </div>
                   <div v-if="m.attachmentNames.length" class="optimistic-files">
                     <span v-for="(name, index) in m.attachmentNames" :key="index" class="optimistic-file">
                       <Icon name="file" :size="12" />{{ name }}

@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import type { CheckoutWorktreeOption, ForkContextResult, HostState, ProjectOption, ProviderOption } from "../shared/wire.ts";
+import { AttachmentStore } from "./attachment-store.ts";
+import AttachmentPanel from "./AttachmentPanel.vue";
 import { prefs as uiPrefs } from "./preferences.ts";
 import { insertDictatedText, shouldSubmitOnEnter } from "./composer-input.ts";
+import { htmlToMarkdownWithLinks } from "./paste-links.ts";
 import DictationButton from "./DictationButton.vue";
 import Icon from "./Icon.vue";
 import ProjectIcon, { type ProjectIconSource } from "./ProjectIcon.vue";
@@ -28,7 +31,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   close: [];
-  created: [session: { key: string; prompt: string; attachmentNames: string[] }];
+  created: [session: { key: string; prompt: string; images: string[]; attachmentNames: string[]; messageId: string }];
   hostChange: [hostId: string];
 }>();
 
@@ -153,7 +156,18 @@ watch([useWorktree, worktreeKind, hostId, () => cwd.value], ([use, kind]) => {
 });
 const prompt = ref("");
 const busy = ref(false);
-const pendingMessage = ref<{ text: string; attachmentNames: string[] } | null>(null);
+const dragging = ref(false);
+const attachments = new AttachmentStore();
+const attachmentPanel = ref<InstanceType<typeof AttachmentPanel> | null>(null);
+const draftKey = computed(() => (hostId.value ? "draft:" + hostId.value : ""));
+const attachmentBase = computed(() =>
+  hostId.value && provider.value
+    ? `/api/hosts/${encodeURIComponent(hostId.value)}/draft/${encodeURIComponent(provider.value)}`
+    : "",
+);
+const selectedAttachments = computed(() => (draftKey.value ? attachments.get(draftKey.value) : []));
+const attachmentsReady = computed(() => selectedAttachments.value.every((e) => !!e.id && !e.uploading && !e.error));
+const pendingMessage = ref<{ text: string; images: string[]; attachmentNames: string[] } | null>(null);
 const error = ref("");
 const notice = ref("");
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -189,6 +203,7 @@ watch(
 
 /** Reused for retries of the same request; any edit makes a new request with a new key. */
 let idempotencyKey = newId();
+let clientMessageId = newId();
 
 const selectedHost = computed(() => connected.value.find((h) => h.id === hostId.value));
 const selectedProvider = computed(() => providers.value?.find((p) => p.id === provider.value));
@@ -235,7 +250,8 @@ const canCreate = computed(
     !!hostId.value &&
     !!cwd.value &&
     !!provider.value &&
-    !!prompt.value.trim() &&
+    (!!prompt.value.trim() || selectedAttachments.value.length > 0) &&
+    attachmentsReady.value &&
     !busy.value &&
     worktreeValid.value,
 );
@@ -343,24 +359,83 @@ watch(model, () => {
   if (m && !m.thinking.some((t) => t.id === thinking.value)) thinking.value = m.defaultThinkingId ?? "";
 });
 let restoringPrompt = false;
-watch([hostId, project, customPath, provider, model, thinking, mode, featureValues, useWorktree, worktreeKind, branch, checkoutBranch, prNumber, selectedWorktreePath, prompt], () => {
-  if (restoringPrompt) {
-    restoringPrompt = false;
+watch(
+  [
+    hostId, project, customPath, provider, model, thinking, mode, featureValues,
+    useWorktree, worktreeKind, branch, checkoutBranch, prNumber, selectedWorktreePath, prompt,
+    () => selectedAttachments.value.map((e) => e.id ?? e.localId).join(","),
+  ],
+  () => {
+    if (restoringPrompt) {
+      restoringPrompt = false;
+      return;
+    }
+    if (error.value) {
+      idempotencyKey = newId();
+      clientMessageId = newId();
+    }
+    error.value = "";
+  },
+);
+
+function revokeUrls(urls: string[]) {
+  for (const url of urls) {
+    try { URL.revokeObjectURL(url); } catch {}
+  }
+}
+
+function onDragLeave(event: DragEvent) {
+  const form = event.currentTarget as HTMLElement;
+  if (!form.contains(event.relatedTarget as Node | null)) dragging.value = false;
+}
+
+function pasteFiles(event: ClipboardEvent) {
+  const data = event.clipboardData;
+  if (!data) return;
+  let files = Array.from(data.files);
+  if (!files.length)
+    files = Array.from(data.items)
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => !!file);
+  if (files.length) {
+    event.preventDefault();
+    void attachmentPanel.value?.addFiles(files);
     return;
   }
-  if (error.value) idempotencyKey = newId();
-  error.value = "";
-});
+  const html = data.getData("text/html");
+  const mdFromHtml = html ? htmlToMarkdownWithLinks(html) : null;
+  if (mdFromHtml) {
+    event.preventDefault();
+    const el = promptElement.value;
+    const start = el?.selectionStart ?? prompt.value.length;
+    const end = el?.selectionEnd ?? start;
+    prompt.value = prompt.value.slice(0, start) + mdFromHtml + prompt.value.slice(end);
+    void nextTick(() => {
+      if (!el) return;
+      const at = start + mdFromHtml.length;
+      el.setSelectionRange(at, at);
+      autosize();
+    });
+  }
+}
 
+let unmounted = false;
 async function create() {
   if (!canCreate.value) return;
   const sentPrompt = prompt.value;
-  const attachmentNames = props.forkContext?.attachment
-    ? [props.forkContext.attachment.title || "Forked conversation context"]
-    : [];
+  const selected = [...selectedAttachments.value];
+  const currentDraftKey = draftKey.value;
+  const attachmentIds = selected.map((e) => e.id!);
+  const pendingImages = selected.filter((e) => !!e.preview).map((e) => URL.createObjectURL(e.file));
+  const attachmentNames = [
+    ...(props.forkContext?.attachment ? [props.forkContext.attachment.title || "Forked conversation context"] : []),
+    ...selected.filter((e) => !e.preview).map((e) => e.file.name),
+  ];
+  const sentMessageId = clientMessageId;
   busy.value = true;
   error.value = "";
-  pendingMessage.value = { text: sentPrompt, attachmentNames };
+  pendingMessage.value = { text: sentPrompt, images: pendingImages, attachmentNames };
   prompt.value = "";
   void nextTick(autosize);
   const effectiveCwd = props.workspaceId
@@ -383,6 +458,7 @@ async function create() {
       "POST",
       {
         idempotencyKey,
+        clientMessageId: sentMessageId,
         cwd: effectiveCwd,
         provider: provider.value,
         ...(props.workspaceId ? { workspaceId: props.workspaceId } : {}),
@@ -392,15 +468,22 @@ async function create() {
         ...(thinking.value ? { thinkingOptionId: thinking.value } : {}),
         prompt: sentPrompt,
         ...(props.forkContext?.attachment ? { attachments: [props.forkContext.attachment] } : {}),
+        ...(attachmentIds.length ? { attachmentIds } : {}),
         ...(worktreeSpec ? { worktree: worktreeSpec } : {}),
       },
       120_000,
     );
+    if (unmounted) return;
     prefs[hostId.value] = { provider: provider.value, model: model.value, thinking: thinking.value, mode: mode.value };
     safeSetItem(PREFS, JSON.stringify(prefs));
-    emit("created", { key: result.key, prompt: sentPrompt, attachmentNames });
+    for (const entry of selected) attachments.remove(currentDraftKey, entry, true);
+    // Ownership of `pendingImages` transfers to OptimisticStore via the created event.
+    pendingMessage.value = null;
+    emit("created", { key: result.key, prompt: sentPrompt, images: pendingImages, attachmentNames, messageId: sentMessageId });
   } catch (e) {
-    // Keep the key and error: programmatic prompt restoration must not invalidate retry idempotency.
+    if (unmounted) return;
+    // Keep the keys and error: programmatic prompt restoration must not invalidate retry idempotency.
+    revokeUrls(pendingImages);
     pendingMessage.value = null;
     if (sentPrompt !== prompt.value) {
       restoringPrompt = true;
@@ -427,6 +510,12 @@ onMounted(() => {
     promptElement.value?.focus();
   });
 });
+onUnmounted(() => {
+  unmounted = true;
+  clearTimeout(noticeTimer);
+  if (pendingMessage.value) revokeUrls(pendingMessage.value.images);
+  attachments.clear();
+});
 </script>
 
 <template>
@@ -451,6 +540,9 @@ onMounted(() => {
         <div class="timeline-inner">
           <div class="row row-user row-optimistic is-sending">
             <div class="bubble" tabindex="-1">
+              <div v-if="pendingMessage.images.length" class="user-images">
+                <img v-for="(url, index) in pendingMessage.images" :key="url" :src="url" :alt="`Attached image ${index + 1}`" />
+              </div>
               <div v-if="pendingMessage.attachmentNames.length" class="optimistic-files">
                 <span v-for="(name, index) in pendingMessage.attachmentNames" :key="index" class="optimistic-file">
                   <Icon name="file" :size="12" />{{ name }}
@@ -594,7 +686,23 @@ onMounted(() => {
         <p v-if="selectedProvider?.error" class="composer-notice is-warn" role="alert"><Icon name="alert" :size="13" />{{ selectedProvider.error }}</p>
         <p v-if="error" class="composer-notice is-warn" role="alert"><Icon name="alert" :size="13" />{{ error }}</p>
 
-        <form class="composer" @submit.prevent="create">
+        <form
+          class="composer"
+          :class="{ 'is-dragging': dragging }"
+          @submit.prevent="create"
+          @dragover.prevent="dragging = true"
+          @dragleave="onDragLeave"
+          @drop.prevent="dragging = false; attachmentPanel?.addFiles($event.dataTransfer?.files)"
+          @paste="pasteFiles"
+        >
+          <AttachmentPanel
+            v-if="attachmentBase && draftKey"
+            ref="attachmentPanel"
+            :store="attachments"
+            :agent-key="draftKey"
+            :base="attachmentBase"
+            :busy="busy"
+          />
           <div v-if="dictationPreview" ref="dictationPreviewElement" class="dictation-preview" role="status" aria-live="polite">
             {{ dictationPreview }}
           </div>
@@ -609,6 +717,16 @@ onMounted(() => {
             @keydown="onKey"
           ></textarea>
           <div class="composer-bar">
+            <button
+              type="button"
+              class="composer-tool"
+              aria-label="Attach files"
+              :title="attachmentPanel?.hint"
+              :disabled="busy || !attachmentPanel?.available"
+              @click="attachmentPanel?.pick()"
+            >
+              <Icon name="plus" :size="18" />
+            </button>
             <div class="agent-controls">
               <label
                 class="chip"

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DRAFT_AGENT_SCOPE } from "./attachments.ts";
 import { messageDeliveryModes } from "./message-delivery.ts";
 import { saveMessageImages } from "./message-images.ts";
 import { confirmedMessages } from "./message-status.ts";
@@ -29,6 +30,30 @@ export function registerMessageRoutes(app: App, { store, hosts, attachments, sen
   app.delete("/api/hosts/:host/agents/:agent/attachments/:id", (c) => {
     try {
       attachments.remove(c.req.param("id"), attachmentOwner(c), ...target(c));
+    } catch {
+      return c.json({ error: "Attachment already expired or unavailable" }, 404);
+    }
+    return c.json({ ok: true });
+  });
+  // Draft attachments for starting a brand-new session before an agent ID exists.
+  app.get("/api/hosts/:host/draft/:provider/attachments/capabilities", (c) => {
+    hosts.get(c.req.param("host"));
+    return c.json(attachments.providerCapabilities(c.req.param("provider")));
+  });
+  app.post("/api/hosts/:host/draft/:provider/attachments", async (c) => {
+    const host = c.req.param("host");
+    hosts.get(host);
+    try {
+      const name = decodeURIComponent(c.req.header("x-file-name") ?? "");
+      const mime = c.req.header("content-type")?.split(";")[0].trim().toLowerCase() || "application/octet-stream";
+      return c.json(attachments.put(attachmentOwner(c), host, DRAFT_AGENT_SCOPE, name, mime, Buffer.from(await c.req.arrayBuffer())), 201);
+    } catch (error) {
+      return c.json({ error: errorMessage(error) }, 400);
+    }
+  });
+  app.delete("/api/hosts/:host/draft/:provider/attachments/:id", (c) => {
+    try {
+      attachments.remove(c.req.param("id"), attachmentOwner(c), c.req.param("host"), DRAFT_AGENT_SCOPE);
     } catch {
       return c.json({ error: "Attachment already expired or unavailable" }, 404);
     }

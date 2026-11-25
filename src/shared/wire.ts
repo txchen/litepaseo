@@ -484,6 +484,10 @@ export interface CreateSessionRequest {
   workspaceId?: string;
   /** Optional text attachments (e.g. forked conversation context). */
   attachments?: ForkContextAttachment[];
+  /** Staged draft attachment IDs (images or files uploaded before session creation). */
+  attachmentIds?: string[];
+  /** Client-generated UUID for the initial user message (image storage & optimistic deduplication). */
+  clientMessageId?: string;
 }
 
 /** A task on the board. Description and comments are Markdown; optional on older cards. */

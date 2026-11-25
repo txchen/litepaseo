@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { AgentPermissionResponseSchema } from "@getpaseo/protocol/messages";
 import { UnknownHostError } from "./hosts.ts";
-import { errorMessage, hostPath, type App, type RouteContext } from "./route-context.ts";
+import { saveMessageImages } from "./message-images.ts";
+import { attachmentOwner, errorMessage, hostPath, type App, type RouteContext } from "./route-context.ts";
 import type {
   AgentConfigChange,
   AgentConfigOptions,
@@ -15,7 +17,7 @@ import type {
 } from "../shared/wire.ts";
 
 /** Starting sessions, the composer's model/mode/feature switches, and controlling an agent. */
-export function registerAgentRoutes(app: App, { hosts }: RouteContext) {
+export function registerAgentRoutes(app: App, { store, hosts, attachments }: RouteContext) {
   // ---- New sessions ---------------------------------------------------------------------------
   /** Providers the host can start right now, read from the daemon's provider snapshot. */
   app.get("/api/hosts/:host/providers", async (c) => {
@@ -103,10 +105,27 @@ export function registerAgentRoutes(app: App, { hosts }: RouteContext) {
           )
           .max(5)
           .optional(),
+        attachmentIds: z
+          .array(z.string().uuid())
+          .max(4)
+          .refine((ids) => new Set(ids).size === ids.length)
+          .optional(),
+        clientMessageId: z.string().uuid().optional(),
       })
       .parse(await c.req.json()) satisfies CreateSessionRequest;
     const hostId = c.req.param("host");
     const { api, driver } = hosts.get(hostId);
+    let prepared: { images: { data: string; mimeType: string }[]; attachments: unknown[] } = { images: [], attachments: [] };
+    if (input.attachmentIds?.length) {
+      try {
+        prepared = await attachments.prepareForProvider(hosts, attachmentOwner(c), hostId, input.provider, input.attachmentIds);
+      } catch (error) {
+        return c.json({ error: errorMessage(error), delivery: "not-sent" }, 400);
+      }
+    }
+    const allAttachments = [...(input.attachments ?? []), ...prepared.attachments];
+    const hasInitialInput = !!input.prompt?.trim() || prepared.images.length > 0 || allAttachments.length > 0;
+    const clientMessageId = input.clientMessageId ?? (hasInitialInput && prepared.images.length > 0 ? randomUUID() : undefined);
     try {
       let model = input.model;
       if (!model) {
@@ -127,8 +146,10 @@ export function registerAgentRoutes(app: App, { hosts }: RouteContext) {
             ...(input.featureValues ? { featureValues: input.featureValues } : {}),
             ...(input.modeId ? { modeId: input.modeId } : {}),
             ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
-            ...(input.prompt?.trim() ? { initialPrompt: input.prompt } : {}),
-            ...(input.attachments?.length ? { attachments: input.attachments as never } : {}),
+            ...(hasInitialInput ? { initialPrompt: input.prompt ?? "" } : {}),
+            ...(clientMessageId ? { clientMessageId } : {}),
+            ...(prepared.images.length ? { images: prepared.images } : {}),
+            ...(allAttachments.length ? { attachments: allAttachments as never } : {}),
           })
         : await api.agents.create({
             idempotencyKey: input.idempotencyKey,
@@ -139,10 +160,16 @@ export function registerAgentRoutes(app: App, { hosts }: RouteContext) {
               ...(input.modeId ? { modeId: input.modeId } : {}),
               ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
             },
-            ...(input.prompt?.trim() ? { prompt: input.prompt } : {}),
-            ...(input.attachments?.length ? { attachments: input.attachments as never } : {}),
+            ...(hasInitialInput ? { prompt: input.prompt ?? "" } : {}),
+            ...(clientMessageId ? { clientMessageId } : {}),
+            ...(prepared.images.length ? { images: prepared.images } : {}),
+            ...(allAttachments.length ? { attachments: allAttachments as never } : {}),
             ...(worktree ? { worktree } : {}),
           });
+      if (clientMessageId && prepared.images.length) {
+        saveMessageImages(store, hostId, agent.id, clientMessageId, prepared.images);
+      }
+      if (input.attachmentIds?.length) attachments.consumed(input.attachmentIds);
       return c.json({ id: agent.id, key: `${hostId}:${agent.id}` }, 201);
     } catch (error) {
       return c.json(

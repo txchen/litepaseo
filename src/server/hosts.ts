@@ -3,9 +3,9 @@ import { connectionProblem } from "./diagnostics.ts";
 import { createHostClient } from "@getpaseo/client/node";
 import { createPaseoApi } from "@getpaseo/client";
 import type { Host } from "./store.ts";
-import type { AgentSummary, EmptyProjectSummary, WorkspaceSummary, HostDiagnostic, TimelineOp } from "../shared/wire.ts";
+import type { AgentState, AgentSummary, EmptyProjectSummary, WorkspaceSummary, HostDiagnostic, TimelineOp } from "../shared/wire.ts";
 import { VersionedCollection } from "./versioned-collection.ts";
-import { HostDirectory, HostWorkspaces, type DirectoryDriver, type ProjectUpdatePayload, type Transition } from "./host-directory.ts";
+import { deriveWorkspaceAgentState, HostDirectory, HostWorkspaces, type DirectoryDriver, type ProjectUpdatePayload, type Transition } from "./host-directory.ts";
 import { TimelineView, type TimelineDriver, type TimelineResume } from "./timeline-view.ts";
 import { HostSubagents, type SubagentDriver } from "./subagents.ts";
 import { HostBackgroundWork, type BackgroundWorkDriver } from "./background-work.ts";
@@ -88,12 +88,41 @@ export class Hosts {
   /** Wires a connected-or-connecting driver; separate from `add` so tests can inject doubles. */
   attach(hostId: string, driver: Driver, api: Api) {
     this.assertDetached(hostId);
+    const agentsByWorkspace = new Map<string, Map<string, AgentSummary>>();
+    const workspaceAgentState = (workspaceId: string): AgentState | null => {
+      const bucket = agentsByWorkspace.get(workspaceId);
+      return bucket ? deriveWorkspaceAgentState(bucket.values()) : null;
+    };
+    const workspaces = new HostWorkspaces(
+      hostId,
+      driver as unknown as DirectoryDriver,
+      this.workspaces,
+      () => this.emit(this.agentListeners),
+      this.emptyProjects,
+      workspaceAgentState,
+    );
     const directory = new HostDirectory(
       hostId,
       driver as unknown as DirectoryDriver,
       this.agents,
       () => this.emit(this.agentListeners),
       (previous, next) => {
+        const touchedWorkspaces = new Set<string>();
+        if (previous?.workspaceId) {
+          const bucket = agentsByWorkspace.get(previous.workspaceId);
+          if (bucket) {
+            bucket.delete(previous.id);
+            if (!bucket.size) agentsByWorkspace.delete(previous.workspaceId);
+          }
+          touchedWorkspaces.add(previous.workspaceId);
+        }
+        if (next?.workspaceId) {
+          let bucket = agentsByWorkspace.get(next.workspaceId);
+          if (!bucket) agentsByWorkspace.set(next.workspaceId, (bucket = new Map()));
+          bucket.set(next.id, next);
+          touchedWorkspaces.add(next.workspaceId);
+        }
+        for (const workspaceId of touchedWorkspaces) workspaces.reconcile(workspaceId);
         if (next) {
           const view = this.timelines.get(next.key)?.view;
           if (view) {
@@ -106,13 +135,6 @@ export class Hosts {
         }
         notifyListeners(this.transitionListeners, previous, next);
       },
-    );
-    const workspaces = new HostWorkspaces(
-      hostId,
-      driver as unknown as DirectoryDriver,
-      this.workspaces,
-      () => this.emit(this.agentListeners),
-      this.emptyProjects,
     );
     const update = (state: ReturnType<Driver["getConnectionState"]>) => {
       const previous = this.diagnostics.get(hostId) ?? {};

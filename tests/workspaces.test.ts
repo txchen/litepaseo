@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HostWorkspaces, type DirectoryDriver, type WorkspaceDescriptor } from "../src/server/host-directory.ts";
+import { deriveWorkspaceAgentState, HostWorkspaces, type DirectoryDriver, type WorkspaceDescriptor } from "../src/server/host-directory.ts";
 import { VersionedCollection } from "../src/server/versioned-collection.ts";
 import { Store } from "../src/server/store.ts";
 import { Hosts } from "../src/server/hosts.ts";
@@ -431,4 +431,165 @@ test("DirectoryStore renders empty projects, supports pinning, host/search filte
     ["Beta"],
   );
   store.setFilter(null);
+});
+
+test("deriveWorkspaceAgentState prioritizes root agents and only counts running same-workspace subagents", () => {
+  const mk = (id: string, extra: Partial<AgentSummary> = {}): AgentSummary => ({
+    key: `h:${id}`,
+    hostId: "h",
+    id,
+    workspaceId: "w1",
+    title: id,
+    status: "idle",
+    provider: "pi",
+    cwd: "/code/litepaseo",
+    project: "litepaseo",
+    projectKey: "p1",
+    activityAt: 1,
+    attention: false,
+    state: "done",
+    unread: false,
+    lastError: null,
+    pendingPermissions: [],
+    ...extra,
+  });
+
+  assert.equal(deriveWorkspaceAgentState([]), null);
+  assert.equal(deriveWorkspaceAgentState([mk("root")]), null);
+  assert.equal(deriveWorkspaceAgentState([mk("root", { state: "unread", unread: true })]), "unread");
+  // Same-workspace subagent: running counts, finished unread does not.
+  assert.equal(
+    deriveWorkspaceAgentState([
+      mk("root"),
+      mk("child", { parentAgentId: "root", state: "unread", unread: true }),
+    ]),
+    null,
+  );
+  assert.equal(
+    deriveWorkspaceAgentState([
+      mk("root"),
+      mk("child", { parentAgentId: "root", state: "running", turnActive: true }),
+    ]),
+    "running",
+  );
+  // Priority: needs_input > failed > running > unread.
+  assert.equal(
+    deriveWorkspaceAgentState([
+      mk("a", { state: "unread", unread: true }),
+      mk("b", { state: "running", turnActive: true }),
+      mk("c", { state: "failed", unread: true }),
+    ]),
+    "failed",
+  );
+  assert.equal(
+    deriveWorkspaceAgentState([
+      mk("a", { state: "failed", unread: true }),
+      mk("b", { state: "needs_input", attention: true }),
+    ]),
+    "needs_input",
+  );
+});
+
+test("Hosts reconciles workspace effective state from its root agents when workspace.status lags as done", () => {
+  let agentObserver: any;
+  let wsObserver: any;
+  const driver = {
+    getConnectionState: () => ({ status: "connected" }),
+    subscribeConnectionStatus: () => () => {},
+    getLastServerInfoMessage: () => ({ features: { directorySync: true } }),
+    observeAgents: () => ({ subscribe: (o: any) => ((agentObserver = o), () => {}), release: async () => {} }),
+    fetchAgents: async () => ({ entries: [], pageInfo: { hasMore: false, nextCursor: null } }),
+    observeWorkspaces: () => ({ subscribe: (o: any) => ((wsObserver = o), () => {}), release: async () => {} }),
+    fetchWorkspaces: async () => ({ entries: [], pageInfo: { hasMore: false, nextCursor: null } }),
+    close: async () => {},
+  };
+  const hosts = new Hosts();
+  hosts.attach("h", driver as never, { dispose: async () => {} } as never);
+
+  wsObserver.snapshot({
+    entries: [ws("w1", { status: "done", statusEnteredAt: t(10), activityAt: t(10) })],
+    pageInfo: { hasMore: false, nextCursor: null },
+    sync: { generation: "wg", headSeq: 1, mode: "snapshot", removals: [] },
+  });
+  agentObserver.snapshot({
+    entries: [
+      {
+        agent: {
+          id: "a1",
+          workspaceId: "w1",
+          provider: "pi",
+          cwd: "/code/litepaseo",
+          status: "idle",
+          requiresAttention: false,
+          attentionReason: null,
+          updatedAt: t(10),
+          pendingPermissions: [],
+        },
+        syncSeq: 1,
+      },
+    ],
+    pageInfo: { hasMore: false, nextCursor: null },
+    sync: { generation: "ag", headSeq: 1, mode: "snapshot", removals: [] },
+  });
+  assert.equal(hosts.workspaces.get("h:w1")?.state, "done");
+  assert.equal(hosts.workspaces.get("h:w1")?.unread, false);
+
+  // Agent finishes with requiresAttention=true, even if workspace_update never arrives or stays "done".
+  agentObserver.update({
+    type: "agent_update",
+    payload: {
+      kind: "upsert",
+      generation: "ag",
+      seq: 2,
+      agent: {
+        id: "a1",
+        workspaceId: "w1",
+        provider: "pi",
+        cwd: "/code/litepaseo",
+        status: "idle",
+        requiresAttention: true,
+        attentionReason: "finished",
+        updatedAt: t(20),
+        pendingPermissions: [],
+      },
+    },
+  });
+  assert.equal(hosts.workspaces.get("h:w1")?.state, "unread");
+  assert.equal(hosts.workspaces.get("h:w1")?.unread, true);
+
+  // A subsequent workspace_update still reporting "done" keeps the agent-derived unread state.
+  wsObserver.update({
+    type: "workspace_update",
+    payload: {
+      kind: "upsert",
+      generation: "wg",
+      seq: 2,
+      workspace: ws("w1", { status: "done", statusEnteredAt: t(21), activityAt: t(21) }),
+    },
+  });
+  assert.equal(hosts.workspaces.get("h:w1")?.state, "unread");
+  assert.equal(hosts.workspaces.get("h:w1")?.unread, true);
+
+  // Clearing attention on the agent restores "done".
+  agentObserver.update({
+    type: "agent_update",
+    payload: {
+      kind: "upsert",
+      generation: "ag",
+      seq: 3,
+      agent: {
+        id: "a1",
+        workspaceId: "w1",
+        provider: "pi",
+        cwd: "/code/litepaseo",
+        status: "idle",
+        requiresAttention: false,
+        attentionReason: null,
+        updatedAt: t(30),
+        pendingPermissions: [],
+      },
+    },
+  });
+  assert.equal(hosts.workspaces.get("h:w1")?.state, "done");
+  assert.equal(hosts.workspaces.get("h:w1")?.unread, false);
 });

@@ -65,7 +65,8 @@ interface Adapter<Raw, Extra, Memo, S extends { key: string }> {
   retain?(raw: Raw): unknown;
 }
 
-interface Member<Extra, Memo, S> {
+interface Member<Raw, Extra, Memo, S> {
+  raw: Raw;
   fingerprint: string;
   version?: number;
   extra?: Extra;
@@ -81,7 +82,7 @@ interface Member<Extra, Memo, S> {
  */
 class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
   private cursor: SyncCursor | undefined;
-  private readonly members = new Map<string, Member<Extra, Memo, S>>();
+  private readonly members = new Map<string, Member<Raw, Extra, Memo, S>>();
   private subscription: Subscription | null = null;
   private token = 0;
   private stopStatus: (() => void) | null = null;
@@ -137,6 +138,26 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
   protected onSnapshotProcessed(_payload: Payload, _full: boolean) {}
   protected onRawUpdate(_payload: unknown) {}
   protected onDisposed() {}
+  protected postSummarize(_raw: Raw, summary: S): S {
+    return summary;
+  }
+
+  /** Re-runs summarization for a single retained member (e.g. when a derived fallback changes). */
+  protected refresh(id: string) {
+    const member = this.members.get(id);
+    if (!member) return;
+    const { summary: base, memo } = this.adapter.summarize(this.hostId, member.raw, member.extra, member.memo);
+    const summary = this.postSummarize(member.raw, base);
+    const fingerprint = JSON.stringify(summary);
+    member.memo = memo;
+    if (member.fingerprint === fingerprint) return;
+    const previous = member.summary;
+    member.fingerprint = fingerprint;
+    member.summary = summary;
+    this.collection.set(summary.key, summary);
+    this.changed();
+    this.transition(previous, summary);
+  }
 
   private key(id: string) {
     return `${this.hostId}:${id}`;
@@ -270,10 +291,11 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
       return;
     // An update without extra context (e.g. project placement) keeps the last one seen.
     const kept = extra === undefined ? member?.extra : extra;
-    const { summary, memo } = this.adapter.summarize(this.hostId, raw, kept, member?.memo);
+    const { summary: base, memo } = this.adapter.summarize(this.hostId, raw, kept, member?.memo);
+    const summary = this.postSummarize(raw, base);
     const fingerprint = JSON.stringify(summary);
     // A versionless update keeps the version guard of the last versioned one.
-    const next: Member<Extra, Memo, S> = { fingerprint, version: version ?? member?.version, extra: kept, memo, summary, retained: this.adapter.retain?.(raw) };
+    const next: Member<Raw, Extra, Memo, S> = { raw, fingerprint, version: version ?? member?.version, extra: kept, memo, summary, retained: this.adapter.retain?.(raw) };
     this.members.set(id, next);
     if (member?.fingerprint === fingerprint) {
       next.summary = member.summary;
@@ -604,9 +626,50 @@ const workspaceAdapter: Adapter<WorkspaceDescriptor, undefined, ActivityMemo, Wo
   },
 };
 
+const AGENT_STATE_PRIORITY: Record<AgentState, number> = {
+  needs_input: 0,
+  failed: 1,
+  running: 2,
+  unread: 3,
+  done: 4,
+};
+
+/**
+ * Fallback workspace state derived from its active agents, matching Paseo's
+ * `buildWorkspaceAgentActivityIndex` + `deriveEffectiveWorkspaceStatus`: root agents contribute
+ * their full state bucket; same-workspace subagents contribute only while running.
+ */
+export function deriveWorkspaceAgentState(agents: Iterable<AgentSummary>): AgentState | null {
+  const list = Array.isArray(agents) ? agents : [...agents];
+  if (!list.length) return null;
+  const byId = new Map<string, AgentSummary>();
+  for (const agent of list) byId.set(agent.id, agent);
+  let best: AgentState | null = null;
+  let bestPriority = AGENT_STATE_PRIORITY.done;
+  for (const agent of list) {
+    const isRoot = !agent.parentAgentId || !byId.has(agent.parentAgentId);
+    let candidate: AgentState;
+    if (isRoot) {
+      candidate = agent.state === "done" && agent.unread ? "unread" : agent.state;
+    } else if (agent.state === "running" || agent.turnActive) {
+      candidate = "running";
+    } else {
+      continue;
+    }
+    const priority = AGENT_STATE_PRIORITY[candidate];
+    if (priority < bestPriority) {
+      best = candidate;
+      bestPriority = priority;
+      if (bestPriority === 0) break;
+    }
+  }
+  return best;
+}
+
 /** One daemon's workspaces (Paseo's threads) and projects with zero active workspaces. */
 export class HostWorkspaces extends HostMirror<WorkspaceDescriptor, undefined, ActivityMemo, WorkspaceSummary> {
   private readonly emptyProjects?: VersionedCollection<EmptyProjectSummary>;
+  private readonly fallbackState?: (workspaceId: string) => AgentState | null;
   private readonly activeByProject = new Map<string, Set<string>>();
   private readonly emptyMembers = new Map<string, { fingerprint: string; summary: EmptyProjectSummary }>();
 
@@ -616,9 +679,28 @@ export class HostWorkspaces extends HostMirror<WorkspaceDescriptor, undefined, A
     collection: VersionedCollection<WorkspaceSummary>,
     changed: () => void,
     emptyProjects?: VersionedCollection<EmptyProjectSummary>,
+    fallbackState?: (workspaceId: string) => AgentState | null,
   ) {
     super(workspaceAdapter, hostId, driver, collection, changed, (previous, next) => this.trackProject(previous, next));
     this.emptyProjects = emptyProjects;
+    this.fallbackState = fallbackState;
+  }
+
+  /** Re-evaluates one workspace's effective state when its agents change. */
+  reconcile(workspaceId: string) {
+    this.refresh(workspaceId);
+  }
+
+  protected override postSummarize(ws: WorkspaceDescriptor, summary: WorkspaceSummary): WorkspaceSummary {
+    if (summary.state !== "done" || !this.fallbackState) return summary;
+    const fallback = this.fallbackState(ws.id);
+    if (!fallback || fallback === "done") return summary;
+    return {
+      ...summary,
+      state: fallback,
+      attention: fallback === "needs_input",
+      unread: fallback === "unread" || fallback === "failed",
+    };
   }
 
   private trackProject(previous: WorkspaceSummary | null, next: WorkspaceSummary | null) {

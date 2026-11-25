@@ -635,6 +635,8 @@ try {
   assert.equal(await draft.getByLabel("Project").inputValue(), "/code/litepaseo");
   await draft.getByLabel("First message").fill("Add a new session dialog");
   await draft.getByRole("button", { name: "Start session" }).click();
+  // First prompt appears optimistically right away, before the directory snapshot delivers the new agent.
+  await page.locator(".row-user.row-optimistic .bubble", { hasText: "Add a new session dialog" }).waitFor({ timeout: 5000 });
   await resync();
   await page.getByRole("heading", { name: "Brand new session" }).waitFor({ timeout: 15000 });
   hostConfig.agentProfiles = [];

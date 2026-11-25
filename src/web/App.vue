@@ -5,6 +5,7 @@ import { computed, defineAsyncComponent, nextTick, onUnmounted, provide, ref, sh
 import type { AgentBackgroundWorkItem, AgentSummary, DirectoryMessage, ForkContextResult, HostState, ProviderSubagent, RewindMode, WorkspaceSummary } from "../shared/wire.ts";
 import { DirectoryStore, comparePinnedFirst, type ProjectGroup } from "./directory-store.ts";
 import { openStream, type StreamState } from "./event-stream.ts";
+import { newId } from "./id.ts";
 import { agentPath as path, useApi } from "./use-api.ts";
 import { useComposer } from "./use-composer.ts";
 import { useResizableWidth } from "./use-resizable-width.ts";
@@ -50,6 +51,11 @@ const LabelsDialog = defineAsyncComponent(() => import("./LabelsDialog.vue"));
 // Compact layouts: the detail pane is a history entry, so the system back button or gesture
 // returns to the list instead of leaving the app.
 const compact = matchMedia("(max-width: 760px)");
+const isCompact = ref(compact.matches);
+const onCompactChange = (event: MediaQueryListEvent) => {
+  isCompact.value = event.matches;
+};
+compact.addEventListener("change", onCompactChange);
 /** Conversations kept rendered for switching back: fewer on phones, where memory is tighter. */
 const CACHED_CONVERSATIONS = compact.matches ? 3 : 5;
 
@@ -685,26 +691,57 @@ function closeNewSession() {
   newSession.value = null;
   if (compact.matches) closeDetail();
 }
-function onCreated(key: string) {
+function onCreated(created: { key: string; prompt: string; attachmentNames: string[] }) {
+  if (created.prompt.trim() || created.attachmentNames.length) {
+    const msgId = newId();
+    composer.optimistic.add({
+      messageId: msgId,
+      agentKey: created.key,
+      text: created.prompt,
+      attachmentNames: created.attachmentNames,
+      baselineSeqEnd: -1,
+    });
+    composer.optimistic.markSent(created.key, msgId);
+  }
   newSession.value = null;
   if (query.value) query.value = "";
-  select(key);
+  select(created.key);
 }
 const pendingSelection = computed(() => (!!selectedKey.value || !!selectedThread.value) && !active.value);
+const pendingSelectionMessages = computed(() => (selectedKey.value ? composer.optimistic.list(selectedKey.value) : []));
+
+const pageForeground = ref(!document.hidden && document.hasFocus());
+function syncForeground(leaving = false) {
+  pageForeground.value = !leaving && !document.hidden && document.hasFocus();
+}
+const onWindowFocus = () => syncForeground();
+const onWindowBlur = () => syncForeground(true);
+const viewingConversation = computed(
+  () =>
+    authenticated.value &&
+    pageForeground.value &&
+    tab.value === "chat" &&
+    (!isCompact.value || detailOpen.value) &&
+    !activeFile.value &&
+    !terminalActive.value,
+);
 
 // The sidebar's thread and project menus.
 const {
   menu, renaming, openMenu, openHeaderMenu, renameThread, pinThread, markThreadUnread, markThreadRead, archiveThread,
   archiveUndo, undoArchive, dismissArchiveUndo,
   projectPinned, applyProjectPins, pinProject, projectMenu, projectSettings, settingsProject, openProjectMenu, removeProject,
-} = useThreadActions({ api, action, directory, selectedThread, selectedKey, activeThread, readyKey, hostLabels, closeDetail });
+} = useThreadActions({ api, action, directory, selectedThread, selectedKey, activeThread, readyKey, viewingConversation, hostLabels, closeDetail });
 
 // Opening a finished-but-unseen conversation marks it read, as the official app does.
 let readSent = "";
 watch(
-  () => (active.value && active.value.unread && readyKey.value === active.value.key ? active.value : null),
+  () => (viewingConversation.value && active.value && active.value.unread && readyKey.value === active.value.key ? active.value : null),
   (a) => {
-    if (!a || document.hidden) return;
+    if (!a) {
+      if (!active.value?.unread) readSent = "";
+      return;
+    }
     const marker = `${a.key}@${a.activityAt}`;
     if (readSent === marker) return;
     readSent = marker;
@@ -732,7 +769,7 @@ const serverVersion = ref("");
 const reloadPage = () => location.reload();
 
 trackViewingPresence(() => authenticated.value && tab.value === "chat" &&
-  (!compact.matches || detailOpen.value) && !activeFile.value && !terminalActive.value
+  (!isCompact.value || detailOpen.value) && !activeFile.value && !terminalActive.value
   ? active.value?.key ?? null : null, () => authenticated.value);
 
 void loadAuth();
@@ -756,13 +793,23 @@ const tabState = computed(() => {
 });
 watch(tabState, (state) => setFavicon(state), { immediate: true });
 function onVisibilityChange() {
+  syncForeground();
   if (!document.hidden) void loadUsage();
 }
 document.addEventListener("visibilitychange", onVisibilityChange);
+window.addEventListener("focus", onWindowFocus);
+window.addEventListener("blur", onWindowBlur);
+window.addEventListener("pageshow", onWindowFocus);
+window.addEventListener("pagehide", onWindowBlur);
 onUnmounted(() => {
   clearInterval(usageTimer);
   navigator.serviceWorker?.removeEventListener("message", onServiceWorkerMessage);
+  compact.removeEventListener("change", onCompactChange);
   document.removeEventListener("visibilitychange", onVisibilityChange);
+  window.removeEventListener("focus", onWindowFocus);
+  window.removeEventListener("blur", onWindowBlur);
+  window.removeEventListener("pageshow", onWindowFocus);
+  window.removeEventListener("pagehide", onWindowBlur);
   window.removeEventListener("popstate", onPopState);
   window.removeEventListener("keydown", onGlobalKey);
   directoryStream?.close();
@@ -1003,6 +1050,31 @@ onUnmounted(() => {
         @close="closeNewSession"
         @created="onCreated"
       />
+
+      <section v-else-if="tab === 'chat' && pendingSelection && pendingSelectionMessages.length" class="chat">
+        <div class="timeline-wrap">
+          <div class="timeline">
+            <div class="timeline-inner">
+              <div v-for="m in pendingSelectionMessages" :key="'opt:' + m.messageId" class="row row-user row-optimistic" :class="{ 'is-sending': m.status === 'sending' }">
+                <div class="bubble" tabindex="-1">
+                  <div v-if="m.attachmentNames.length" class="optimistic-files">
+                    <span v-for="(name, index) in m.attachmentNames" :key="index" class="optimistic-file">
+                      <Icon name="file" :size="12" />{{ name }}
+                    </span>
+                  </div>{{ m.text }}
+                </div>
+                <div class="user-actions user-actions-status">
+                  <span class="user-time">{{ m.status === "sending" ? "Sending…" : "Sent" }}</span>
+                </div>
+              </div>
+              <div class="timeline-working" role="status" aria-label="Starting session">
+                <span class="spinner spinner-ticked"></span>
+                <span>Starting session…</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section v-else-if="tab === 'chat' && pendingSelection" class="empty">
         <span class="spinner"></span>

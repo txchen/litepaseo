@@ -23,7 +23,10 @@ const props = defineProps<{
   dictationReady: boolean;
   request: (path: string, method?: string, body?: unknown, timeoutMs?: number) => Promise<any>;
 }>();
-const emit = defineEmits<{ close: []; created: [key: string] }>();
+const emit = defineEmits<{
+  close: [];
+  created: [session: { key: string; prompt: string; attachmentNames: string[] }];
+}>();
 
 const CUSTOM = "\u0000custom";
 const PREFS = "litepaseo-new-session";
@@ -104,6 +107,7 @@ watch([useWorktree, worktreeKind, hostId, () => cwd.value], ([use, kind]) => {
 });
 const prompt = ref("");
 const busy = ref(false);
+const pendingMessage = ref<{ text: string; attachmentNames: string[] } | null>(null);
 const error = ref("");
 const notice = ref("");
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -278,8 +282,15 @@ watch([hostId, project, customPath, provider, model, thinking, mode, featureValu
 
 async function create() {
   if (!canCreate.value) return;
+  const sentPrompt = prompt.value;
+  const attachmentNames = props.forkContext?.attachment
+    ? [props.forkContext.attachment.title || props.forkContext.attachment.filename]
+    : [];
   busy.value = true;
   error.value = "";
+  pendingMessage.value = { text: sentPrompt, attachmentNames };
+  prompt.value = "";
+  void nextTick(autosize);
   const effectiveCwd = !props.workspaceId && useWorktree.value && worktreeKind.value === "existing"
     ? selectedWorktreePath.value
     : cwd.value;
@@ -296,7 +307,7 @@ async function create() {
         ...(model.value ? { model: model.value } : {}),
         ...(mode.value ? { modeId: mode.value } : {}),
         ...(thinking.value ? { thinkingOptionId: thinking.value } : {}),
-        prompt: prompt.value,
+        prompt: sentPrompt,
         ...(props.forkContext?.attachment ? { attachments: [props.forkContext.attachment] } : {}),
         ...(!props.workspaceId && useWorktree.value && worktreeKind.value === "new" ? { worktreeBranch: branch.value.trim() } : {}),
       },
@@ -304,10 +315,13 @@ async function create() {
     );
     prefs[hostId.value] = { provider: provider.value, model: model.value, thinking: thinking.value, mode: mode.value };
     safeSetItem(PREFS, JSON.stringify(prefs));
-    emit("created", result.key);
+    emit("created", { key: result.key, prompt: sentPrompt, attachmentNames });
   } catch (e) {
     // Keep the key: retrying the identical request is deduplicated by the daemon.
+    pendingMessage.value = null;
+    prompt.value = sentPrompt;
     error.value = (e as Error).message;
+    void nextTick(autosize);
   } finally {
     busy.value = false;
   }
@@ -349,7 +363,30 @@ onMounted(() => {
       </button>
     </header>
 
-    <div class="new-session-body">
+    <div v-if="pendingMessage" class="timeline-wrap">
+      <div class="timeline">
+        <div class="timeline-inner">
+          <div class="row row-user row-optimistic is-sending">
+            <div class="bubble" tabindex="-1">
+              <div v-if="pendingMessage.attachmentNames.length" class="optimistic-files">
+                <span v-for="(name, index) in pendingMessage.attachmentNames" :key="index" class="optimistic-file">
+                  <Icon name="file" :size="12" />{{ name }}
+                </span>
+              </div>{{ pendingMessage.text }}
+            </div>
+            <div class="user-actions user-actions-status">
+              <span class="user-time">Sending…</span>
+            </div>
+          </div>
+          <div class="timeline-working" role="status" aria-label="Starting session">
+            <span class="spinner spinner-ticked"></span>
+            <span>Starting session…</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-else class="new-session-body">
       <div v-if="!connected.length" class="new-session-card">
         <p class="sheet-note">No connected hosts. Connect a host first.</p>
       </div>

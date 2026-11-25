@@ -12,7 +12,7 @@ export type ProjectTarget = { name: string; hostId: string; rootPath: string; pr
  * archive; project pins, settings (paseo.json) and removal from its host. Viewing an unread
  * thread marks it read.
  */
-export function useThreadActions({ api, action, directory, selectedThread, selectedKey, activeThread, readyKey, hostLabels, closeDetail }: {
+export function useThreadActions({ api, action, directory, selectedThread, selectedKey, activeThread, readyKey, viewingConversation, hostLabels, closeDetail }: {
   api: Api;
   action: (fn: () => Promise<void>) => Promise<void>;
   directory: DirectoryStore<WorkspaceSummary>;
@@ -21,6 +21,8 @@ export function useThreadActions({ api, action, directory, selectedThread, selec
   activeThread: Readonly<Ref<WorkspaceSummary | null>>;
   /** The conversation whose first rows arrived. */
   readyKey: Readonly<Ref<string | null>>;
+  /** True only when the user is actively viewing the foreground conversation. */
+  viewingConversation: Readonly<Ref<boolean>>;
   hostLabels: Readonly<Ref<Map<string, string>>>;
   closeDetail: () => void;
 }) {
@@ -50,6 +52,7 @@ export function useThreadActions({ api, action, directory, selectedThread, selec
   async function markThreadUnread(thread: WorkspaceSummary) {
     await action(async () => {
       await api(threadPath(thread) + "/unread", "POST", {});
+      threadReadSent = "";
       // Leave it so viewing does not mark it read again right away.
       if (selectedThread.value === thread.key) {
         selectedThread.value = selectedKey.value = null;
@@ -88,9 +91,15 @@ export function useThreadActions({ api, action, directory, selectedThread, selec
   // Viewing an unread thread marks it read (the agent-level read is the app's).
   let threadReadSent = "";
   watch(
-    () => (activeThread.value?.unread && !!selectedKey.value && readyKey.value === selectedKey.value ? activeThread.value : null),
+    () =>
+      viewingConversation.value && activeThread.value?.unread && !!selectedKey.value && readyKey.value === selectedKey.value
+        ? activeThread.value
+        : null,
     (w) => {
-      if (!w || document.hidden) return;
+      if (!w) {
+        if (!activeThread.value?.unread) threadReadSent = "";
+        return;
+      }
       const marker = `${w.key}@${w.activityAt}`;
       if (threadReadSent === marker) return;
       threadReadSent = marker;

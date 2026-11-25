@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.14.0
+
+- Upgrade `@getpaseo/client` and `@getpaseo/protocol` to `0.17.4`.
+- **Sidebar multi-select batch archive & hover quick-archive**:
+  - `Shift+Click` any workspace row (or choose **Select…** from the thread menu) to enter multi-select mode with range selection, a sticky batch action bar, a single confirmation prompt, and a unified 6-second Undo toast (`Cmd/Ctrl+Z`).
+  - Added a hover quick-archive icon button on desktop workspace rows.
+- **One-tap blockquote copy**:
+  - Top-level Markdown blockquotes in assistant replies now show a **Copy** control in the top-right corner that copies the quote body cleanly without `> ` markers.
+- **Import CLI sessions**:
+  - Browse, search, and filter recent local CLI sessions (Claude Code, Codex, Pi, Antigravity, etc.) from the sidebar footer or Command Center and import them directly into LitePaseo, preserving partial results and provider warnings.
+- **Command Center enhancements**:
+  - Added **Rewind latest turn** for active conversations whose provider supports rewind.
+  - Added host **Agent Profiles** (`Profile › <name>`) searchable by name, provider, model, or mode—applying directly to matching active agents or opening a pre-configured draft session for other providers—plus draft model/thinking shortcuts before the first message.
+- **Worktrees from existing branches or GitHub PRs**:
+  - `NewSession` now supports creating worktrees from a **New branch**, **From branch** (with live host branch suggestions), **From PR** (`#123`), or an **Existing** worktree.
+- **Built-in Plugin Gallery**:
+  - Browse, search, filter by category, inspect README details, and install plugins from the host's Paseo plugin registry directly inside Host Settings → Plugins.
+- **Add Project dialog overhaul**:
+  - Unified into three tabs (**Existing**, **Clone**, **New folder**) with `Cmd/Ctrl+1/2/3` shortcuts, select-then-confirm rows, preserved tab drafts, and host-side folder creation.
+- **Rich-text hyperlink paste & Issue/PR autolinking**:
+  - Pasting rich text containing hyperlinks into the composer preserves `[label](url)` Markdown links; `owner/repo#123` (and repo-scoped `#123`) references in replies and file previews link directly to their forge issues.
+
 ## 0.13.5
 
 - **Fix missing workspace unread indicator (green dot) & tighten auto-read**:

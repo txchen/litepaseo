@@ -20,12 +20,15 @@ const props = defineProps<{
   workspaceId?: string | null;
   workspaceName?: string | null;
   forkContext?: ForkContextResult | null;
+  /** Optional agent profile ID to apply once the host's profiles and providers load. */
+  initialProfileId?: string | null;
   dictationReady: boolean;
   request: (path: string, method?: string, body?: unknown, timeoutMs?: number) => Promise<any>;
 }>();
 const emit = defineEmits<{
   close: [];
   created: [session: { key: string; prompt: string; attachmentNames: string[] }];
+  hostChange: [hostId: string];
 }>();
 
 const CUSTOM = "\u0000custom";
@@ -78,32 +81,72 @@ const model = ref("");
 const thinking = ref("");
 const mode = ref("");
 const useWorktree = ref(false);
-const worktreeKind = ref<"new" | "existing">("new");
+const worktreeKind = ref<"new" | "branch" | "pr" | "existing">("new");
 const branch = ref("");
+const checkoutBranch = ref("");
+const branches = ref<string[]>([]);
+const loadingBranches = ref(false);
+const prNumber = ref("");
 const existingWorktrees = ref<CheckoutWorktreeOption[]>([]);
 const selectedWorktreePath = ref("");
 const loadingWorktrees = ref(false);
 
+let worktreeSeq = 0;
 async function loadWorktrees() {
   if (!hostId.value || !cwd.value || props.workspaceId) return;
+  const seq = ++worktreeSeq;
   loadingWorktrees.value = true;
   try {
     const list = (await props.request(
       `/hosts/${encodeURIComponent(hostId.value)}/worktrees?cwd=${encodeURIComponent(cwd.value)}`,
     )) as CheckoutWorktreeOption[];
+    if (seq !== worktreeSeq) return;
     existingWorktrees.value = Array.isArray(list) ? list : [];
     if (!existingWorktrees.value.some((w) => w.path === selectedWorktreePath.value)) {
-      selectedWorktreePath.value = existingWorktrees.value.find((w) => !w.containsCwd)?.path ?? existingWorktrees.value[0]?.path ?? "";
+      selectedWorktreesDefault();
     }
   } catch {
-    existingWorktrees.value = [];
+    if (seq === worktreeSeq) existingWorktrees.value = [];
   } finally {
-    loadingWorktrees.value = false;
+    if (seq === worktreeSeq) loadingWorktrees.value = false;
+  }
+}
+function selectedWorktreesDefault() {
+  selectedWorktreePath.value = existingWorktrees.value.find((w) => !w.containsCwd)?.path ?? existingWorktrees.value[0]?.path ?? "";
+}
+
+let branchSeq = 0;
+async function loadBranches() {
+  if (!hostId.value || !cwd.value || props.workspaceId) return;
+  const seq = ++branchSeq;
+  loadingBranches.value = true;
+  try {
+    const res = await props.request(
+      `/hosts/${encodeURIComponent(hostId.value)}/branches?cwd=${encodeURIComponent(cwd.value)}`,
+    );
+    if (seq !== branchSeq) return;
+    branches.value = Array.isArray(res?.branches) ? res.branches : [];
+    if (!checkoutBranch.value && branches.value.length) checkoutBranch.value = branches.value[0]!;
+  } catch {
+    if (seq === branchSeq) branches.value = [];
+  } finally {
+    if (seq === branchSeq) loadingBranches.value = false;
   }
 }
 
+watch([hostId, () => cwd.value], ([nextHost], [prevHost]) => {
+  if (nextHost && nextHost !== prevHost) emit("hostChange", nextHost);
+  branchSeq++;
+  worktreeSeq++;
+  branches.value = [];
+  checkoutBranch.value = "";
+  existingWorktrees.value = [];
+  selectedWorktreePath.value = "";
+});
+
 watch([useWorktree, worktreeKind, hostId, () => cwd.value], ([use, kind]) => {
   if (use && kind === "existing") void loadWorktrees();
+  if (use && kind === "branch") void loadBranches();
 });
 const prompt = ref("");
 const busy = ref(false);
@@ -118,6 +161,18 @@ function showNotice(text: string) {
 }
 
 const promptElement = ref<HTMLTextAreaElement | null>(null);
+const modelSelect = ref<HTMLSelectElement | null>(null);
+function focusModel() {
+  modelSelect.value?.focus();
+  try { (modelSelect.value as HTMLSelectElement & { showPicker?: () => void })?.showPicker?.(); } catch {}
+}
+function cycleThinking() {
+  const list = thinkingOptions.value;
+  if (!list.length || busy.value) return;
+  const idx = list.findIndex((t) => t.id === thinking.value);
+  thinking.value = list[(idx + 1) % list.length]!.id;
+}
+defineExpose({ applyProfile, focusModel, cycleThinking });
 const dictationPreview = ref("");
 const dictationPreviewElement = ref<HTMLDivElement | null>(null);
 watch(
@@ -162,6 +217,17 @@ const iconSource = computed<ProjectIconSource | null>(() => {
   };
 });
 
+const parsedPrNumber = computed(() => {
+  const n = Number(prNumber.value.trim().replace(/^#/, ""));
+  return Number.isInteger(n) && n > 0 ? n : null;
+});
+const worktreeValid = computed(() => {
+  if (props.workspaceId || !useWorktree.value) return true;
+  if (worktreeKind.value === "new") return !!branch.value.trim();
+  if (worktreeKind.value === "branch") return !!checkoutBranch.value.trim();
+  if (worktreeKind.value === "pr") return parsedPrNumber.value !== null;
+  return !!selectedWorktreePath.value;
+});
 const canCreate = computed(
   () =>
     !!hostId.value &&
@@ -169,7 +235,7 @@ const canCreate = computed(
     !!provider.value &&
     !!prompt.value.trim() &&
     !busy.value &&
-    (!!props.workspaceId || !useWorktree.value || (worktreeKind.value === "new" ? !!branch.value.trim() : !!selectedWorktreePath.value)),
+    worktreeValid.value,
 );
 
 function autosize() {
@@ -204,7 +270,7 @@ async function load(id: string) {
   featureValues.value = {};
   loadError.value = "";
   if (!id) return;
-  void props
+  const settingsPromise = props
     .request(`/hosts/${encodeURIComponent(id)}/settings`)
     .then((r) => {
       if (id === hostId.value) profiles.value = r.features.agentProfiles ? r.config.agentProfiles ?? [] : [];
@@ -214,11 +280,15 @@ async function load(id: string) {
     const [p, j] = await Promise.all([
       props.request(`/hosts/${encodeURIComponent(id)}/providers`),
       props.request(`/hosts/${encodeURIComponent(id)}/projects`),
+      settingsPromise,
     ]);
     if (id !== hostId.value) return;
     providers.value = p;
     projects.value = (j as ProjectOption[]).sort((a, b) => a.name.localeCompare(b.name));
     applyPrefs();
+    if (id === props.initialHostId && props.initialProfileId) {
+      await applyProfile(props.initialProfileId);
+    }
     const list = projects.value!;
     const wanted = id === props.initialHostId ? props.initialProject : null;
     const match = wanted
@@ -275,7 +345,7 @@ watch(model, () => {
   const m = selectedModel.value;
   if (m && !m.thinking.some((t) => t.id === thinking.value)) thinking.value = m.defaultThinkingId ?? "";
 });
-watch([hostId, project, customPath, provider, model, thinking, mode, featureValues, useWorktree, worktreeKind, branch, selectedWorktreePath, prompt], () => {
+watch([hostId, project, customPath, provider, model, thinking, mode, featureValues, useWorktree, worktreeKind, branch, checkoutBranch, prNumber, selectedWorktreePath, prompt], () => {
   if (error.value) idempotencyKey = newId();
   error.value = "";
 });
@@ -294,6 +364,15 @@ async function create() {
   const effectiveCwd = !props.workspaceId && useWorktree.value && worktreeKind.value === "existing"
     ? selectedWorktreePath.value
     : cwd.value;
+  const worktreeSpec = !props.workspaceId && useWorktree.value
+    ? worktreeKind.value === "new"
+      ? { mode: "branch-off" as const, newBranch: branch.value.trim() }
+      : worktreeKind.value === "branch"
+        ? { mode: "checkout-branch" as const, branch: checkoutBranch.value.trim() }
+        : worktreeKind.value === "pr" && parsedPrNumber.value !== null
+          ? { mode: "checkout-pr" as const, prNumber: parsedPrNumber.value }
+          : undefined
+    : undefined;
   try {
     const result = await props.request(
       `/hosts/${encodeURIComponent(hostId.value)}/agents`,
@@ -309,7 +388,7 @@ async function create() {
         ...(thinking.value ? { thinkingOptionId: thinking.value } : {}),
         prompt: sentPrompt,
         ...(props.forkContext?.attachment ? { attachments: [props.forkContext.attachment] } : {}),
-        ...(!props.workspaceId && useWorktree.value && worktreeKind.value === "new" ? { worktreeBranch: branch.value.trim() } : {}),
+        ...(worktreeSpec ? { worktree: worktreeSpec } : {}),
       },
       120_000,
     );
@@ -445,7 +524,9 @@ onMounted(() => {
         <div v-if="!workspaceId && useWorktree" class="new-session-worktree">
           <div class="segmented segmented-sm" role="radiogroup" aria-label="Worktree source">
             <button type="button" role="radio" :aria-checked="worktreeKind === 'new'" :class="{ chosen: worktreeKind === 'new' }" @click="worktreeKind = 'new'">New branch</button>
-            <button type="button" role="radio" :aria-checked="worktreeKind === 'existing'" :class="{ chosen: worktreeKind === 'existing' }" @click="worktreeKind = 'existing'">Existing worktree</button>
+            <button type="button" role="radio" :aria-checked="worktreeKind === 'branch'" :class="{ chosen: worktreeKind === 'branch' }" @click="worktreeKind = 'branch'">From branch</button>
+            <button type="button" role="radio" :aria-checked="worktreeKind === 'pr'" :class="{ chosen: worktreeKind === 'pr' }" @click="worktreeKind = 'pr'">From PR</button>
+            <button type="button" role="radio" :aria-checked="worktreeKind === 'existing'" :class="{ chosen: worktreeKind === 'existing' }" @click="worktreeKind = 'existing'">Existing</button>
           </div>
           <input
             v-if="worktreeKind === 'new'"
@@ -455,6 +536,31 @@ onMounted(() => {
             placeholder="feature/my-change"
             autocomplete="off"
             spellcheck="false"
+            :disabled="busy"
+          />
+          <template v-else-if="worktreeKind === 'branch'">
+            <input
+              v-model="checkoutBranch"
+              list="new-session-branches"
+              class="new-session-input"
+              aria-label="Existing branch"
+              :placeholder="loadingBranches ? 'Loading branches…' : 'Branch name (e.g. main or feature/foo)'"
+              autocomplete="off"
+              spellcheck="false"
+              :disabled="busy"
+            />
+            <datalist id="new-session-branches">
+              <option v-for="b in branches" :key="b" :value="b" />
+            </datalist>
+          </template>
+          <input
+            v-else-if="worktreeKind === 'pr'"
+            v-model="prNumber"
+            class="new-session-input"
+            aria-label="Pull request number"
+            placeholder="PR number (e.g. 123 or #123)"
+            inputmode="numeric"
+            autocomplete="off"
             :disabled="busy"
           />
           <select
@@ -524,7 +630,7 @@ onMounted(() => {
               >
                 <span class="chip-text">{{ selectedModel?.label ?? "Default" }}</span>
                 <Icon name="chevron" :size="11" class="chip-caret" />
-                <select v-model="model" aria-label="Model" :disabled="busy || !models.length">
+                <select ref="modelSelect" v-model="model" aria-label="Model" :disabled="busy || !models.length">
                   <option v-if="!models.length" value="">Default</option>
                   <option v-for="m in models" :key="m.id" :value="m.id">{{ m.label }}</option>
                 </select>

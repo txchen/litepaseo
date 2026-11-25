@@ -29,7 +29,74 @@ const emit = defineEmits<{
   new: [group: ProjectGroup<WorkspaceSummary>];
   menu: [thread: WorkspaceSummary, x: number, y: number];
   projectMenu: [group: ProjectGroup<WorkspaceSummary>, x: number, y: number];
+  archive: [thread: WorkspaceSummary];
+  archiveMany: [threads: WorkspaceSummary[]];
 }>();
+
+// ---- Multi-select mode for batch archiving ------------------------------------------------------
+const selecting = ref(false);
+const selectedThreads = ref<Map<string, WorkspaceSummary>>(new Map());
+const selectedKeys = computed(() => selectedThreads.value);
+let anchorKey: string | null = null;
+
+function visibleItems(): WorkspaceSummary[] {
+  props.store.version.value;
+  if (props.mode === "projects") {
+    return props.store
+      .groupedRows(0, Math.max(props.store.groupedHeight, 1))
+      .filter((r): r is Extract<SidebarRow<WorkspaceSummary>, { kind: "item" }> => r.kind === "item")
+      .map((r) => r.item);
+  }
+  return props.store.range(0, props.store.size);
+}
+
+function enterSelect(thread: WorkspaceSummary) {
+  selecting.value = true;
+  selectedThreads.value = new Map([[thread.key, thread]]);
+  anchorKey = thread.key;
+}
+function cancelSelect() {
+  selecting.value = false;
+  selectedThreads.value = new Map();
+  anchorKey = null;
+}
+function toggleSelect(thread: WorkspaceSummary, shiftKey: boolean) {
+  const next = new Map(selectedThreads.value);
+  if (shiftKey && anchorKey) {
+    const items = visibleItems();
+    const a = items.findIndex((i) => i.key === anchorKey);
+    const b = items.findIndex((i) => i.key === thread.key);
+    if (a !== -1 && b !== -1) {
+      const [lo, hi] = a <= b ? [a, b] : [b, a];
+      for (let i = lo; i <= hi; i++) next.set(items[i]!.key, items[i]!);
+      selectedThreads.value = next;
+      return;
+    }
+  }
+  if (next.has(thread.key)) next.delete(thread.key);
+  else next.set(thread.key, thread);
+  anchorKey = thread.key;
+  selectedThreads.value = next;
+  if (!next.size) cancelSelect();
+}
+function selectAllVisible() {
+  const items = visibleItems();
+  selectedThreads.value = new Map(items.map((i) => [i.key, i]));
+  anchorKey = items[0]?.key ?? null;
+}
+function archiveSelected() {
+  const list = Array.from(selectedThreads.value.values());
+  if (!list.length) return;
+  cancelSelect();
+  emit("archiveMany", list);
+}
+function onWindowKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape" && selecting.value) {
+    event.preventDefault();
+    cancelSelect();
+  }
+}
+defineExpose({ enterSelect, cancelSelect });
 
 const OVERSCAN_PX = 320;
 const LONG_PRESS_MS = 500;
@@ -148,11 +215,37 @@ function pressStart(event: PointerEvent, thread: WorkspaceSummary) {
 function pressEnd() {
   clearTimeout(pressTimer);
 }
-function open(thread: WorkspaceSummary) {
+function open(event: MouseEvent, thread: WorkspaceSummary) {
   clearTimeout(cardTimer);
   card.value = null;
   if (pressed) {
     pressed = false; // the long press already opened the menu
+    return;
+  }
+  if (selecting.value) {
+    toggleSelect(thread, event.shiftKey);
+    return;
+  }
+  if (event.shiftKey) {
+    event.preventDefault();
+    selecting.value = true;
+    const next = new Map<string, WorkspaceSummary>();
+    if (props.selectedKey) {
+      anchorKey = props.selectedKey;
+      const items = visibleItems();
+      const a = items.findIndex((i) => i.key === props.selectedKey);
+      const b = items.findIndex((i) => i.key === thread.key);
+      if (a !== -1 && b !== -1) {
+        const [lo, hi] = a <= b ? [a, b] : [b, a];
+        for (let i = lo; i <= hi; i++) next.set(items[i]!.key, items[i]!);
+      } else {
+        next.set(thread.key, thread);
+      }
+    } else {
+      anchorKey = thread.key;
+      next.set(thread.key, thread);
+    }
+    selectedThreads.value = next;
     return;
   }
   emit("select", thread.key);
@@ -181,6 +274,7 @@ onMounted(() => {
   observer = new ResizeObserver(() => (height.value = el.clientHeight || height.value));
   observer.observe(el);
   ageTimer = setInterval(() => (now.value = Date.now()), 60_000);
+  window.addEventListener("keydown", onWindowKeydown);
 });
 onUnmounted(() => {
   observer?.disconnect();
@@ -188,6 +282,7 @@ onUnmounted(() => {
   clearTimeout(pressTimer);
   clearTimeout(cardTimer);
   clearInterval(ageTimer);
+  window.removeEventListener("keydown", onWindowKeydown);
 });
 </script>
 <template>
@@ -243,18 +338,19 @@ onUnmounted(() => {
         <div
           v-else
           class="session-row"
-          :class="{ chosen: selectedKey === row.item.key }"
+          :class="{ chosen: !selecting && selectedKey === row.item.key, 'is-selected': selecting && selectedKeys.has(row.item.key) }"
           :style="{ transform: `translateY(${row.top}px)` }"
         >
           <button
             class="session"
             :class="{
               unread: row.item.unread,
-              chosen: selectedKey === row.item.key,
+              chosen: !selecting && selectedKey === row.item.key,
+              'is-selected': selecting && selectedKeys.has(row.item.key),
               offline: hostStates.get(row.item.hostId) !== 'connected',
               nested: mode === 'projects',
             }"
-            @click="open(row.item)"
+            @click="open($event, row.item)"
             @contextmenu.prevent="emit('menu', row.item, $event.clientX, $event.clientY)"
             @pointerdown="pressStart($event, row.item)"
             @pointerup="pressEnd"
@@ -263,7 +359,10 @@ onUnmounted(() => {
             @mouseenter="hoverStart($event, row.item)"
             @mouseleave="hoverEnd"
           >
-            <span class="session-dot"><span v-if="dot(row.item)" class="status-dot" :class="dot(row.item)"></span></span>
+            <span v-if="selecting" class="session-check" :class="{ checked: selectedKeys.has(row.item.key) }" aria-hidden="true">
+              <Icon v-if="selectedKeys.has(row.item.key)" name="check" :size="11" />
+            </span>
+            <span v-else class="session-dot"><span v-if="dot(row.item)" class="status-dot" :class="dot(row.item)"></span></span>
             <span class="session-title">
               <Icon v-if="row.item.pinnedAt" name="pin" :size="11" class="pin-mark" />{{ row.item.name }}
               <span v-for="lbl in (row.item.labels ?? []).slice(0, 2)" :key="lbl" class="ws-label-pill">{{ lbl }}</span>
@@ -274,6 +373,16 @@ onUnmounted(() => {
             <span v-else class="session-age">{{ relativeAge(row.item.activityAt, now) }}</span>
           </button>
           <button
+            v-if="!selecting"
+            class="row-quick-archive"
+            :aria-label="'Archive ' + row.item.name"
+            title="Archive workspace"
+            @click.stop="emit('archive', row.item)"
+          >
+            <Icon name="archive" :size="14" />
+          </button>
+          <button
+            v-if="!selecting"
             class="row-more"
             :aria-label="'Actions for ' + row.item.name"
             title="Rename, pin, mark unread, archive"
@@ -295,6 +404,12 @@ onUnmounted(() => {
         <p><Icon name="folder" :size="14" />{{ tildeHome(card.thread.directory || card.thread.rootPath) }}</p>
       </div>
     </Teleport>
+    <div v-if="selecting" class="select-bar" role="region" aria-label="Batch workspace actions">
+      <span class="select-bar-count">{{ selectedKeys.size }} selected</span>
+      <button type="button" class="link-btn" @click="selectAllVisible">All</button>
+      <button type="button" class="btn btn-sm btn-danger" :disabled="!selectedKeys.size" @click="archiveSelected">Archive</button>
+      <button type="button" class="icon-btn" aria-label="Cancel selection" title="Cancel (Esc)" @click="cancelSelect"><Icon name="close" :size="14" /></button>
+    </div>
     <div v-if="!hasRows" class="list-empty">
       {{ searching ? "No threads match." : "No threads yet. Add a host to get started." }}
     </div>

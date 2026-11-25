@@ -378,14 +378,19 @@ export function registerHostSettings<E extends Env>(app: Hono<E>, hosts: Hosts) 
   app.get("/api/hosts/:host/plugins", async (c) => {
     const plugins = await hosts.get(c.req.param("host")).driver.listPlugins();
     return c.json(
-      plugins.map(({ id, name, enabled, status, description, error }) => ({
-        id,
-        name,
-        enabled,
-        status,
-        description,
-        error,
-      })),
+      plugins.map(({ id, name, enabled, status, description, error, installation }) => {
+        const identity = installation?.identity;
+        const registryId = identity && "registry" in identity ? identity.registry?.id : undefined;
+        return {
+          id,
+          name,
+          enabled,
+          status,
+          description,
+          error,
+          ...(registryId ? { registryId } : {}),
+        };
+      }),
     );
   });
   app.post("/api/hosts/:host/plugins/:plugin/:action", async (c) => {
@@ -410,6 +415,58 @@ export function registerHostSettings<E extends Env>(app: Hono<E>, hosts: Hosts) 
       .parse(await c.req.json());
     await driver.installPluginSource(input);
     return c.json({ ok: true });
+  });
+  app.get("/api/hosts/:host/plugin-registry", async (c) => {
+    const driver = hosts.get(c.req.param("host")).driver;
+    if (!driver.getLastServerInfoMessage()?.features?.pluginRegistry || typeof driver.listPluginRegistry !== "function")
+      return c.json({ error: "Plugin gallery is unavailable on this host" }, 409);
+    try {
+      const idx = await driver.listPluginRegistry();
+      return c.json({
+        registryName: idx.registry.name,
+        registryUrl: idx.registry.url,
+        categories: idx.categories ?? [],
+        featured: idx.featured ?? [],
+        plugins: (idx.plugins ?? []).map((p) => ({
+          id: p.id,
+          name: p.name,
+          description: p.description,
+          categories: p.categories ?? [],
+          author: { github: p.author.github, ...(p.author.name ? { name: p.author.name } : {}) },
+          repositoryUrl: p.repository.url,
+          ...(p.license ? { license: p.license } : {}),
+          ...(typeof p.installs === "number" ? { installs: p.installs } : {}),
+          updatedAt: p.updatedAt,
+          ...(p.artifact?.version ? { version: p.artifact.version } : {}),
+        })),
+      });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : "Could not load plugin gallery" }, 502);
+    }
+  });
+  app.get("/api/hosts/:host/plugin-registry/:owner/:name", async (c) => {
+    const driver = hosts.get(c.req.param("host")).driver;
+    if (!driver.getLastServerInfoMessage()?.features?.pluginRegistry || typeof driver.getRegistryPlugin !== "function")
+      return c.json({ error: "Plugin gallery is unavailable on this host" }, 409);
+    const id = `${c.req.param("owner")}/${c.req.param("name")}`;
+    try {
+      const p = await driver.getRegistryPlugin(id);
+      return c.json({
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        categories: p.categories ?? [],
+        author: { github: p.author.github, ...(p.author.name ? { name: p.author.name } : {}) },
+        repositoryUrl: p.repository.url,
+        ...(p.license ? { license: p.license } : {}),
+        ...(typeof p.installs === "number" ? { installs: p.installs } : {}),
+        updatedAt: p.updatedAt,
+        ...(p.artifact?.version ? { version: p.artifact.version } : {}),
+        readme: p.readme ?? "",
+      });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : "Could not load plugin details" }, 502);
+    }
   });
   app.get("/api/hosts/:host/status", async (c) =>
     c.json(await hosts.get(c.req.param("host")).driver.getDaemonStatus()),

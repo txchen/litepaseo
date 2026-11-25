@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import type { PluginRegistryDetail, PluginRegistryIndex } from "../shared/wire.ts";
 import { confirmAction } from "./confirm.ts";
 import { canonical } from "./host-settings-form.ts";
 import Icon from "./Icon.vue";
@@ -105,6 +106,82 @@ async function managePlugin(id: string, action: string) {
   }
 }
 
+// ---- Plugin Gallery -----------------------------------------------------------------------------
+const galleryOpen = ref(false);
+const gallery = ref<PluginRegistryIndex | null>(null);
+const galleryLoading = ref(false);
+const galleryError = ref("");
+const galleryQuery = ref("");
+const galleryCategory = ref("");
+const galleryDetail = ref<Record<string, PluginRegistryDetail>>({});
+const galleryExpanded = ref<string | null>(null);
+const installedIds = computed(() => {
+  const ids = new Set<string>();
+  for (const p of plugins.value) {
+    if (p.id) ids.add(String(p.id));
+    if (p.registryId) ids.add(String(p.registryId));
+  }
+  return ids;
+});
+
+const filteredGallery = computed(() => {
+  const list = gallery.value?.plugins ?? [];
+  const q = galleryQuery.value.trim().toLowerCase();
+  const cat = galleryCategory.value;
+  return list.filter((p) => {
+    if (cat && !p.categories.includes(cat)) return false;
+    if (!q) return true;
+    return `${p.name} ${p.id} ${p.description} ${p.author.github} ${p.author.name ?? ""}`.toLowerCase().includes(q);
+  });
+});
+
+async function openGallery() {
+  galleryOpen.value = !galleryOpen.value;
+  if (!galleryOpen.value || gallery.value) return;
+  galleryLoading.value = true;
+  galleryError.value = "";
+  try {
+    gallery.value = (await props.api(props.base + "/plugin-registry")) as PluginRegistryIndex;
+  } catch (e) {
+    galleryError.value = message(e);
+  } finally {
+    galleryLoading.value = false;
+  }
+}
+
+async function toggleGalleryDetail(id: string) {
+  if (galleryExpanded.value === id) {
+    galleryExpanded.value = null;
+    return;
+  }
+  galleryExpanded.value = id;
+  if (galleryDetail.value[id]) return;
+  const parts = id.split("/");
+  if (parts.length !== 2) return;
+  try {
+    const detail = (await props.api(
+      `${props.base}/plugin-registry/${encodeURIComponent(parts[0]!)}/${encodeURIComponent(parts[1]!)}`,
+    )) as PluginRegistryDetail;
+    galleryDetail.value = { ...galleryDetail.value, [id]: detail };
+  } catch {
+    /* keep summary view */
+  }
+}
+
+async function installFromGallery(id: string) {
+  pluginBusy.value = "gallery:" + id;
+  pluginNote.value = null;
+  try {
+    await props.api(props.base + "/plugins", "POST", { source: id }, 120_000);
+    pluginNote.value = { text: `Installed ${id}.` };
+    plugins.value = await props.api(props.base + "/plugins");
+  } catch (e) {
+    pluginNote.value = { text: message(e), error: true };
+  } finally {
+    pluginBusy.value = null;
+  }
+}
+
 watch(() => props.loads, () => void Promise.all([loadSkills(), loadPlugins()]), { immediate: true });
 </script>
 
@@ -166,6 +243,51 @@ watch(() => props.loads, () => void Promise.all([loadSkills(), loadPlugins()]), 
         <button type="button" class="btn btn-outline btn-sm" :disabled="!pluginSource.trim() || !!pluginBusy" @click="managePlugin('', 'install')">
           {{ pluginBusy === "install" ? "Installing…" : "Install" }}
         </button>
+      </div>
+      <div v-if="features.pluginRegistry" class="card-row hs-gallery-bar">
+        <span class="row-sub grow">Browse vetted plugins from the Paseo plugin registry.</span>
+        <button type="button" class="btn btn-outline btn-sm" @click="openGallery">
+          {{ galleryOpen ? "Hide gallery" : "Browse gallery" }}
+        </button>
+      </div>
+    </div>
+
+    <div v-if="galleryOpen && features.pluginRegistry" class="card hs-gallery">
+      <div class="card-row hs-gallery-filters">
+        <input v-model="galleryQuery" placeholder="Search plugins…" aria-label="Search plugin gallery" />
+        <select v-if="gallery?.categories?.length" v-model="galleryCategory" aria-label="Plugin category">
+          <option value="">All categories</option>
+          <option v-for="c in gallery.categories" :key="c.slug" :value="c.slug">{{ c.label }}</option>
+        </select>
+      </div>
+      <p v-if="galleryLoading" class="card-row subtle"><span class="spinner spinner-sm"></span> Loading plugin gallery…</p>
+      <p v-else-if="galleryError" class="card-row setting-note is-error" role="alert">{{ galleryError }}</p>
+      <p v-else-if="!filteredGallery.length" class="card-row subtle">No matching plugins found.</p>
+      <div v-for="item in filteredGallery" :key="item.id" class="card-row hs-plugin hs-gallery-item">
+        <div class="grow">
+          <div class="row-title">
+            <button type="button" class="link-btn" @click="toggleGalleryDetail(item.id)">{{ item.name }}</button>
+            <span v-if="item.version" class="hs-tag">v{{ item.version }}</span>
+            <span v-if="installedIds.has(item.id)" class="badge">installed</span>
+          </div>
+          <div class="row-sub">{{ item.description }}</div>
+          <div class="row-sub">
+            by {{ item.author.name || item.author.github }}
+            <template v-if="typeof item.installs === 'number'"> · {{ item.installs }} installs</template>
+            <template v-if="item.repositoryUrl"> · <a :href="item.repositoryUrl" target="_blank" rel="noopener noreferrer">Repo</a></template>
+          </div>
+          <pre v-if="galleryExpanded === item.id && galleryDetail[item.id]?.readme" class="hs-output hs-gallery-readme">{{ galleryDetail[item.id]!.readme.slice(0, 3000) }}</pre>
+        </div>
+        <div v-if="features.pluginSourceInstallation" class="hs-row-actions">
+          <button
+            type="button"
+            class="btn btn-outline btn-sm"
+            :disabled="!!pluginBusy || installedIds.has(item.id)"
+            @click="installFromGallery(item.id)"
+          >
+            {{ pluginBusy === "gallery:" + item.id ? "Installing…" : installedIds.has(item.id) ? "Installed" : "Install" }}
+          </button>
+        </div>
       </div>
     </div>
   </template>

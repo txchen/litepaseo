@@ -494,6 +494,63 @@ export function rewriteFileLinks(markdown: string, context: FileLinkContext): st
   );
 }
 
+const MD_LINK_OR_URL = /!?\[[^\]]*\]\([^)]*\)|https?:\/\/[^\s<>)]+/g;
+const CROSS_REPO_REF = /(^|[\s([,;:])([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#(\d+)\b/g;
+const LOCAL_ISSUE_REF = /(^|[\s([,;:])#(\d+)\b/g;
+
+function issueUrlFor(repoBase: string, number: string): string {
+  const clean = repoBase.replace(/\/+$/, "");
+  // GitLab uses /-/issues/<n>; GitHub/Gitea/Forgejo/Codeberg use /issues/<n>.
+  try {
+    if (/gitlab/i.test(new URL(clean).hostname)) return `${clean}/-/issues/${number}`;
+  } catch {
+    /* ignore malformed URL */
+  }
+  return `${clean}/issues/${number}`;
+}
+
+/**
+ * Turns `owner/repo#123` (and `#123` when `repoUrl` is known) in prose into clickable links,
+ * skipping code blocks, inline code, existing Markdown links, and URLs.
+ */
+export function rewriteIssueLinks(markdown: string, repoUrl?: string | null): string {
+  if (!markdown.includes("#")) return markdown;
+  const normalizedRepo = repoUrl && /^https?:\/\//i.test(repoUrl) ? repoUrl.replace(/\/+$/, "") : null;
+  let forgeOrigin = "https://github.com";
+  if (normalizedRepo) {
+    try {
+      forgeOrigin = new URL(normalizedRepo).origin;
+    } catch {
+      /* keep GitHub default */
+    }
+  }
+  return mapProse(markdown, (text) => {
+    // Split around existing Markdown links and raw URLs so we never nest links.
+    const out: string[] = [];
+    let last = 0;
+    for (const m of text.matchAll(MD_LINK_OR_URL)) {
+      const idx = m.index ?? 0;
+      if (idx > last) out.push(rewriteIssueChunk(text.slice(last, idx), forgeOrigin, normalizedRepo));
+      out.push(m[0]);
+      last = idx + m[0].length;
+    }
+    if (last < text.length) out.push(rewriteIssueChunk(text.slice(last), forgeOrigin, normalizedRepo));
+    return out.join("");
+  });
+}
+
+function rewriteIssueChunk(chunk: string, forgeOrigin: string, repoUrl: string | null): string {
+  let out = chunk.replace(CROSS_REPO_REF, (_m, lead: string, slug: string, num: string) =>
+    `${lead}[${slug}#${num}](${issueUrlFor(`${forgeOrigin}/${slug}`, num)})`,
+  );
+  if (repoUrl) {
+    out = out.replace(LOCAL_ISSUE_REF, (_m, lead: string, num: string) =>
+      `${lead}[#${num}](${issueUrlFor(repoUrl, num)})`,
+    );
+  }
+  return out;
+}
+
 /** Images Paseo materialized from provider output (`/tmp/paseo-attachments-…/<sha256>.png`). */
 const MATERIALIZED = /\/paseo-attachments-[A-Za-z0-9_-]{1,32}\/[a-f0-9]{64}\.[a-z0-9]+$/i;
 

@@ -538,10 +538,10 @@
   font-variant-numeric: tabular-nums;
   color: var(--fg-faint);
 }
+.row-quick-archive,
 .row-more {
   position: absolute;
   top: 50%;
-  right: 6px;
   transform: translateY(-50%);
   display: grid;
   place-items: center;
@@ -550,16 +550,67 @@
   border-radius: 7px;
   color: var(--fg-muted);
 }
+.row-more {
+  right: 6px;
+}
+.row-quick-archive {
+  right: 32px;
+  display: none;
+}
+.session-check {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  border: 1.5px solid var(--border-strong);
+  color: #fff;
+  background: transparent;
+}
+.session-check.checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.session.is-selected {
+  background: var(--accent-soft);
+}
+.select-bar {
+  position: sticky;
+  bottom: 8px;
+  z-index: 6;
+  margin: 0 8px;
+  padding: 6px 8px 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+  font-size: 12.5px;
+}
+.select-bar-count {
+  font-weight: 600;
+  margin-right: auto;
+}
 @media (hover: hover) {
+  .row-quick-archive {
+    display: grid;
+    opacity: 0;
+  }
   .row-more {
     opacity: 0;
   }
   .session-row:hover .row-more,
   .session-row.chosen .row-more,
-  .row-more:focus-visible {
+  .row-more:focus-visible,
+  .session-row:hover .row-quick-archive,
+  .row-quick-archive:focus-visible {
     opacity: 1;
   }
-  .row-more:hover {
+  .row-more:hover,
+  .row-quick-archive:hover {
     background: var(--selected);
     color: var(--fg);
   }
@@ -567,7 +618,10 @@
   .session-row.chosen .session-age {
     visibility: hidden;
   }
-  /* Room for the button only where it shows. */
+  /* Room for hover action buttons only where they show. */
+  .session-row:hover .session {
+    padding-right: 60px;
+  }
   .session-row:not(:hover):not(.chosen) .session {
     padding-right: 6px;
   }

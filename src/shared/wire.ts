@@ -417,6 +417,53 @@ export interface WorkspaceLabelDef {
   color: WorkspaceLabelColor;
 }
 
+export type WorktreeCreateSpec =
+  | { mode: "branch-off"; newBranch: string; base?: string }
+  | { mode: "checkout-branch"; branch: string }
+  | { mode: "checkout-pr"; prNumber: number };
+
+export interface ImportableSessionEntry {
+  providerId: string;
+  providerLabel: string;
+  providerHandleId: string;
+  cwd: string;
+  title: string | null;
+  firstPromptPreview: string | null;
+  lastPromptPreview: string | null;
+  lastActivityAt: string;
+}
+
+export interface ImportableSessionsResponse {
+  entries: ImportableSessionEntry[];
+  filteredAlreadyImportedCount?: number;
+  providerErrors?: { provider: string; message: string }[];
+}
+
+export interface PluginRegistryListing {
+  id: string;
+  name: string;
+  description: string;
+  categories: string[];
+  author: { github: string; name?: string };
+  repositoryUrl: string;
+  license?: string;
+  installs?: number;
+  updatedAt: string;
+  version?: string;
+}
+
+export interface PluginRegistryIndex {
+  registryName: string;
+  registryUrl: string;
+  categories: { slug: string; label: string; description?: string }[];
+  featured: string[];
+  plugins: PluginRegistryListing[];
+}
+
+export interface PluginRegistryDetail extends PluginRegistryListing {
+  readme: string;
+}
+
 export interface CreateSessionRequest {
   idempotencyKey: string;
   cwd: string;
@@ -426,8 +473,10 @@ export interface CreateSessionRequest {
   thinkingOptionId?: string;
   featureValues?: Record<string, unknown>;
   prompt?: string;
-  /** Start in a new git worktree on this new branch. */
+  /** Start in a new git worktree on this new branch (legacy shorthand). */
   worktreeBranch?: string;
+  /** Create a git worktree from a new branch, existing branch, or GitHub PR. */
+  worktree?: WorktreeCreateSpec;
   /** Attach the new agent to an existing workspace instead of creating a new one. */
   workspaceId?: string;
   /** Optional text attachments (e.g. forked conversation context). */

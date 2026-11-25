@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, inject, onBeforeUnmount, ref, type ShallowRef } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch, type ShallowRef } from "vue";
 import type { TimelineRow } from "../shared/wire.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { loadMarkstream, markstream } from "./markstream-loader.ts";
-import { TIMELINE_CONTEXT, editDiff, formatMessageTimestamp, reasoningHeadline, rewriteFileLinks, rewriteImageSources, rewriteMessageImages, toolDisplay, toolOutput } from "./timeline-display.ts";
+import { attachQuoteCopyButtons } from "./paste-links.ts";
+import { TIMELINE_CONTEXT, editDiff, formatMessageTimestamp, reasoningHeadline, rewriteFileLinks, rewriteImageSources, rewriteIssueLinks, rewriteMessageImages, toolDisplay, toolOutput } from "./timeline-display.ts";
 import Icon from "./Icon.vue";
 import PluginRow from "./PluginRow.vue";
 import RewindMenu from "./RewindMenu.vue";
@@ -23,10 +24,20 @@ const MAX_DIFF_LINES = 600;
 const assistantText = computed(() => {
   const text = String(item.value.text ?? "");
   const ctx = context?.value;
-  if (!ctx) return text;
-  if (!ctx.session) return rewriteImageSources(text, ctx.base);
+  if (!ctx) return rewriteIssueLinks(text);
+  if (!ctx.session) return rewriteIssueLinks(rewriteImageSources(text, ctx.base));
   const links = { session: ctx.session, cwd: ctx.cwd, workspace: ctx.workspace ?? ctx.cwd, localHost: ctx.localHost };
-  return rewriteFileLinks(rewriteMessageImages(text, ctx.base, links), links);
+  return rewriteIssueLinks(rewriteFileLinks(rewriteMessageImages(text, ctx.base, links), links));
+});
+const assistantEl = ref<HTMLElement | null>(null);
+function decorateQuotes() {
+  void nextTick(() => attachQuoteCopyButtons(assistantEl.value));
+}
+onMounted(() => {
+  if (item.value.type === "assistant_message") decorateQuotes();
+});
+watch([assistantText, markstream, () => props.final], () => {
+  if (item.value.type === "assistant_message") decorateQuotes();
 });
 // Markstream arrives asynchronously; until then the built-in renderer (escapes all input,
 // only http(s)/mailto links and this app's own images) shows the same message.
@@ -141,7 +152,7 @@ async function copyMessage() {
     </div>
   </div>
 
-  <div v-else-if="item.type === 'assistant_message'" class="row row-assistant" :data-seq-end="row.seqEnd">
+  <div v-else-if="item.type === 'assistant_message'" ref="assistantEl" class="row row-assistant" :data-seq-end="row.seqEnd">
     <component :is="markstream" v-if="markstream" :content="assistantText" :final="final" />
     <div v-else class="prose" v-html="fallbackHtml"></div>
   </div>

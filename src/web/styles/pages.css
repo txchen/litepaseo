@@ -608,3 +608,26 @@
     flex: 1;
   }
 }
+.hs-gallery {
+  margin-top: 10px;
+}
+.hs-gallery-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.hs-gallery-filters input {
+  flex: 1 1 180px;
+}
+.hs-gallery-readme {
+  margin-top: 8px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.import-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 16px;
+}

@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import Icon from "./Icon.vue";
 import { loadMarkstream, markstream } from "./markstream-loader.ts";
 import { highlight, languageFor } from "./highlight.ts";
-import { parseFileLink, rewriteFileImages, rewriteFileLinks, type FileViewState, type LineRange } from "./timeline-display.ts";
+import { parseFileLink, rewriteFileImages, rewriteFileLinks, rewriteIssueLinks, type FileViewState, type LineRange } from "./timeline-display.ts";
 
 /** A workspace file opened as a main-area tab: code with line numbers, Markdown, or an image. */
 const props = defineProps<{
@@ -57,7 +57,7 @@ const markdownText = computed(() => {
   if (!props.session) return text;
   const dir = fullPath.value.slice(0, fullPath.value.lastIndexOf("/")) || "/";
   const context = { session: props.session, cwd: dir, workspace: props.cwd };
-  return rewriteFileLinks(rewriteFileImages(text, { ...context, rawBase: `/api${base.value}` }), context);
+  return rewriteIssueLinks(rewriteFileLinks(rewriteFileImages(text, { ...context, rawBase: `/api${base.value}` }), context));
 });
 const notice = ref("");
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;

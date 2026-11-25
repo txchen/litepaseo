@@ -829,6 +829,17 @@ defineExpose({
   epoch: () => store.value.epoch,
   /** Highest known seqEnd in the live timeline, for optimistic fallback deduplication. */
   latestSeqEnd: () => store.value.rows.at(-1)?.row.value.seqEnd ?? -1,
+  /** Latest user prompt that carries a daemon messageId, for Command Center Rewind. */
+  latestRewindableMessage: () => {
+    const rows = store.value.rows;
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const item = rows[i]!.row.value.item as Record<string, unknown>;
+      if (item.type === "user_message" && typeof item.messageId === "string" && item.messageId) {
+        return { messageId: item.messageId, text: String(item.text ?? "") };
+      }
+    }
+    return null;
+  },
 });
 </script>
 

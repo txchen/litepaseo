@@ -63,19 +63,25 @@ export function useThreadActions({ api, action, directory, selectedThread, selec
   async function markThreadRead(thread: WorkspaceSummary) {
     await action(async () => void (await api(threadPath(thread) + "/read", "POST", {})));
   }
-  const archiveUndo = shallowRef<WorkspaceSummary | null>(null);
+  const archiveUndo = shallowRef<WorkspaceSummary[] | null>(null);
   let undoTimer: ReturnType<typeof setTimeout> | undefined;
   function dismissArchiveUndo() {
     clearTimeout(undoTimer);
     undoTimer = undefined;
     archiveUndo.value = null;
   }
+  function scheduleArchiveUndo(threads: WorkspaceSummary[]) {
+    if (!threads.length) return;
+    archiveUndo.value = threads;
+    clearTimeout(undoTimer);
+    undoTimer = setTimeout(() => { archiveUndo.value = null; }, 6000);
+  }
   async function undoArchive() {
-    const thread = archiveUndo.value;
-    if (!thread) return;
+    const threads = archiveUndo.value;
+    if (!threads?.length) return;
     dismissArchiveUndo();
     await action(async () => {
-      await api(threadPath(thread) + "/undo-archive", "POST", {});
+      await Promise.all(threads.map((thread) => api(threadPath(thread) + "/undo-archive", "POST", {})));
     });
   }
   async function archiveThread(thread: WorkspaceSummary) {
@@ -83,9 +89,33 @@ export function useThreadActions({ api, action, directory, selectedThread, selec
     await action(async () => {
       await api(threadPath(thread) + "/archive", "POST", {});
       if (selectedThread.value === thread.key) selectedThread.value = selectedKey.value = null;
-      archiveUndo.value = thread;
-      clearTimeout(undoTimer);
-      undoTimer = setTimeout(() => { archiveUndo.value = null; }, 6000);
+      scheduleArchiveUndo([thread]);
+    });
+  }
+  async function archiveThreads(threads: WorkspaceSummary[]) {
+    if (!threads.length) return;
+    if (threads.length === 1) return archiveThread(threads[0]!);
+    const activeCount = threads.filter((t) => t.state === "running" || t.attention).length;
+    const msg = activeCount
+      ? `${activeCount} of the selected workspaces ${activeCount === 1 ? "is" : "are"} still active. All ${threads.length} will leave the sidebar; the host keeps their history.`
+      : "They leave the sidebar; the host keeps their history.";
+    if (!(await confirmAction({ title: `Archive ${threads.length} workspaces?`, message: msg, confirmLabel: `Archive ${threads.length}`, danger: activeCount > 0 }))) return;
+    await action(async () => {
+      const results = await Promise.allSettled(
+        threads.map(async (thread) => {
+          await api(threadPath(thread) + "/archive", "POST", {});
+          return thread;
+        }),
+      );
+      const archived = results
+        .filter((r): r is PromiseFulfilledResult<WorkspaceSummary> => r.status === "fulfilled")
+        .map((r) => r.value);
+      if (selectedThread.value && archived.some((t) => t.key === selectedThread.value)) {
+        selectedThread.value = selectedKey.value = null;
+      }
+      scheduleArchiveUndo(archived);
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+      if (failed) throw failed.reason;
     });
   }
   // Viewing an unread thread marks it read (the agent-level read is the app's).
@@ -188,7 +218,7 @@ export function useThreadActions({ api, action, directory, selectedThread, selec
   }
 
   return {
-    menu, renaming, openMenu, openHeaderMenu, renameThread, pinThread, markThreadUnread, markThreadRead, archiveThread,
+    menu, renaming, openMenu, openHeaderMenu, renameThread, pinThread, markThreadUnread, markThreadRead, archiveThread, archiveThreads,
     archiveUndo, undoArchive, dismissArchiveUndo,
     projectPinned, applyProjectPins, pinProject, projectMenu, projectSettings, settingsProject, openProjectMenu, removeProject,
   };

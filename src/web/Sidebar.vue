@@ -43,11 +43,15 @@ const emit = defineEmits<{
   openCommandCenter: [];
   addProject: [];
   openArchived: [];
+  openImportSession: [];
+  archiveThread: [thread: WorkspaceSummary];
+  archiveThreads: [threads: WorkspaceSummary[]];
 }>();
 
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 const viewMenu = ref(false);
 const searchInput = ref<HTMLInputElement | null>(null);
+const sessionListRef = ref<InstanceType<typeof SessionList> | null>(null);
 
 const sessionCount = computed(() => {
   props.store.version.value;
@@ -84,6 +88,9 @@ defineExpose({
     searchInput.value?.select();
   },
   isSearchInput: (element: EventTarget | null) => !!element && element === searchInput.value,
+  enterSelect(thread: WorkspaceSummary) {
+    sessionListRef.value?.enterSelect(thread);
+  },
 });
 </script>
 
@@ -176,6 +183,7 @@ defineExpose({
       </div>
     </div>
     <SessionList
+      ref="sessionListRef"
       :queues="queues"
       :mode="listMode"
       :store="store"
@@ -187,12 +195,22 @@ defineExpose({
       @new="(group) => emit('new', group)"
       @menu="(thread, x, y) => emit('menu', thread, x, y)"
       @project-menu="(group, x, y) => emit('projectMenu', group, x, y)"
+      @archive="(thread) => emit('archiveThread', thread)"
+      @archive-many="(threads) => emit('archiveThreads', threads)"
     />
     <UsagePanel :report="usage" :loading="usageLoading" @refresh="emit('refreshUsage')" />
     <div class="side-foot">
       <span class="live" :class="'is-' + directoryState" :title="'Directory stream: ' + directoryState">
         <span class="live-dot"></span>{{ liveLabel }}
       </span>
+      <button
+        class="icon-btn"
+        title="Import CLI session"
+        aria-label="Import CLI session"
+        @click="emit('openImportSession')"
+      >
+        <Icon name="download" :size="15" />
+      </button>
       <button
         class="icon-btn"
         title="Archived workspaces"

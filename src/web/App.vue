@@ -46,6 +46,7 @@ const TerminalPanel = defineAsyncComponent(() => import("./TerminalPanel.vue"));
 const CommandCenter = defineAsyncComponent(() => import("./CommandCenter.vue"));
 const ArchivedWorkspaces = defineAsyncComponent(() => import("./ArchivedWorkspaces.vue"));
 const AddProjectDialog = defineAsyncComponent(() => import("./AddProjectDialog.vue"));
+const ImportSessionDialog = defineAsyncComponent(() => import("./ImportSessionDialog.vue"));
 const LabelsDialog = defineAsyncComponent(() => import("./LabelsDialog.vue"));
 
 // Compact layouts: the detail pane is a history entry, so the system back button or gesture
@@ -506,10 +507,108 @@ function openTab(next: Tab) {
 
 const sidebar = ref<InstanceType<typeof Sidebar> | null>(null);
 const composerDock = ref<InstanceType<typeof ComposerDock> | null>(null);
+const newSessionRef = ref<InstanceType<typeof NewSession> | null>(null);
 const commandCenterOpen = ref(false);
 const archivedOpen = ref(false);
 const addProjectOpen = ref(false);
+const importSessionOpen = ref(false);
 const labelingThread = shallowRef<WorkspaceSummary | null>(null);
+
+interface AgentProfileItem {
+  id: string;
+  hostId: string;
+  name: string;
+  provider: string;
+  model?: string | null;
+  modeId?: string | null;
+  thinkingOptionId?: string | null;
+}
+const hostProfilesCache = new Map<string, { at: number; items: AgentProfileItem[] }>();
+const commandProfiles = ref<AgentProfileItem[]>([]);
+const draftHostId = ref<string | null>(null);
+const activeProfileHostId = computed(
+  () => (newSession.value ? (draftHostId.value ?? newSession.value.hostId) : null) ?? active.value?.hostId ?? hostFilter.value ?? hosts.value.find((h) => h.state === "connected")?.id ?? null,
+);
+let profilesLoadSeq = 0;
+watch(
+  () => (commandCenterOpen.value ? activeProfileHostId.value : null),
+  (hid) => {
+    if (!commandCenterOpen.value) return;
+    const seq = ++profilesLoadSeq;
+    if (!hid) {
+      commandProfiles.value = [];
+      return;
+    }
+    const hit = hostProfilesCache.get(hid);
+    if (hit && Date.now() - hit.at < 120_000) {
+      commandProfiles.value = hit.items;
+      return;
+    }
+    // Clear previous host's profiles immediately so they cannot be applied to another host.
+    commandProfiles.value = [];
+    void api(`/hosts/${encodeURIComponent(hid)}/settings`)
+      .then((r) => {
+        const raw: Omit<AgentProfileItem, "hostId">[] = r?.features?.agentProfiles ? (r?.config?.agentProfiles ?? []) : [];
+        const items: AgentProfileItem[] = raw.map((item) => ({ ...item, hostId: hid }));
+        hostProfilesCache.set(hid, { at: Date.now(), items });
+        if (seq === profilesLoadSeq && activeProfileHostId.value === hid) commandProfiles.value = items;
+      })
+      .catch(() => {
+        if (seq === profilesLoadSeq) commandProfiles.value = [];
+      });
+  },
+);
+
+async function applyCommandProfile(p: AgentProfileItem) {
+  if (newSession.value && newSessionRef.value && (draftHostId.value ?? newSession.value.hostId) === p.hostId) {
+    await newSessionRef.value.applyProfile(p.id);
+    return;
+  }
+  const a = active.value;
+  if (a && a.hostId === p.hostId && a.provider === p.provider) {
+    await action(async () => {
+      if (p.model) await api(path(a) + "/config", "POST", { model: p.model });
+      if (p.thinkingOptionId) await api(path(a) + "/config", "POST", { thinkingOptionId: p.thinkingOptionId });
+      if (p.modeId) await api(path(a) + "/config", "POST", { modeId: p.modeId });
+      showNotice(`Applied profile “${p.name}”.`);
+    });
+    return;
+  }
+  const sameHostRecent = allWorkspaces.value.find((w) => w.hostId === p.hostId);
+  tab.value = "chat";
+  selectedThread.value = null;
+  selectedKey.value = null;
+  newSession.value = {
+    hostId: p.hostId,
+    cwd: sameHostRecent?.rootPath ?? null,
+    project: sameHostRecent
+      ? { key: sameHostRecent.projectKey, name: sameHostRecent.project, projectId: sameHostRecent.projectId, iconRevision: sameHostRecent.projectIconRevision }
+      : null,
+    profileId: p.id,
+  };
+  openDetail();
+}
+
+async function rewindLatestFromCommandCenter() {
+  const a = active.value;
+  const modes = a?.rewind ?? [];
+  if (!a || !modes.length) return;
+  const latest = conversation.value?.latestRewindableMessage();
+  if (!latest) {
+    showNotice("No rewindable turn found in the loaded conversation.");
+    return;
+  }
+  const mode: RewindMode = modes.includes("both") ? "both" : modes[0]!;
+  const label = mode === "both" ? "conversation and files" : mode === "files" ? "files" : "conversation";
+  const preview = latest.text.trim().slice(0, 120);
+  const ok = await confirmAction({
+    title: "Rewind latest turn?",
+    message: `Rewind ${label} back to: “${preview}${latest.text.length > 120 ? "…" : ""}”`,
+    confirmLabel: "Rewind",
+    danger: mode !== "conversation",
+  });
+  if (ok) void rewindTo(latest.messageId, latest.text, mode);
+}
 
 const allWorkspaces = computed(() => {
   directory.version.value;
@@ -519,7 +618,8 @@ const allWorkspaces = computed(() => {
 const commandActions = computed<CommandAction[]>(() => {
   const list: CommandAction[] = [
     { id: "new-session", label: "New session", sub: "Start a new workspace conversation", icon: "plus", shortcut: "N", run: () => startNew() },
-    { id: "add-project", label: "Add project", sub: "Add a host directory or clone from GitHub", icon: "folder", run: () => { addProjectOpen.value = true; } },
+    { id: "import-session", label: "Import CLI session", sub: "Resume an existing Claude, Codex, Pi or Antigravity session", icon: "download", run: () => { importSessionOpen.value = true; } },
+    { id: "add-project", label: "Add project", sub: "Open existing folder, clone from GitHub, or create new folder", icon: "folder", run: () => { addProjectOpen.value = true; } },
     { id: "archived", label: "Archived workspaces", sub: "View and restore archived workspaces", icon: "archive", run: () => { archivedOpen.value = true; } },
     { id: "board", label: "Open Kanban board", icon: "board", run: () => openTab("board") },
     { id: "schedules", label: "Open Schedules", icon: "clock", run: () => openTab("schedules") },
@@ -527,7 +627,22 @@ const commandActions = computed<CommandAction[]>(() => {
     { id: "settings", label: "Open Settings", icon: "gear", run: () => openTab("settings") },
     { id: "theme", label: "Cycle theme (System / Light / Dark)", icon: "sun", run: () => cycleTheme() },
   ];
-  if (active.value) {
+  for (const p of commandProfiles.value) {
+    const summary = [p.provider, p.model, p.modeId].filter(Boolean).join(" · ");
+    list.push({
+      id: "profile:" + p.id,
+      label: `Profile › ${p.name}`,
+      sub: summary || p.provider,
+      icon: "sliders",
+      run: () => void applyCommandProfile(p),
+    });
+  }
+  if (newSession.value) {
+    list.unshift(
+      { id: "draft-model", label: "Switch model", sub: "Draft session", icon: "sparkle", shortcut: "⌘/", run: () => newSessionRef.value?.focusModel() },
+      { id: "draft-thinking", label: "Cycle thinking level", sub: "Draft session", icon: "brain", shortcut: "⌘⇧/", run: () => newSessionRef.value?.cycleThinking() },
+    );
+  } else if (active.value) {
     const a = active.value;
     const t = activeThread.value;
     if (a.workspaceId) {
@@ -535,6 +650,9 @@ const commandActions = computed<CommandAction[]>(() => {
     }
     if (threadAgents.value.length > 1) {
       list.push({ id: "close-agent", label: "Close current agent session", sub: a.title || a.provider, icon: "close", run: () => void closeAgent(a) });
+    }
+    if (a.rewind?.length) {
+      list.unshift({ id: "rewind-latest", label: "Rewind latest turn", sub: a.title || a.provider, icon: "undo", run: () => void rewindLatestFromCommandCenter() });
     }
     list.unshift(
       { id: "model", label: "Switch model", sub: footerModel.value || a.provider, icon: "sparkle", shortcut: "⌘/", run: () => composerDock.value?.focusModel() },
@@ -577,10 +695,15 @@ function onGlobalKey(event: KeyboardEvent) {
   }
   // Page shortcuts must not act behind a modal dialog.
   if (dialogOpen()) return;
-  if (mod && event.key === "/" && active.value && tab.value === "chat") {
+  if (mod && (event.key === "/" || event.key === "?" || event.code === "Slash") && tab.value === "chat" && (active.value || newSession.value)) {
     event.preventDefault();
-    if (event.shiftKey) composerDock.value?.cycleThinking();
-    else composerDock.value?.focusModel();
+    if (newSession.value) {
+      if (event.shiftKey) newSessionRef.value?.cycleThinking();
+      else newSessionRef.value?.focusModel();
+    } else {
+      if (event.shiftKey) composerDock.value?.cycleThinking();
+      else composerDock.value?.focusModel();
+    }
     return;
   }
   if (mod && event.key.toLowerCase() === "z" && !event.shiftKey && !typing && archiveUndo.value) {
@@ -609,6 +732,7 @@ const newSession = ref<{
   workspaceId?: string | null;
   workspaceName?: string | null;
   forkContext?: ForkContextResult | null;
+  profileId?: string | null;
 } | null>(null);
 function startNew(group?: ProjectGroup<WorkspaceSummary>) {
   // Without a project, start where you worked last: the most recent thread in the current view.
@@ -728,7 +852,7 @@ const viewingConversation = computed(
 
 // The sidebar's thread and project menus.
 const {
-  menu, renaming, openMenu, openHeaderMenu, renameThread, pinThread, markThreadUnread, markThreadRead, archiveThread,
+  menu, renaming, openMenu, openHeaderMenu, renameThread, pinThread, markThreadUnread, markThreadRead, archiveThread, archiveThreads,
   archiveUndo, undoArchive, dismissArchiveUndo,
   projectPinned, applyProjectPins, pinProject, projectMenu, projectSettings, settingsProject, openProjectMenu, removeProject,
 } = useThreadActions({ api, action, directory, selectedThread, selectedKey, activeThread, readyKey, viewingConversation, hostLabels, closeDetail });
@@ -853,6 +977,9 @@ onUnmounted(() => {
       @open-command-center="commandCenterOpen = true"
       @add-project="addProjectOpen = true"
       @open-archived="archivedOpen = true"
+      @open-import-session="importSessionOpen = true"
+      @archive-thread="archiveThread"
+      @archive-threads="archiveThreads"
     >
       <div
         class="sidebar-resize"
@@ -1037,6 +1164,7 @@ onUnmounted(() => {
       <!-- New session (draft conversation) -->
       <NewSession
         v-else-if="tab === 'chat' && newSession"
+        ref="newSessionRef"
         :key="(newSession.hostId ?? '') + '\n' + (newSession.workspaceId ?? newSession.project?.key ?? newSession.cwd ?? '')"
         :hosts="hosts"
         :initial-host-id="newSession.hostId"
@@ -1045,9 +1173,11 @@ onUnmounted(() => {
         :workspace-id="newSession.workspaceId ?? null"
         :workspace-name="newSession.workspaceName ?? null"
         :fork-context="newSession.forkContext ?? null"
+        :initial-profile-id="newSession.profileId ?? null"
         :dictation-ready="dictationReady"
         :request="api"
-        @close="closeNewSession"
+        @host-change="(hid) => (draftHostId = hid)"
+        @close="draftHostId = null; closeNewSession()"
         @created="onCreated"
       />
 
@@ -1109,6 +1239,7 @@ onUnmounted(() => {
       @read="markThreadRead"
       @labels="(t) => (labelingThread = t)"
       @fork="forkThread"
+      @select-multiple="(t) => sidebar?.enterSelect(t)"
       @archive="archiveThread"
     />
     <ProjectMenu
@@ -1160,14 +1291,22 @@ onUnmounted(() => {
       :api="api"
       @close="addProjectOpen = false"
     />
+    <ImportSessionDialog
+      v-if="importSessionOpen"
+      :hosts="hosts"
+      :initial-host-id="hostFilter ?? active?.hostId ?? null"
+      :api="api"
+      @close="importSessionOpen = false"
+      @imported="(key) => select(key)"
+    />
     <LabelsDialog
       v-if="labelingThread"
       :thread="labelingThread"
       :api="api"
       @close="labelingThread = null"
     />
-    <div v-if="archiveUndo" class="undo-toast" role="status" aria-live="polite">
-      <span>Archived “{{ archiveUndo.name }}”</span>
+    <div v-if="archiveUndo?.length" class="undo-toast" role="status" aria-live="polite">
+      <span>{{ archiveUndo.length === 1 ? `Archived “${archiveUndo[0]!.name}”` : `Archived ${archiveUndo.length} workspaces` }}</span>
       <button type="button" class="btn btn-sm btn-primary" @click="undoArchive">Undo</button>
       <button type="button" class="icon-btn" aria-label="Dismiss" @click="dismissArchiveUndo"><Icon name="close" :size="13" /></button>
     </div>

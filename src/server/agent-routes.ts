@@ -8,6 +8,7 @@ import type {
   AgentFeatureOption,
   CheckoutWorktreeOption,
   CreateSessionRequest,
+  ImportableSessionsResponse,
   ProjectOption,
   ProviderOption,
   SlashCommandOption,
@@ -72,6 +73,23 @@ export function registerAgentRoutes(app: App, { hosts }: RouteContext) {
         featureValues: z.record(z.string(), z.unknown()).optional(),
         prompt: z.string().max(100000).optional(),
         worktreeBranch: z.string().trim().min(1).max(200).optional(),
+        worktree: z
+          .discriminatedUnion("mode", [
+            z.object({
+              mode: z.literal("branch-off"),
+              newBranch: z.string().trim().min(1).max(200),
+              base: z.string().trim().min(1).max(200).optional(),
+            }),
+            z.object({
+              mode: z.literal("checkout-branch"),
+              branch: z.string().trim().min(1).max(200),
+            }),
+            z.object({
+              mode: z.literal("checkout-pr"),
+              prNumber: z.number().int().positive(),
+            }),
+          ])
+          .optional(),
         workspaceId: z.string().trim().min(1).max(200).optional(),
         attachments: z
           .array(
@@ -98,6 +116,7 @@ export function registerAgentRoutes(app: App, { hosts }: RouteContext) {
         model = models.find((m) => m.isDefault)?.id ?? models[0]?.id;
         if (!model) return c.json({ error: "No selectable model is available for this provider. Refresh providers and select a model." }, 400);
       }
+      const worktree = input.worktree ?? (input.worktreeBranch ? { mode: "branch-off" as const, newBranch: input.worktreeBranch } : undefined);
       const agent = input.workspaceId
         ? await driver.createAgent({
             idempotencyKey: input.idempotencyKey,
@@ -122,7 +141,7 @@ export function registerAgentRoutes(app: App, { hosts }: RouteContext) {
             },
             ...(input.prompt?.trim() ? { prompt: input.prompt } : {}),
             ...(input.attachments?.length ? { attachments: input.attachments as never } : {}),
-            ...(input.worktreeBranch ? { worktree: { mode: "branch-off" as const, newBranch: input.worktreeBranch } } : {}),
+            ...(worktree ? { worktree } : {}),
           });
       return c.json({ id: agent.id, key: `${hostId}:${agent.id}` }, 201);
     } catch (error) {
@@ -217,6 +236,85 @@ export function registerAgentRoutes(app: App, { hosts }: RouteContext) {
       return c.json(out);
     } catch (error) {
       return c.json({ error: errorMessage(error, "Could not list worktrees") }, 502);
+    }
+  });
+
+  // ---- Branch suggestions for worktree creation ------------------------------------------------
+  app.get("/api/hosts/:host/branches", async (c) => {
+    const cwd = hostPath.parse(c.req.query("cwd"));
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.getBranchSuggestions !== "function") return c.json({ branches: [] as string[] });
+    try {
+      const res = await driver.getBranchSuggestions({ cwd });
+      if (res.error) return c.json({ error: res.error }, 400);
+      return c.json({ branches: res.branches ?? [] });
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not list branches") }, 502);
+    }
+  });
+
+  // ---- Import existing CLI provider sessions ---------------------------------------------------
+  app.get("/api/hosts/:host/importable-sessions", async (c) => {
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.fetchRecentProviderSessions !== "function")
+      return c.json({ error: "This host does not support importing CLI sessions." }, 409);
+    const cwd = c.req.query("cwd")?.trim() ? hostPath.parse(c.req.query("cwd")) : undefined;
+    const provider = z.string().trim().min(1).max(100).optional().parse(c.req.query("provider") || undefined);
+    const query = z.string().trim().max(200).optional().parse(c.req.query("q") || undefined);
+    const rawLimit = Number(c.req.query("limit"));
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(200, Math.trunc(rawLimit)) : 50;
+    try {
+      const res = await driver.fetchRecentProviderSessions({
+        ...(cwd ? { cwd } : {}),
+        ...(provider ? { providers: [provider] } : {}),
+        ...(query ? { query } : {}),
+        limit,
+      });
+      const out: ImportableSessionsResponse = {
+        entries: (res.entries ?? []).map((e) => ({
+          providerId: e.providerId,
+          providerLabel: e.providerLabel,
+          providerHandleId: e.providerHandleId,
+          cwd: e.cwd,
+          title: e.title ?? null,
+          firstPromptPreview: e.firstPromptPreview ?? null,
+          lastPromptPreview: e.lastPromptPreview ?? null,
+          lastActivityAt: e.lastActivityAt,
+        })),
+        ...(typeof res.filteredAlreadyImportedCount === "number"
+          ? { filteredAlreadyImportedCount: res.filteredAlreadyImportedCount }
+          : {}),
+        ...(res.providerErrors?.length ? { providerErrors: res.providerErrors } : {}),
+      };
+      return c.json(out);
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not load CLI sessions") }, 502);
+    }
+  });
+
+  app.post("/api/hosts/:host/import-session", async (c) => {
+    const input = z
+      .object({
+        providerId: z.string().trim().min(1).max(200),
+        providerHandleId: z.string().trim().min(1).max(500),
+        cwd: hostPath.optional(),
+        workspaceId: z.string().trim().min(1).max(200).optional(),
+      })
+      .parse(await c.req.json());
+    const hostId = c.req.param("host");
+    const { driver } = hosts.get(hostId);
+    if (typeof driver.importAgent !== "function")
+      return c.json({ error: "This host does not support importing CLI sessions." }, 409);
+    try {
+      const agent = await driver.importAgent({
+        providerId: input.providerId,
+        providerHandleId: input.providerHandleId,
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      });
+      return c.json({ id: agent.id, key: `${hostId}:${agent.id}` }, 201);
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not import session") }, 502);
     }
   });
 

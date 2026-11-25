@@ -14,6 +14,7 @@ const emit = defineEmits<{
   read: [thread: WorkspaceSummary];
   labels: [thread: WorkspaceSummary];
   fork: [thread: WorkspaceSummary];
+  selectMultiple: [thread: WorkspaceSummary];
   archive: [thread: WorkspaceSummary];
 }>();
 const element = ref<HTMLElement | null>(null);
@@ -46,6 +47,7 @@ const { position } = useMenu(element, { x: props.x, y: props.y }, () => emit("cl
     </button>
     <button role="menuitem" @click="pick(() => emit('labels', thread))"><Icon name="layers" :size="14" />Labels…</button>
     <button role="menuitem" @click="pick(() => emit('fork', thread))"><Icon name="branch" :size="14" />Fork conversation…</button>
+    <button role="menuitem" @click="pick(() => emit('selectMultiple', thread))"><Icon name="list" :size="14" />Select…</button>
     <div class="menu-sep"></div>
     <button role="menuitem" class="menu-danger" @click="pick(() => emit('archive', thread))">
       <Icon name="archive" :size="14" />Archive…

@@ -312,6 +312,43 @@
   border-left: 3px solid var(--border-strong);
   color: var(--fg-muted);
 }
+.prose blockquote.has-quote-copy {
+  position: relative;
+  padding-right: 52px;
+}
+.prose .quote-copy-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+.prose blockquote.has-quote-copy:hover > .quote-copy-btn,
+.prose blockquote.has-quote-copy:focus-within > .quote-copy-btn,
+.prose .quote-copy-btn.is-copied {
+  opacity: 1;
+}
+.prose .quote-copy-btn:hover {
+  color: var(--fg);
+  border-color: var(--border-strong);
+}
+.prose .quote-copy-btn.is-copied {
+  color: var(--unread);
+  border-color: var(--unread);
+}
+@media (hover: none) {
+  .prose .quote-copy-btn {
+    opacity: 0.78;
+  }
+}
 .prose hr {
   border: 0;
   border-top: 1px solid var(--border);

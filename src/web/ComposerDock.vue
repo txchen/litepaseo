@@ -10,6 +10,7 @@ import { prefs } from "./preferences.ts";
 import Icon from "./Icon.vue";
 import PermissionForm from "./PermissionForm.vue";
 import { agentPath as path, type Api } from "./use-api.ts";
+import { htmlToMarkdownWithLinks } from "./paste-links.ts";
 import type { Composer } from "./use-composer.ts";
 
 /** Below the open conversation: permission requests, delivery notices, the send queue and the composer. */
@@ -223,7 +224,7 @@ async function submitComposer() {
   await send();
 }
 
-/** Pasted screenshots/files become attachments; very long text pastes collapse into a chip. */
+/** Pasted screenshots/files become attachments; rich hyperlinks convert to Markdown; long pastes collapse. */
 function pasteFiles(event: ClipboardEvent) {
   const data = event.clipboardData;
   if (!data) return;
@@ -238,12 +239,28 @@ function pasteFiles(event: ClipboardEvent) {
     void attachmentPanel.value?.addFiles(files);
     return;
   }
-  const text = data.getData("text/plain");
+  const html = data.getData("text/html");
+  const mdFromHtml = html ? htmlToMarkdownWithLinks(html) : null;
+  const text = mdFromHtml ?? data.getData("text/plain");
   if (!text) return;
   const lines = text.split(/\r?\n/).length;
   if (text.length > 1500 || lines > 30) {
     event.preventDefault();
     pastedBlocks.value.push({ id: ++pasteSeq, text, lines, expanded: false });
+    return;
+  }
+  if (mdFromHtml) {
+    event.preventDefault();
+    const el = element.value;
+    const start = el?.selectionStart ?? prompt.value.length;
+    const end = el?.selectionEnd ?? start;
+    prompt.value = prompt.value.slice(0, start) + mdFromHtml + prompt.value.slice(end);
+    void nextTick(() => {
+      if (!el) return;
+      const at = start + mdFromHtml.length;
+      el.setSelectionRange(at, at);
+      autosize();
+    });
   }
 }
 

@@ -313,6 +313,29 @@ export function registerProjectRoutes(app: App, { hosts, fetch }: RouteContext) 
       return c.json({ error: errorMessage(error, "Could not add project.") }, 502);
     }
   });
+  app.post("/api/hosts/:host/projects/create-directory", async (c) => {
+    const input = z
+      .object({
+        parentPath: hostPath,
+        name: z
+          .string()
+          .trim()
+          .min(1)
+          .max(200)
+          .refine((v) => !v.includes("/") && !v.includes("\\") && v !== "." && v !== "..", "Invalid folder name"),
+      })
+      .parse(await c.req.json());
+    const { driver } = hosts.get(c.req.param("host"));
+    if (typeof driver.createProjectDirectory !== "function")
+      return c.json({ error: "This host does not support creating project folders." }, 409);
+    try {
+      const res = await driver.createProjectDirectory(input);
+      if (res.error) return c.json({ error: res.error, code: res.errorCode ?? null }, 400);
+      return c.json({ ok: true, path: res.directoryPath, project: res.project ?? null });
+    } catch (error) {
+      return c.json({ error: errorMessage(error, "Could not create project folder.") }, 502);
+    }
+  });
   app.get("/api/hosts/:host/github/search", async (c) => {
     const query = z.string().trim().min(1).max(200).parse(c.req.query("q") ?? "");
     const { driver } = hosts.get(c.req.param("host"));

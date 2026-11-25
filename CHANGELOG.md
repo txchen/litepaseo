@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.13.5
+
+- **Fix missing workspace unread indicator (green dot) & tighten auto-read**:
+  - Reconcile workspace effective state from active root agents in `Hosts` / `HostWorkspaces` (matching Paseo's `deriveEffectiveWorkspaceStatus` fallback) so a lagging or `"done"` `workspace_update` never hides an unread/running/failed/needs-input root agent, while same-workspace subagents only contribute while running.
+  - Gate automatic `/read` marking on actual foreground conversation viewing (`!document.hidden && document.hasFocus()`, `tab === "chat"`, detail open on compact layouts, and not viewing a file or terminal), trigger it when returning to the foreground, and reset the dedupe marker after unread clears or manual "Mark as unread".
+- **Instant optimistic first prompt when starting a new session**:
+  - `NewSession.vue` now displays the submitted first prompt immediately at 0 ms as an optimistic user bubble with a `Starting session…` indicator while `POST /api/hosts/:host/agents` is in flight (restoring the draft and idempotency key cleanly on error).
+  - Hand off the submitted prompt to `OptimisticStore` on creation and render it through the `pendingSelection` gap until the live `ConversationView` mounts and reconciles with the daemon row.
+
 ## 0.13.4
 
 - **Close individual agent session tabs in a workspace**:

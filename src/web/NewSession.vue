@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import type { CheckoutWorktreeOption, ForkContextResult, HostState, ProjectOption, ProviderOption } from "../shared/wire.ts";
 import { prefs as uiPrefs } from "./preferences.ts";
+import { insertDictatedText, shouldSubmitOnEnter } from "./composer-input.ts";
 import DictationButton from "./DictationButton.vue";
 import Icon from "./Icon.vue";
 import ProjectIcon, { type ProjectIconSource } from "./ProjectIcon.vue";
@@ -134,6 +135,8 @@ async function loadBranches() {
   }
 }
 
+const cwd = computed(() => (project.value === CUSTOM ? customPath.value.trim() : project.value));
+
 watch([hostId, () => cwd.value], ([nextHost], [prevHost]) => {
   if (nextHost && nextHost !== prevHost) emit("hostChange", nextHost);
   branchSeq++;
@@ -197,7 +200,6 @@ const modes = computed(() => selectedProvider.value?.modes ?? []);
 const modeLabel = computed(() => modes.value.find((m) => m.id === mode.value)?.label ?? "Mode");
 const fullAccess = computed(() => /full|bypass|danger|unrestricted/i.test(`${mode.value} ${modeLabel.value}`));
 
-const cwd = computed(() => (project.value === CUSTOM ? customPath.value.trim() : project.value));
 const projectName = computed(
   () =>
     projects.value?.find((p) => p.rootPath === project.value)?.name ??
@@ -246,21 +248,7 @@ function autosize() {
 }
 
 function insertDictation(text: string) {
-  const el = promptElement.value;
-  const current = prompt.value;
-  const start = el && document.activeElement === el ? el.selectionStart : current.length;
-  const end = el && document.activeElement === el ? el.selectionEnd : current.length;
-  const before = current.slice(0, start),
-    after = current.slice(end);
-  const lead = before && !/\s$/.test(before) ? " " : "";
-  prompt.value = before + lead + text + after;
-  void nextTick(() => {
-    if (!el) return;
-    el.focus();
-    const at = (before + lead + text).length;
-    el.setSelectionRange(at, at);
-    autosize();
-  });
+  insertDictatedText(promptElement.value, prompt.value, text, (v) => (prompt.value = v), autosize);
 }
 
 async function load(id: string) {
@@ -290,20 +278,29 @@ async function load(id: string) {
       await applyProfile(props.initialProfileId);
     }
     const list = projects.value!;
-    const wanted = id === props.initialHostId ? props.initialProject : null;
-    const match = wanted
-      ? (list.find((x) => wanted.key && x.key === wanted.key) ??
-        list.find((x) => x.name.toLowerCase() === wanted.name.toLowerCase()))
-      : undefined;
-    if (match) project.value = match.rootPath;
-    else if (id === props.initialHostId && props.initialCwd) {
+    if (props.workspaceId && id === props.initialHostId && props.initialCwd) {
       const exact = list.find((x) => x.rootPath === props.initialCwd);
       if (exact) project.value = exact.rootPath;
       else {
         project.value = CUSTOM;
         customPath.value = props.initialCwd;
       }
-    } else if (!project.value) project.value = list[0]?.rootPath ?? CUSTOM;
+    } else {
+      const wanted = id === props.initialHostId ? props.initialProject : null;
+      const match = wanted
+        ? (list.find((x) => wanted.key && x.key === wanted.key) ??
+          list.find((x) => x.name.toLowerCase() === wanted.name.toLowerCase()))
+        : undefined;
+      if (match) project.value = match.rootPath;
+      else if (id === props.initialHostId && props.initialCwd) {
+        const exact = list.find((x) => x.rootPath === props.initialCwd);
+        if (exact) project.value = exact.rootPath;
+        else {
+          project.value = CUSTOM;
+          customPath.value = props.initialCwd;
+        }
+      } else if (!project.value) project.value = list[0]?.rootPath ?? CUSTOM;
+    }
   } catch (e) {
     if (id === hostId.value) loadError.value = (e as Error).message;
   }
@@ -345,7 +342,12 @@ watch(model, () => {
   const m = selectedModel.value;
   if (m && !m.thinking.some((t) => t.id === thinking.value)) thinking.value = m.defaultThinkingId ?? "";
 });
+let restoringPrompt = false;
 watch([hostId, project, customPath, provider, model, thinking, mode, featureValues, useWorktree, worktreeKind, branch, checkoutBranch, prNumber, selectedWorktreePath, prompt], () => {
+  if (restoringPrompt) {
+    restoringPrompt = false;
+    return;
+  }
   if (error.value) idempotencyKey = newId();
   error.value = "";
 });
@@ -354,16 +356,18 @@ async function create() {
   if (!canCreate.value) return;
   const sentPrompt = prompt.value;
   const attachmentNames = props.forkContext?.attachment
-    ? [props.forkContext.attachment.title || props.forkContext.attachment.filename]
+    ? [props.forkContext.attachment.title || "Forked conversation context"]
     : [];
   busy.value = true;
   error.value = "";
   pendingMessage.value = { text: sentPrompt, attachmentNames };
   prompt.value = "";
   void nextTick(autosize);
-  const effectiveCwd = !props.workspaceId && useWorktree.value && worktreeKind.value === "existing"
-    ? selectedWorktreePath.value
-    : cwd.value;
+  const effectiveCwd = props.workspaceId
+    ? (props.initialCwd || cwd.value)
+    : useWorktree.value && worktreeKind.value === "existing"
+      ? selectedWorktreePath.value
+      : cwd.value;
   const worktreeSpec = !props.workspaceId && useWorktree.value
     ? worktreeKind.value === "new"
       ? { mode: "branch-off" as const, newBranch: branch.value.trim() }
@@ -396,9 +400,12 @@ async function create() {
     safeSetItem(PREFS, JSON.stringify(prefs));
     emit("created", { key: result.key, prompt: sentPrompt, attachmentNames });
   } catch (e) {
-    // Keep the key: retrying the identical request is deduplicated by the daemon.
+    // Keep the key and error: programmatic prompt restoration must not invalidate retry idempotency.
     pendingMessage.value = null;
-    prompt.value = sentPrompt;
+    if (sentPrompt !== prompt.value) {
+      restoringPrompt = true;
+      prompt.value = sentPrompt;
+    }
     error.value = (e as Error).message;
     void nextTick(autosize);
   } finally {
@@ -407,10 +414,7 @@ async function create() {
 }
 
 function onKey(event: KeyboardEvent) {
-  if (event.key !== "Enter" || event.isComposing) return;
-  const mod = event.metaKey || event.ctrlKey;
-  const enterSends = !coarsePointer && uiPrefs.sendShortcut === "enter" && !event.shiftKey;
-  if (enterSends || mod) {
+  if (shouldSubmitOnEnter(event, coarsePointer, uiPrefs.sendShortcut)) {
     event.preventDefault();
     void create();
   }

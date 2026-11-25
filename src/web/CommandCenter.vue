@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import type { AgentSummary, ArchivedWorkspaceSummary, HostState, WorkspaceSummary } from "../shared/wire.ts";
 import Icon from "./Icon.vue";
 import { useDialog } from "./use-dialog.ts";
@@ -87,6 +87,9 @@ watch([mode, query], ([m, q]) => {
   } else if (m === "workspaces" && q.trim().length >= 2) {
     void loadArchived();
   }
+});
+onUnmounted(() => {
+  clearTimeout(fileTimer);
 });
 
 interface ResultRow {

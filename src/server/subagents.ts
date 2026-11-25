@@ -11,16 +11,7 @@ type Descriptor = Omit<ProviderSubagent, "parentSubagentId" | "subtitle"> & {
 };
 type UpdatePayload =
   | { kind: "upsert"; subagent: Descriptor }
-  | {
-      kind: "timeline";
-      parentAgentId: string;
-      subagentId: string;
-      provider: string;
-      item: TimelineItem;
-      timestamp: string;
-      seq: number;
-      epoch: string;
-    }
+  | { kind: "timeline" }
   | { kind: "remove"; parentAgentId: string; subagentId: string };
 
 interface SubagentTimelinePayload {
@@ -52,7 +43,6 @@ export interface SubagentDriver {
 }
 
 type ListListener = (subagents: ProviderSubagent[]) => void;
-type TimelineHandler = (message: { type: string; payload?: unknown }) => void;
 
 interface Parent {
   subagents: Map<string, Descriptor>;
@@ -89,7 +79,6 @@ const publish = (d: Descriptor): ProviderSubagent => ({
  */
 export class HostSubagents {
   private readonly parents = new Map<string, Parent>();
-  private readonly timelines = new Map<string, Set<TimelineHandler>>();
   private events: ReturnType<SubagentDriver["observeEvents"]> | null = null;
   private stopEvents: (() => void) | null = null;
   private snapshots = 0;
@@ -134,26 +123,9 @@ export class HostSubagents {
     return this.parents.get(parentAgentId)?.subagents.get(subagentId)?.status;
   }
 
-  /** A TimelineView driver for one subagent conversation. */
+  /** A TimelineView driver for one subagent conversation (Wake + Pull). */
   timelineDriver(parentAgentId: string, subagentId: string): TimelineDriver {
-    const key = `${parentAgentId}\0${subagentId}`;
     return {
-      subscribeAgentTimeline: (_agentId, handler) => {
-        this.acquire();
-        let handlers = this.timelines.get(key);
-        if (!handlers) this.timelines.set(key, (handlers = new Set()));
-        handlers.add(handler);
-        let released = false;
-        const release = async () => {
-          if (released) return;
-          released = true;
-          handlers.delete(handler);
-          if (!handlers.size && this.timelines.get(key) === handlers) this.timelines.delete(key);
-          this.releaseUse();
-        };
-        const ready = this.events!.ready.then(() => undefined);
-        return Object.assign(() => void release(), { ready, release });
-      },
       fetchAgentTimeline: async (_agentId, options) => {
         const page = await this.driver.fetchProviderSubagentTimeline(parentAgentId, subagentId, {
           direction: options.direction as "tail" | "before" | "after",
@@ -185,7 +157,6 @@ export class HostSubagents {
     clearTimeout(this.idle);
     for (const parent of this.parents.values()) clearTimeout(parent.timer);
     this.parents.clear();
-    this.timelines.clear();
     await this.close();
   }
 
@@ -237,8 +208,6 @@ export class HostSubagents {
 
   private restored() {
     for (const [id, parent] of this.parents) void this.load(id, parent);
-    for (const handlers of this.timelines.values())
-      for (const handler of handlers) handler({ type: "agent.timeline.subscription_restored" });
   }
 
   private async load(parentAgentId: string, parent: Parent) {
@@ -264,22 +233,7 @@ export class HostSubagents {
   }
 
   private receive(payload: UpdatePayload) {
-    if (payload.kind === "timeline") {
-      const handlers = this.timelines.get(`${payload.parentAgentId}\0${payload.subagentId}`);
-      if (!handlers) return;
-      const message = {
-        type: "agent_stream",
-        payload: {
-          agentId: payload.subagentId,
-          event: { type: "timeline", provider: payload.provider, item: payload.item },
-          timestamp: payload.timestamp,
-          seq: payload.seq,
-          epoch: payload.epoch,
-        },
-      };
-      for (const handler of handlers) handler(message);
-      return;
-    }
+    if (payload.kind === "timeline") return;
     const parentId = payload.kind === "upsert" ? payload.subagent.parentAgentId : payload.parentAgentId;
     const parent = this.parents.get(parentId);
     if (!parent) return;

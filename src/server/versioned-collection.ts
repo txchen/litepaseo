@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
-
-export interface Change<T> {
-  key: string;
-  value: T | null;
-}
+import type { Change } from "../shared/wire.ts";
+export type { Change };
 
 interface Node<T> {
   key: string;

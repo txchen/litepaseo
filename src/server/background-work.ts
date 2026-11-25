@@ -200,6 +200,7 @@ export class HostBackgroundWork {
     if (typeof payload.agentId !== "string") return;
     const entry = this.watched.get(payload.agentId);
     if (!entry) return;
+    entry.token++;
     entry.items = sanitize(payload.items);
     entry.loaded = true;
     this.dirty.add(payload.agentId);

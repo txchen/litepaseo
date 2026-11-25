@@ -32,7 +32,7 @@ import ConfirmDialog from "./ConfirmDialog.vue";
 import { confirmAction, confirmRequest } from "./confirm.ts";
 import { dialogOpen } from "./use-dialog.ts";
 import { registerServiceWorker, setBadge, setFavicon } from "./pwa.ts";
-import { preloadMarkstream } from "./markstream-loader.ts";
+import { loadMarkstream } from "./markstream-loader.ts";
 import { version as WEB_VERSION } from "../../package.json";
 import SchedulesPage from "./SchedulesPage.vue";
 import { TIMELINE_CONTEXT, parseFileLink, type FileLink, type TimelineContext } from "./timeline-display.ts";
@@ -350,46 +350,58 @@ async function login(token: string, code: string) {
     await enter();
   });
 }
+let pendingNotificationSession: string | null = null;
 async function enter() {
   authenticated.value = true;
   error.value = "";
-  board.value = await api("/board");
   openDirectory();
+  void api("/board")
+    .then((b) => {
+      if (authenticated.value && b && (!board.value.cards.length || (b.revision ?? 0) >= (board.value.revision ?? 0))) {
+        board.value = b;
+      }
+    })
+    .catch(() => {});
   void registerServiceWorker();
-  preloadMarkstream();
   void loadUsage();
   void composer.loadDictation();
-  clearInterval(usageTimer);
-  usageTimer = setInterval(() => void loadUsage(), 5 * 60_000);
+  syncUsageTimer();
   // A notification tap opens /?session=<key>; select it once and clean the address.
   // A file link opened in a new tab adds &file= (or &dir=): open it once the session is shown.
-  const wanted = new URLSearchParams(location.search).get("session");
+  const wanted = new URLSearchParams(location.search).get("session") || pendingNotificationSession;
+  pendingNotificationSession = null;
   if (wanted) {
     const linked = parseFileLink("/" + location.search);
-    history.replaceState(history.state, "", "/");
+    if (location.search) history.replaceState(history.state, "", "/");
     pendingLink.value = linked && linked.kind !== "copy" ? linked : null;
     select(wanted);
   }
 }
 // The service worker asks an already-open app to show the tapped session.
 function onServiceWorkerMessage(event: MessageEvent) {
-  if (event.data?.type === "open-session" && authenticated.value) select(String(event.data.key));
+  if (event.data?.type !== "open-session") return;
+  const key = String(event.data.key || "");
+  if (!key) return;
+  if (authenticated.value) select(key);
+  else pendingNotificationSession = key;
 }
 navigator.serviceWorker?.addEventListener("message", onServiceWorkerMessage);
 function openDirectory() {
   directoryStream?.close();
   directoryStream = openStream({
     url: () =>
-      `/api/stream?generation=${encodeURIComponent(agentDirectory.generation)}&since=${agentDirectory.seq}` +
+      `/api/stream?queues=1&generation=${encodeURIComponent(agentDirectory.generation)}&since=${agentDirectory.seq}` +
       `&wgeneration=${encodeURIComponent(directory.generation)}&wsince=${directory.seq}` +
       `&pgeneration=${encodeURIComponent(directory.emptyGeneration)}&psince=${directory.emptySeq}`,
     onState: (state) => {
       directoryState.value = state;
+      if (state === "connecting") composer.resetQueueSync();
       if (state === "unauthorized") signOut("ended");
     },
     onMessage: (data) => {
       const message = data as DirectoryMessage;
       if (message.type === "project-pins") applyProjectPins(message.pins);
+      else if (message.type === "queue-summary") composer.applyQueueSummary(message.summary, message.version);
       else if (message.type === "hosts") {
         hosts.value = message.hosts;
         if (message.instanceName !== undefined) instanceName.value = message.instanceName;
@@ -410,14 +422,6 @@ function openDirectory() {
 
 // Search and label filter: the matching set is built once per query and then maintained incrementally.
 const labelFilter = ref<string | null>(null);
-const availableLabels = computed(() => {
-  directory.version.value;
-  const set = new Set<string>();
-  for (const w of directory.range(0, directory.total)) {
-    for (const l of w.labels ?? []) set.add(l);
-  }
-  return [...set].sort((a, b) => a.localeCompare(b));
-});
 function applyDirectoryFilter() {
   const needle = query.value.trim().toLowerCase();
   const lbl = labelFilter.value;
@@ -463,6 +467,7 @@ function select(key: string) {
   selectedKey.value = key;
   const agent = agentDirectory.get(key);
   selectedThread.value = agent?.workspaceId ? `${agent.hostId}:${agent.workspaceId}` : null;
+  void loadMarkstream();
   openDetail();
 }
 /** Opens a thread from the sidebar: its most recently used agent. */
@@ -471,6 +476,7 @@ function selectThread(key: string) {
   newSession.value = null;
   selectedThread.value = key;
   selectedKey.value = agentDirectory.indexed(key, 1)[0]?.key ?? null;
+  void loadMarkstream();
   openDetail();
 }
 // An agent that arrives after its selection (new session, notification tap) finds its thread;
@@ -756,12 +762,13 @@ function startNewAgentInWorkspace() {
   const a = active.value;
   const t = activeThread.value;
   if (!a || !a.workspaceId) return;
+  const cwd = workspaceCwd.value || a.cwd;
   tab.value = "chat";
   selectedThread.value = null;
   selectedKey.value = null;
   newSession.value = {
     hostId: a.hostId,
-    cwd: workspaceCwd.value,
+    cwd,
     project: t
       ? { key: t.projectKey, name: t.project, projectId: t.projectId, iconRevision: t.projectIconRevision }
       : { key: a.projectKey, name: a.project },
@@ -877,17 +884,31 @@ watch(
 const usage = shallowRef<UsageReport | null>(null);
 const usageLoading = ref(false);
 let usageTimer: ReturnType<typeof setInterval> | undefined;
+let lastUsageAt = 0;
 async function loadUsage(refresh = false) {
   if (!authenticated.value || document.hidden) return;
   usageLoading.value = true;
   try {
     usage.value = await api("/usage" + (refresh ? "?refresh=1" : ""));
+    lastUsageAt = Date.now();
   } catch {
     // keep the last report
   } finally {
     usageLoading.value = false;
   }
 }
+function syncUsageTimer() {
+  clearInterval(usageTimer);
+  usageTimer = undefined;
+  if (!authenticated.value || document.hidden) return;
+  usageTimer = setInterval(() => void loadUsage(), 5 * 60_000);
+}
+const chatPaneVisible = computed(
+  () =>
+    tab.value === "chat" &&
+    (!isCompact.value || detailOpen.value) &&
+    ((!activeFile.value && !terminalActive.value) || panel.value === "subagents"),
+);
 /** The server's version, from the directory stream; this page was built as WEB_VERSION. */
 const serverVersion = ref("");
 const reloadPage = () => location.reload();
@@ -918,7 +939,8 @@ const tabState = computed(() => {
 watch(tabState, (state) => setFavicon(state), { immediate: true });
 function onVisibilityChange() {
   syncForeground();
-  if (!document.hidden) void loadUsage();
+  syncUsageTimer();
+  if (!document.hidden && Date.now() - lastUsageAt >= 60_000) void loadUsage();
 }
 document.addEventListener("visibilitychange", onVisibilityChange);
 window.addEventListener("focus", onWindowFocus);
@@ -956,7 +978,6 @@ onUnmounted(() => {
       v-model:list-mode="listMode"
       v-model:host-filter="hostFilter"
       v-model:label-filter="labelFilter"
-      :available-labels="availableLabels"
       :instance-name="instanceName"
       :hosts="hosts"
       :store="directory"
@@ -1096,6 +1117,7 @@ onUnmounted(() => {
             ref="conversation"
             :key="active.key"
             :agent="active"
+            :pane-active="chatPaneVisible"
             :api="api"
             :context="timelineContext"
             :host-label="hostLabels.get(active.hostId) ?? ''"
@@ -1274,7 +1296,7 @@ onUnmounted(() => {
       :actions="commandActions"
       :api="api"
       @close="commandCenterOpen = false"
-      @select-workspace="select"
+      @select-workspace="selectThread"
       @open-file="openFile"
       @restore-archived="restoreArchivedWorkspace"
     />

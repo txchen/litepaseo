@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { notifyListeners } from "./listeners.ts";
 import type { TimelineCursor, TimelineItem, TimelineOp, TimelineRow } from "../shared/wire.ts";
 
@@ -22,11 +23,6 @@ interface TimelinePayload {
 }
 
 export interface TimelineDriver {
-  /** Retained optional on the interface for legacy test doubles; Wake + Pull uses fetchAgentTimeline exclusively. */
-  subscribeAgentTimeline?: (
-    agentId: string,
-    handler: (message: { type: string; payload?: unknown }) => void,
-  ) => (() => void) & { ready: Promise<void>; release(): Promise<void> };
   fetchAgentTimeline(agentId: string, options: Record<string, unknown>): Promise<TimelinePayload>;
 }
 
@@ -55,6 +51,7 @@ const RESUME_VERIFY_MS = 5_000;
 /** What a returning browser already holds: rows from `from` on, with every change up to `seq` (view revision). */
 export interface TimelineResume {
   epoch: string;
+  view?: string;
   seq: number;
   from: number;
 }
@@ -72,27 +69,6 @@ export interface TimelineLoadReport {
 export type TimelineLoadReporter = (report: TimelineLoadReport) => void;
 
 const now = () => performance.now();
-
-/** Retained for compatibility with existing unit tests. */
-export function mergeToolCallItems(existing: TimelineItem, incoming: TimelineItem): TimelineItem {
-  const a = existing.detail as { type?: string } | undefined;
-  const b = incoming.detail as { type?: string } | undefined;
-  const detail =
-    a?.type === "unknown" && b?.type !== "unknown"
-      ? b
-      : b?.type === "unknown" && a?.type !== "unknown"
-        ? a
-        : b;
-  const metadata =
-    existing.metadata || incoming.metadata
-      ? { ...(existing.metadata as object), ...(incoming.metadata as object) }
-      : undefined;
-  const merged: TimelineItem = { ...existing, ...incoming, detail, metadata };
-  if (incoming.status === "failed") merged.error = incoming.error;
-  else if (incoming.status === "completed" || incoming.status === "canceled") merged.error = null;
-  else if (incoming.error !== undefined) merged.error = incoming.error;
-  return merged;
-}
 
 function toRow(entry: FetchedEntry): TimelineRow {
   return {
@@ -122,6 +98,7 @@ function rowFingerprint(row: TimelineRow): string {
  *   all updates including `turnMetrics`.
  */
 export class TimelineView {
+  private readonly viewId = randomUUID();
   private rows: TimelineRow[] = [];
   private readonly bySeqStart = new Map<number, TimelineRow>();
   private readonly fingerprints = new Map<number, string>();
@@ -133,10 +110,14 @@ export class TimelineView {
   private startCursor: TimelineCursor | null = null;
   private state: "idle" | "loading" | "live" | "failed" | "disposed" = "idle";
   private active = false;
+  private dirty = false;
+  private pendingFinalRefresh = false;
+  private finalRefreshAttempts = 0;
   private readonly watchers = new Set<Watcher>();
   private pollTimer?: ReturnType<typeof setTimeout>;
   private retryTimer?: ReturnType<typeof setTimeout>;
   private settleTimer?: ReturnType<typeof setTimeout>;
+  private finalRetryTimer?: ReturnType<typeof setTimeout>;
   private fastPollsLeft = 0;
   private inFlight = false;
   private pendingPull = false;
@@ -185,9 +166,18 @@ export class TimelineView {
     clearTimeout(this.settleTimer);
     this.settleTimer = undefined;
     if (running) {
+      clearTimeout(this.finalRetryTimer);
+      this.finalRetryTimer = undefined;
+      this.pendingFinalRefresh = false;
+      this.finalRefreshAttempts = 0;
+      if (wasActive) return;
       if (this.state === "live") {
-        void this.pull(false);
-        this.schedulePoll();
+        if (this.watchers.size) {
+          void this.pull(false);
+          this.schedulePoll();
+        } else {
+          this.dirty = true;
+        }
       }
     } else {
       if (!this.inFastBurst()) {
@@ -195,6 +185,8 @@ export class TimelineView {
         this.pollTimer = undefined;
       }
       if (wasActive && this.state === "live") {
+        this.pendingFinalRefresh = true;
+        this.finalRefreshAttempts = 0;
         void this.pull(false, true);
       }
     }
@@ -233,8 +225,18 @@ export class TimelineView {
       } else {
         watcher([this.resetOp()]);
       }
-      if (this.active || this.inFastBurst()) this.schedulePoll();
-      else if (since && now() - this.lastPullAt >= RESUME_VERIFY_MS) this.wake();
+      if (this.dirty || this.pendingFinalRefresh) {
+        this.dirty = false;
+        const settle = this.pendingFinalRefresh && !this.active;
+        void this.pull(false, settle);
+        if (this.active || this.inFastBurst()) this.schedulePoll();
+      } else if (this.active || this.inFastBurst()) {
+        this.schedulePoll();
+      } else if (since && now() - this.lastPullAt >= RESUME_VERIFY_MS) {
+        this.wake();
+      }
+    } else if (this.state === "failed") {
+      this.start();
     } else if (this.state === "loading" && this.joiners.length < MAX_JOINERS) {
       this.joiners.push(now());
     }
@@ -242,7 +244,9 @@ export class TimelineView {
       this.watchers.delete(watcher);
       if (!this.watchers.size) {
         clearTimeout(this.pollTimer);
-        this.pollTimer = undefined;
+        clearTimeout(this.retryTimer);
+        clearTimeout(this.finalRetryTimer);
+        this.pollTimer = this.retryTimer = this.finalRetryTimer = undefined;
       }
     };
   }
@@ -251,10 +255,13 @@ export class TimelineView {
     this.state = "disposed";
     this.token++;
     this.fastPollsLeft = 0;
+    this.dirty = false;
+    this.pendingFinalRefresh = false;
     clearTimeout(this.pollTimer);
     clearTimeout(this.retryTimer);
     clearTimeout(this.settleTimer);
-    this.pollTimer = this.retryTimer = this.settleTimer = undefined;
+    clearTimeout(this.finalRetryTimer);
+    this.pollTimer = this.retryTimer = this.settleTimer = this.finalRetryTimer = undefined;
     this.watchers.clear();
     return Promise.resolve();
   }
@@ -306,6 +313,14 @@ export class TimelineView {
       this.lastPullAt = now();
       if (this.timing) this.timing.fetchMs = Math.round(this.lastPullAt - fetchAt);
       this.consecutiveFailures = 0;
+      this.dirty = false;
+      // Clear pendingFinalRefresh only when the pull actually servicing the final refresh succeeds.
+      if (checkMetricsSettle && !this.active && !this.pendingSettle) {
+        this.pendingFinalRefresh = false;
+        this.finalRefreshAttempts = 0;
+        clearTimeout(this.finalRetryTimer);
+        this.finalRetryTimer = undefined;
+      }
 
       const isReset = initial || this.state !== "live" || page.reset || page.epoch !== this.epoch;
       if (isReset) {
@@ -348,13 +363,28 @@ export class TimelineView {
         this.state = "failed";
         this.broadcast([{ type: "error", message: "Timeline sync interrupted; retrying" }]);
         clearTimeout(this.retryTimer);
-        this.retryTimer = setTimeout(() => {
-          this.retryTimer = undefined;
-          if (this.state === "failed" && token === this.token) this.start();
-        }, RETRY_MS);
-        this.retryTimer.unref?.();
-      } else if (this.consecutiveFailures >= 3) {
-        this.broadcast([{ type: "error", message: "Timeline sync interrupted; retrying" }]);
+        if (this.watchers.size) {
+          this.retryTimer = setTimeout(() => {
+            this.retryTimer = undefined;
+            if (this.state === "failed" && token === this.token && this.watchers.size) this.start();
+          }, RETRY_MS);
+          this.retryTimer.unref?.();
+        }
+      } else {
+        if (this.consecutiveFailures >= 3) {
+          this.broadcast([{ type: "error", message: "Timeline sync interrupted; retrying" }]);
+        }
+        if (this.pendingFinalRefresh && !this.active && this.watchers.size && this.finalRefreshAttempts < 3) {
+          this.finalRefreshAttempts++;
+          clearTimeout(this.finalRetryTimer);
+          this.finalRetryTimer = setTimeout(() => {
+            this.finalRetryTimer = undefined;
+            if (this.state === "live" && this.pendingFinalRefresh && !this.active && this.watchers.size) {
+              void this.pull(false, true);
+            }
+          }, RETRY_MS * this.finalRefreshAttempts);
+          this.finalRetryTimer.unref?.();
+        }
       }
     } finally {
       clearTimeout(timeoutHandle);
@@ -478,7 +508,7 @@ export class TimelineView {
   }
 
   private resumeOps(since: TimelineResume): TimelineOp[] | null {
-    if (since.epoch !== this.epoch || since.seq < this.resumeFloor || since.seq > this.revision) return null;
+    if (since.epoch !== this.epoch || since.view !== this.viewId || since.seq < this.resumeFloor || since.seq > this.revision) return null;
     const changed = this.rows.filter(
       (row) => row.seqStart >= since.from && (this.rowRev.get(row.seqStart) ?? 0) > since.seq,
     );
@@ -492,6 +522,7 @@ export class TimelineView {
     return {
       type: "reset",
       epoch: this.epoch,
+      view: this.viewId,
       rows,
       hasOlder: this.hasOlder || start > 0,
       startCursor: start > 0 ? { epoch: this.epoch, seq: rows[0]!.seqStart } : this.startCursor,

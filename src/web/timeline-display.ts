@@ -141,7 +141,7 @@ export function toolDisplay(item: Item, cwd?: string): ToolDisplay {
   if (/^(bash|shell|exec|run|terminal)/.test(lower)) return shell(subject);
   if (/^(read|view|cat)/.test(lower)) return make("read", "eye", "Read", path(subject));
   if (/^(edit|patch|apply|multiedit|str_replace)/.test(lower)) return make("edit", "edit", "Edit", path(subject), false, diffMeta(editDiff(item)));
-  if (/^write/.test(lower)) return make("write", "edit", "Write", path(subject), false, input.content ? plural(lineCount(input.content), "line") : "");
+  if (lower.startsWith("write")) return make("write", "edit", "Write", path(subject), false, input.content ? plural(lineCount(input.content), "line") : "");
   if (/(grep|glob|find|search|ls)$/.test(lower)) return make("search", "search", "Search", subject);
   if (/fetch|browse|http/.test(lower)) return make("fetch", "globe", "Fetch", subject, true);
   if (lower === "thinking") return make("plain", "bulb", "Thinking", "", true);
@@ -254,15 +254,28 @@ export interface TurnFooter {
  * rows sharing a turnId; it is finished once a later turn exists or the agent is idle. Its
  * duration runs from its user message to its last row. O(rows), once per membership/row change.
  */
-export function turnFooters(rows: TimelineRow[], lastFinished: boolean, now = new Date()): Map<number, TurnFooter> {
+export function turnFooters(
+  rows: TimelineRow[],
+  lastFinished: boolean,
+  now = new Date(),
+  displayed?: ReadonlySet<number>,
+): Map<number, TurnFooter> {
   const out = new Map<number, TurnFooter>();
-  let current: { id: string; first: TimelineRow; last: TimelineRow; messages: number[]; metrics?: import("../shared/wire.ts").AgentMetric[] } | null = null;
+  let current: {
+    id: string;
+    first: TimelineRow;
+    last: TimelineRow;
+    lastDisplayed: TimelineRow | null;
+    messages: number[];
+    metrics?: import("../shared/wire.ts").AgentMetric[];
+  } | null = null;
   const close = (finished: boolean) => {
     if (!current || !finished) return;
     const end = Date.parse(current.last.timestamp);
     if (!Number.isFinite(end)) return;
     const start = current.first.item.type === "user_message" ? Date.parse(current.first.timestamp) : NaN;
-    out.set(current.last.seqStart, {
+    const anchor = (displayed ? current.lastDisplayed : current.last) ?? current.last;
+    out.set(anchor.seqStart, {
       at: formatMessageTimestamp(new Date(end), now),
       took: Number.isFinite(start) && end >= start ? formatDuration(end - start) : "",
       messages: current.messages,
@@ -275,8 +288,9 @@ export function turnFooters(rows: TimelineRow[], lastFinished: boolean, now = ne
       close(true);
       current = null;
     }
-    current ??= { id: row.turnId, first: row, last: row, messages: [] };
+    current ??= { id: row.turnId, first: row, last: row, lastDisplayed: null, messages: [] };
     current.last = row;
+    if (!displayed || displayed.has(row.seqStart)) current.lastDisplayed = row;
     if (row.turnMetrics?.length) current.metrics = row.turnMetrics;
     if (row.item.type === "assistant_message") current.messages.push(row.seqStart);
   }

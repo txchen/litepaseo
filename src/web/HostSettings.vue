@@ -130,12 +130,14 @@ let lifecycleTimer: ReturnType<typeof setTimeout> | undefined;
 let disposed = false;
 async function pollLifecycle() {
   clearTimeout(lifecycleTimer);
+  lifecycleTimer = undefined;
+  if (disposed || document.hidden) return;
   try {
     const result = await props.api(base + "/lifecycle");
     if (disposed) return;
     const wasRunning = lifecycleJob.value?.state === "running";
     lifecycleJob.value = result;
-    if (result?.state === "running") lifecycleTimer = setTimeout(() => void pollLifecycle(), 2000);
+    if (result?.state === "running" && !document.hidden) lifecycleTimer = setTimeout(() => void pollLifecycle(), 2000);
     else if (wasRunning && result?.state === "complete") {
       if (result.version) version.value = result.version;
       // The daemon came back: show what it now reports, unless edits are waiting.
@@ -143,6 +145,14 @@ async function pollLifecycle() {
     }
   } catch {
     if (!disposed) lifecycleError.value = "Could not check the operation. Reopen this page to see its outcome.";
+  }
+}
+function onLifecycleVisibility() {
+  if (document.hidden) {
+    clearTimeout(lifecycleTimer);
+    lifecycleTimer = undefined;
+  } else if (lifecycleJob.value?.state === "running") {
+    void pollLifecycle();
   }
 }
 async function lifecycle(action: "restart" | "update") {
@@ -185,12 +195,14 @@ function jump(id: string) {
 
 onMounted(() => {
   window.addEventListener("beforeunload", beforeUnload);
+  document.addEventListener("visibilitychange", onLifecycleVisibility);
   void load(false);
   void pollLifecycle();
 });
 onUnmounted(() => {
   disposed = true;
   clearTimeout(lifecycleTimer);
+  document.removeEventListener("visibilitychange", onLifecycleVisibility);
   window.removeEventListener("beforeunload", beforeUnload);
 });
 </script>

@@ -29,9 +29,10 @@ In our local comparison with the **official Paseo 0.15.4 web UI**:
 | Compressed JavaScript + CSS | **92% less** — 290 KiB vs. 3,764 KiB, including the deferred renderer |
 
 Measured in headless Chromium on the same Linux laptop, with five runs per UI per
-scenario. LitePaseo uses 1 fps status animation and batches messages every 500 ms,
-trading some update latency for lower CPU use. These are resource measurements;
-battery runtime has not been measured.
+scenario. In that benchmark LitePaseo used 1 fps status animation and 500 ms message
+batching (the current Wake+Pull timeline pulls running watched chats every 1.5 s and
+does zero polling while idle), trading some update latency for lower CPU use. These
+are resource measurements; battery runtime has not been measured.
 
 **[Read the full comparison →](docs/performance-plan.md)** for workload details,
 latency, rendering differences, raw data and reproduction steps.

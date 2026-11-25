@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import type { AgentBackgroundWorkItem, AgentSummary, SlashCommandOption } from "../shared/wire.ts";
 import AgentControls from "./AgentControls.vue";
 import AttachmentPanel from "./AttachmentPanel.vue";
@@ -7,6 +7,7 @@ import BackgroundWorkBar from "./BackgroundWorkBar.vue";
 import ComposerAutocomplete, { type AutocompleteTrigger } from "./ComposerAutocomplete.vue";
 import DictationButton from "./DictationButton.vue";
 import { prefs } from "./preferences.ts";
+import { insertDictatedText, shouldSubmitOnEnter } from "./composer-input.ts";
 import Icon from "./Icon.vue";
 import PermissionForm from "./PermissionForm.vue";
 import { agentPath as path, type Api } from "./use-api.ts";
@@ -28,6 +29,7 @@ const emit = defineEmits<{
 }>();
 const {
   element, autosize, attachments, selectedAttachments, attachmentsReady,
+  pastedBlocks, addPastedBlock, removePastedBlock, clearPastedBlocks,
   prompt, composerHasContent, uncertain, savedDrafts, restoreDraft, warning,
   checkingDelivery, deliveryNotice, checkDelivery, acknowledgeMessage,
   queued, editingQueued, queuedText, controlQueue, removeQueued, editQueued, interruptWith,
@@ -170,20 +172,7 @@ watch(dictationPreview, () => {
 }, { flush: "post" });
 /** Dictated text goes where the cursor is, with spacing that reads naturally. */
 function insertDictation(text: string) {
-  const el = element.value;
-  const current = prompt.value;
-  const start = el && document.activeElement === el ? el.selectionStart : current.length;
-  const end = el && document.activeElement === el ? el.selectionEnd : current.length;
-  const before = current.slice(0, start), after = current.slice(end);
-  const lead = before && !/\s$/.test(before) ? " " : "";
-  prompt.value = before + lead + text + after;
-  void nextTick(() => {
-    if (!el) return;
-    el.focus();
-    const at = (before + lead + text).length;
-    el.setSelectionRange(at, at);
-    autosize();
-  });
+  insertDictatedText(element.value, prompt.value, text, (v) => (prompt.value = v), autosize);
 }
 
 const dragging = ref(false);
@@ -192,9 +181,6 @@ function onDragLeave(event: DragEvent) {
   if (!form.contains(event.relatedTarget as Node | null)) dragging.value = false;
 }
 // ---- Long paste collapse & prompt history recall (#7) ----------------------------------------
-interface PastedBlock { id: number; text: string; lines: number; expanded: boolean }
-const pastedBlocks = ref<PastedBlock[]>([]);
-let pasteSeq = 0;
 const promptHistory: string[] = [];
 let historyIndex = -1;
 let historyDraft = "";
@@ -216,7 +202,7 @@ async function submitComposer() {
     const combined = [prompt.value.trim(), ...blocks].filter(Boolean).join("\n\n");
     recordHistory(prompt.value.trim() || combined.slice(0, 500));
     prompt.value = combined;
-    pastedBlocks.value = [];
+    clearPastedBlocks();
     await nextTick();
   } else {
     recordHistory(prompt.value);
@@ -246,7 +232,7 @@ function pasteFiles(event: ClipboardEvent) {
   const lines = text.split(/\r?\n/).length;
   if (text.length > 1500 || lines > 30) {
     event.preventDefault();
-    pastedBlocks.value.push({ id: ++pasteSeq, text, lines, expanded: false });
+    addPastedBlock(text, lines);
     return;
   }
   if (mdFromHtml) {
@@ -265,9 +251,11 @@ function pasteFiles(event: ClipboardEvent) {
 }
 
 watch(() => props.agent.key, () => {
-  pastedBlocks.value = [];
   historyIndex = -1;
   historyDraft = "";
+});
+onUnmounted(() => {
+  clearTimeout(fileSearchTimer);
 });
 
 const placeholder = computed(() => {
@@ -313,10 +301,7 @@ function onKey(event: KeyboardEvent) {
     void nextTick(autosize);
     return;
   }
-  if (event.key !== "Enter" || event.isComposing) return;
-  const mod = event.metaKey || event.ctrlKey;
-  const enterSends = !coarsePointer && prefs.sendShortcut === "enter" && !event.shiftKey;
-  if (enterSends || mod) {
+  if (shouldSubmitOnEnter(event, coarsePointer, prefs.sendShortcut)) {
     event.preventDefault();
     acTrigger.value = null;
     void submitComposer();
@@ -406,7 +391,7 @@ defineExpose({
             <div class="pasted-chip-head">
               <Icon name="file" :size="13" />
               <button type="button" class="link-btn" @click="b.expanded = !b.expanded">Pasted text · {{ b.lines }} lines · {{ b.text.length }} chars</button>
-              <button type="button" class="icon-btn" aria-label="Remove pasted text" @click="pastedBlocks = pastedBlocks.filter((x) => x.id !== b.id)"><Icon name="close" :size="12" /></button>
+              <button type="button" class="icon-btn" aria-label="Remove pasted text" @click="removePastedBlock(b.id)"><Icon name="close" :size="12" /></button>
             </div>
             <pre v-if="b.expanded" class="pasted-preview">{{ b.text.slice(0, 4000) }}{{ b.text.length > 4000 ? "\n…" : "" }}</pre>
           </div>

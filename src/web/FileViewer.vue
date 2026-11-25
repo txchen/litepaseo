@@ -145,10 +145,15 @@ const copied = ref(false);
 const downloadUrl = computed(() => `/api/hosts/${encodeURIComponent(props.hostId)}/fs/download?cwd=${encodeURIComponent(props.cwd)}&path=${encodeURIComponent(props.path)}`);
 let copiedTimer: ReturnType<typeof setTimeout> | undefined;
 async function copyPath() {
-  await navigator.clipboard?.writeText(fullPath.value).catch(() => {});
-  copied.value = true;
-  clearTimeout(copiedTimer);
-  copiedTimer = setTimeout(() => (copied.value = false), 1200);
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+    await navigator.clipboard.writeText(fullPath.value);
+    copied.value = true;
+    clearTimeout(copiedTimer);
+    copiedTimer = setTimeout(() => (copied.value = false), 1200);
+  } catch {
+    showNotice("Could not copy path to clipboard.");
+  }
 }
 </script>
 

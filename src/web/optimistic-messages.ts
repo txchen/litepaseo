@@ -45,14 +45,24 @@ function rowMessageIds(item: Record<string, unknown>): { client?: string; server
 export function findMatchedOptimisticIds(
   pending: readonly OptimisticMessage[],
   rows: readonly TimelineRow[],
+  alreadyConsumed?: ReadonlySet<number>,
 ): Set<string> {
+  return matchOptimistic(pending, rows, alreadyConsumed).matched;
+}
+
+function matchOptimistic(
+  pending: readonly OptimisticMessage[],
+  rows: readonly TimelineRow[],
+  alreadyConsumed?: ReadonlySet<number>,
+): { matched: Set<string>; newlyConsumed: number[] } {
   const matched = new Set<string>();
-  if (!pending.length || !rows.length) return matched;
+  const newlyConsumed: number[] = [];
+  if (!pending.length || !rows.length) return { matched, newlyConsumed };
 
   const userRows = rows.filter((r) => r.item.type === "user_message");
-  if (!userRows.length) return matched;
+  if (!userRows.length) return { matched, newlyConsumed };
 
-  const usedSeqStarts = new Set<number>();
+  const usedSeqStarts = new Set<number>(alreadyConsumed);
 
   // Pass 1: exact ID match (clientMessageId or messageId).
   const byId = new Map<string, TimelineRow>();
@@ -66,6 +76,7 @@ export function findMatchedOptimisticIds(
     if (hit && !usedSeqStarts.has(hit.seqStart)) {
       matched.add(msg.messageId);
       usedSeqStarts.add(hit.seqStart);
+      newlyConsumed.push(hit.seqStart);
     }
   }
 
@@ -91,11 +102,12 @@ export function findMatchedOptimisticIds(
       }
       matched.add(msg.messageId);
       usedSeqStarts.add(row.seqStart);
+      newlyConsumed.push(row.seqStart);
       break;
     }
   }
 
-  return matched;
+  return { matched, newlyConsumed };
 }
 
 /**
@@ -104,6 +116,7 @@ export function findMatchedOptimisticIds(
  */
 export class OptimisticStore {
   private readonly entries = reactive(new Map<string, OptimisticMessage[]>());
+  private readonly consumed = new Map<string, { epoch: string; seqs: Set<number> }>();
   private readonly confirmedIds: string[] = [];
   private readonly confirmedSet = new Set<string>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -169,11 +182,32 @@ export class OptimisticStore {
     else this.entries.delete(agentKey);
   }
 
-  reconcile(agentKey: string, rows: readonly TimelineRow[]): string[] {
+  consumedSeqs(agentKey: string, epoch = ""): ReadonlySet<number> | undefined {
+    const record = this.consumed.get(agentKey);
+    return record && record.epoch === epoch ? record.seqs : undefined;
+  }
+
+  reconcile(agentKey: string, rows: readonly TimelineRow[], epoch = ""): string[] {
     const list = this.entries.get(agentKey);
     if (!list?.length) return [];
-    const matched = findMatchedOptimisticIds(list, rows);
+    let record = this.consumed.get(agentKey);
+    if (record && record.epoch !== epoch) {
+      this.consumed.delete(agentKey);
+      record = undefined;
+    }
+    const { matched, newlyConsumed } = matchOptimistic(list, rows, record?.seqs);
     if (!matched.size) return [];
+    if (newlyConsumed.length) {
+      if (!record) {
+        record = { epoch, seqs: new Set() };
+        this.consumed.set(agentKey, record);
+      }
+      for (const seq of newlyConsumed) record.seqs.add(seq);
+      if (record.seqs.size > 500) {
+        const keep = [...record.seqs].slice(-250);
+        record.seqs = new Set(keep);
+      }
+    }
     const removedIds: string[] = [];
     for (const id of matched) {
       this.rememberConfirmed(id);
@@ -188,6 +222,7 @@ export class OptimisticStore {
   }
 
   clearAgent(agentKey: string, onlySent = false): void {
+    if (!onlySent) this.consumed.delete(agentKey);
     const list = this.entries.get(agentKey);
     if (!list?.length) return;
     for (const msg of [...list]) {
@@ -197,6 +232,7 @@ export class OptimisticStore {
   }
 
   clearAll(): void {
+    this.consumed.clear();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     for (const list of this.entries.values()) {

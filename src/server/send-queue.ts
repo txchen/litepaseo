@@ -131,7 +131,7 @@ export class ServerSendQueue {
     this.save(); this.tick();
   }
   list(host: string, agent: string): ServerQueuedMessage[] {
-    return this.entries.filter(e => e.host === host && e.agent === agent).map(({ prepared, ...entry }) => ({ ...entry }));
+    return this.entries.filter(e => e.host === host && e.agent === agent).map(({ prepared: _prepared, ...entry }) => ({ ...entry }));
   }
   private pruneReceipts() {
     const now = Date.now();
@@ -193,7 +193,7 @@ export class ServerSendQueue {
       seen.add(key);
       const a = this.hosts.agents.get(key);
       const client = this.hosts.clients.get(e.host);
-      if (!a || client?.driver.getConnectionState().status !== "connected") continue;
+      if (!a || client?.driver.getConnectionState().status !== "connected" || client.directory?.synced === false) continue;
       const idle = a.turnActive === false || (a.turnActive === undefined && a.status !== "running" && a.status !== "initializing");
       if (!idle) { this.stopAwaiting(key); continue; }
       const wait = this.awaitingTurn.get(key);

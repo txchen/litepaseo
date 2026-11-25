@@ -77,10 +77,18 @@ async function setupTerminal() {
   resize();
 }
 watch(() => props.visible, async (visible) => {
-  if (!visible) return;
+  if (!visible) {
+    stream?.close();
+    stream = null;
+    return;
+  }
   await nextTick();
-  resize();
-  term.value?.focus();
+  if (disposed || !props.visible) return;
+  if (current.value && !stream) attach(current.value);
+  else {
+    resize();
+    term.value?.focus();
+  }
 });
 watch(isDark, (dark) => term.value && (term.value.options.theme = dark ? THEMES.dark : THEMES.light));
 
@@ -125,9 +133,13 @@ function resize() {
 
 function attach(id: string) {
   stream?.close();
+  stream = null;
+  if (disposed) return;
+  const switched = current.value !== id;
   current.value = id;
   lastSize = "";
-  term.value?.reset();
+  if (switched) term.value?.reset();
+  if (!props.visible) return;
   stream = openStream({
     url: () => `/api${base()}/${id}/stream?rows=${term.value?.rows ?? 24}&cols=${term.value?.cols ?? 80}`,
     onMessage: (message) => {
@@ -154,34 +166,37 @@ async function refresh() {
   const url = listUrl();
   try {
     const list = await props.api(url);
-    if (url !== listUrl()) return; // the workspace changed meanwhile
+    if (disposed || url !== listUrl()) return; // the workspace changed meanwhile
     terminals.value = list;
     error.value = "";
   } catch (e) {
-    if (url === listUrl()) error.value = (e as Error).message;
+    if (!disposed && url === listUrl()) error.value = (e as Error).message;
   }
 }
 async function create() {
   starting.value = true;
   try {
     await ensureTerminal();
+    if (disposed) return;
     const url = listUrl();
     const created = (await props.api(base(), "POST", { cwd: props.cwd, ...(profileId.value ? { profileId: profileId.value } : {}), rows: term.value?.rows ?? 24, cols: term.value?.cols ?? 80 })) as Term;
-    if (url !== listUrl()) return; // created in the previous workspace; it lists there
+    if (disposed || url !== listUrl()) return; // created in the previous workspace or after unmount
     terminals.value = [...terminals.value, created];
     attach(created.id);
   } catch (e) {
-    error.value = (e as Error).message;
+    if (!disposed) error.value = (e as Error).message;
   } finally {
-    starting.value = false;
+    if (!disposed) starting.value = false;
   }
 }
 async function kill(id: string) {
+  const url = listUrl();
   try {
     await props.api(`${base()}/${id}`, "DELETE");
   } catch {
     /* already gone */
   }
+  if (disposed || url !== listUrl()) return;
   terminals.value = terminals.value.filter((t) => t.id !== id);
   if (current.value === id) {
     stream?.close();

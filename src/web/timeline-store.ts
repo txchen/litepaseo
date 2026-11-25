@@ -25,6 +25,7 @@ function sameRow(a: TimelineRow, b: TimelineRow) {
 export class TimelineStore {
   rows: RowRef[] = [];
   epoch = "";
+  viewId = "";
   hasOlder = false;
   startCursor: TimelineCursor | null = null;
   ready = false;
@@ -35,7 +36,9 @@ export class TimelineStore {
   /** How far this conversation is held, for resuming its stream; null before the first rows. */
   resumePoint() {
     const first = this.rows[0];
-    return this.ready && first && this.lastSeq >= 0 ? { epoch: this.epoch, seq: this.lastSeq, from: first.seqStart } : null;
+    return this.ready && first && this.lastSeq >= 0
+      ? { epoch: this.epoch, ...(this.viewId ? { view: this.viewId } : {}), seq: this.lastSeq, from: first.seqStart }
+      : null;
   }
 
   apply(ops: TimelineOp[]) {
@@ -55,6 +58,7 @@ export class TimelineStore {
           return { seqStart: row.seqStart, row: shallowRef(row) };
         });
         this.epoch = op.epoch;
+        this.viewId = op.view ?? "";
         this.hasOlder = op.hasOlder;
         this.startCursor = op.startCursor;
         this.ready = true;

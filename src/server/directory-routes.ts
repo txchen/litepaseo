@@ -18,7 +18,13 @@ const projectPins = (store: Store): Record<string, number> => JSON.parse(store.s
  * Directory streams. Each remembers the last collection seq it delivered, so a flush sends
  * only entries changed since then: O(changes) per flush, independent of directory size.
  */
-type DirectoryStream = { last: number; lastWorkspaces: number; lastEmptyProjects: number; send: (message: DirectoryMessage) => void };
+type DirectoryStream = {
+  last: number;
+  lastWorkspaces: number;
+  lastEmptyProjects: number;
+  lastQueueJson: string;
+  send: (message: DirectoryMessage) => void;
+};
 
 /**
  * The live directory every page holds (hosts, agents, workspaces, project pins, the instance
@@ -28,6 +34,8 @@ export function registerDirectoryRoutes(app: App, { store, hosts, sendQueue, str
   const streams = new Set<DirectoryStream>();
   let agentFlush: ReturnType<typeof setTimeout> | undefined;
   let hostFlush: ReturnType<typeof setTimeout> | undefined;
+  let queueFlush: ReturnType<typeof setTimeout> | undefined;
+  let queueVersion = 0;
   /** Set on shutdown: closing the hosts still reports changes, but the store is about to close. */
   let disposed = false;
 
@@ -73,12 +81,38 @@ export function registerDirectoryRoutes(app: App, { store, hosts, sendQueue, str
       stream.send({ type: "changes", generation: agents.generation, seq: agents.seq, changes });
     stream.last = agents.seq;
   };
-  const stopAgents = hosts.onAgentsChanged(() => {
-    if (disposed || agentFlush || !streams.size) return;
-    agentFlush = setTimeout(() => {
-      agentFlush = undefined;
-      for (const stream of streams) deliverAgents(stream);
+  const deliverQueue = (forceBroadcast = false) => {
+    const summary = sendQueue.summary();
+    const json = JSON.stringify(summary);
+    let bumped = false;
+    for (const stream of streams) {
+      if (!forceBroadcast && stream.lastQueueJson === json) continue;
+      if (!forceBroadcast && !bumped) {
+        queueVersion++;
+        bumped = true;
+      }
+      stream.lastQueueJson = json;
+      stream.send({ type: "queue-summary", version: queueVersion, summary });
+    }
+  };
+  const scheduleQueueFlush = () => {
+    queueVersion++;
+    if (disposed || !streams.size || queueFlush) return;
+    queueFlush = setTimeout(() => {
+      queueFlush = undefined;
+      deliverQueue(true);
     }, AGENT_FLUSH_MS);
+  };
+  const stopQueue = sendQueue.onChange(scheduleQueueFlush);
+  const stopAgents = hosts.onAgentsChanged(() => {
+    if (disposed || !streams.size) return;
+    if (!agentFlush) {
+      agentFlush = setTimeout(() => {
+        agentFlush = undefined;
+        for (const stream of streams) deliverAgents(stream);
+        deliverQueue(false);
+      }, AGENT_FLUSH_MS);
+    }
   });
   const stopHosts = hosts.onHostsChanged(() => {
     if (disposed || hostFlush || !streams.size) return;
@@ -97,15 +131,22 @@ export function registerDirectoryRoutes(app: App, { store, hosts, sendQueue, str
     const psince = Number(c.req.query("psince"));
     const presumable = c.req.query("pgeneration") === hosts.emptyProjects.generation && Number.isInteger(psince);
     return eventStream(c.req.raw.signal, (send) => {
+      const initialQueue = sendQueue.summary();
+      const initialQueueJson = JSON.stringify(initialQueue);
       const stream: DirectoryStream = {
         last: resumable ? since : -1,
         lastWorkspaces: wresumable ? wsince : -1,
         lastEmptyProjects: presumable ? psince : -1,
+        lastQueueJson: initialQueueJson,
         send,
       };
+      const wantsQueue = c.req.query("queues") === "1";
       send(hostsMessage());
       send({ type: "project-pins", pins: projectPins(store) });
       deliverAgents(stream);
+      if (wantsQueue || Object.keys(initialQueue).length) {
+        send({ type: "queue-summary", version: queueVersion, summary: initialQueue });
+      }
       streams.add(stream);
       return () => streams.delete(stream);
     }, streamValidity(c), encodingOf(c));
@@ -175,7 +216,9 @@ export function registerDirectoryRoutes(app: App, { store, hosts, sendQueue, str
       disposed = true;
       clearTimeout(agentFlush);
       clearTimeout(hostFlush);
-      agentFlush = hostFlush = undefined;
+      clearTimeout(queueFlush);
+      agentFlush = hostFlush = queueFlush = undefined;
+      stopQueue();
       stopAgents();
       stopHosts();
     },

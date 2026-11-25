@@ -91,7 +91,7 @@ export class Hosts {
     const agentsByWorkspace = new Map<string, Map<string, AgentSummary>>();
     const workspaceAgentState = (workspaceId: string): AgentState | null => {
       const bucket = agentsByWorkspace.get(workspaceId);
-      return bucket ? deriveWorkspaceAgentState(bucket.values()) : null;
+      return bucket ? deriveWorkspaceAgentState(bucket) : null;
     };
     const workspaces = new HostWorkspaces(
       hostId,
@@ -108,7 +108,15 @@ export class Hosts {
       () => this.emit(this.agentListeners),
       (previous, next) => {
         const touchedWorkspaces = new Set<string>();
-        if (previous?.workspaceId) {
+        const workspaceChanged = !previous || !next || previous.workspaceId !== next.workspaceId;
+        const stateChanged =
+          workspaceChanged ||
+          previous.parentAgentId !== next.parentAgentId ||
+          previous.state !== next.state ||
+          previous.unread !== next.unread ||
+          previous.turnActive !== next.turnActive ||
+          previous.status !== next.status;
+        if (workspaceChanged && previous?.workspaceId) {
           const bucket = agentsByWorkspace.get(previous.workspaceId);
           if (bucket) {
             bucket.delete(previous.id);
@@ -120,7 +128,7 @@ export class Hosts {
           let bucket = agentsByWorkspace.get(next.workspaceId);
           if (!bucket) agentsByWorkspace.set(next.workspaceId, (bucket = new Map()));
           bucket.set(next.id, next);
-          touchedWorkspaces.add(next.workspaceId);
+          if (stateChanged) touchedWorkspaces.add(next.workspaceId);
         }
         for (const workspaceId of touchedWorkspaces) workspaces.reconcile(workspaceId);
         if (next) {
@@ -135,6 +143,7 @@ export class Hosts {
         }
         notifyListeners(this.transitionListeners, previous, next);
       },
+      () => this.emit(this.hostListeners),
     );
     const update = (state: ReturnType<Driver["getConnectionState"]>) => {
       const previous = this.diagnostics.get(hostId) ?? {};
@@ -270,11 +279,21 @@ export class Hosts {
 
   /** The provider subagents of one agent, as they change. */
   watchSubagents(hostId: string, agentId: string, listener: (subagents: ProviderSubagent[]) => void) {
+    let seen = new Set<string>();
     return this.get(hostId).subagents.watch(agentId, (subagents) => {
+      const current = new Set<string>();
       for (const s of subagents) {
+        current.add(s.id);
         const subView = this.timelines.get(`${hostId}:${agentId}:subagent:${s.id}`)?.view;
         if (subView) subView.setActive(s.status === "running");
       }
+      for (const id of seen) {
+        if (!current.has(id)) {
+          const removedView = this.timelines.get(`${hostId}:${agentId}:subagent:${id}`)?.view;
+          if (removedView) removedView.setActive(false);
+        }
+      }
+      seen = current;
       listener(subagents);
     });
   }
@@ -362,8 +381,9 @@ export class Hosts {
    * The conversation as it is now, for a plain request that opens it: the shared view's reset
    * (loaded first if nobody watched it). Its seq lets the browser's stream resume from there.
    */
-  timelineSnapshot(hostId: string, agentId: string, timeoutMs = SNAPSHOT_TIMEOUT_MS) {
+  timelineSnapshot(hostId: string, agentId: string, timeoutMs = SNAPSHOT_TIMEOUT_MS, signal?: AbortSignal) {
     return new Promise<Extract<TimelineOp, { type: "reset" }>>((resolve, reject) => {
+      if (signal?.aborted) return reject(new TimelineTimeoutError());
       let stop: (() => void) | null = null, done = false, released = false;
       // Leaving starts the view's idle grace, so the stream that follows finds it live.
       const release = () => {
@@ -371,9 +391,18 @@ export class Hosts {
         released = true;
         stop();
       };
+      const onAbort = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        release();
+        reject(new TimelineTimeoutError());
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
       const timer = setTimeout(() => {
         if (done) return;
         done = true;
+        signal?.removeEventListener("abort", onAbort);
         release();
         reject(new TimelineTimeoutError());
       }, timeoutMs);
@@ -385,12 +414,14 @@ export class Hosts {
           if (done || !reset) return;
           done = true;
           clearTimeout(timer);
+          signal?.removeEventListener("abort", onAbort);
           resolve(reset);
           queueMicrotask(release);
         });
       } catch (error) {
         done = true;
         clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
         return reject(error);
       }
       // A live view answered before `stop` was known.

@@ -4,11 +4,17 @@ import { AttachmentStore, type LocalAttachment } from "./attachment-store.ts";
 import { ComposerStore } from "./composer-store.ts";
 import { OptimisticStore } from "./optimistic-messages.ts";
 import { prefs } from "./preferences.ts";
-import { openStream } from "./event-stream.ts";
 import { newId } from "./id.ts";
 import { localStorageOrNull, safeSetItem } from "./safe-storage.ts";
 import { SUGGESTIONS } from "./suggestions.ts";
 import { agentPath as path, type Api } from "./use-api.ts";
+
+export interface PastedBlock {
+  id: number;
+  text: string;
+  lines: number;
+  expanded: boolean;
+}
 
 /** No turn in flight: the moment a queued message may go. */
 function turnIdle(a: AgentSummary) {
@@ -36,6 +42,8 @@ export function useComposer({ active, selectedKey, authenticated, api, action, b
   const drafts = new ComposerStore(() => localStorage);
   const attachments = new AttachmentStore();
   const optimistic = new OptimisticStore();
+  const pastedByAgent = reactive(new Map<string, PastedBlock[]>());
+  let pasteSeq = 0;
   /** The composer textarea (ComposerDock binds it). */
   const element = ref<HTMLTextAreaElement | null>(null);
   function autosize() {
@@ -50,30 +58,69 @@ export function useComposer({ active, selectedKey, authenticated, api, action, b
   const queueAttempts = new Map<string, string>();
   const editingQueued = ref<string | null>(null), queuedText = ref("");
   let queueRead = 0;
+  let queueSynced = false;
   async function refreshQueue() {
     const a = active.value;
     const read = ++queueRead;
-    if (!a || !authenticated.value) { queued.value = []; return; }
+    if (!a || !authenticated.value) { queued.value = []; queueSynced = true; return; }
     try {
       const result = await api(path(a) + "/queue");
-      if (read === queueRead && active.value?.key === a.key) queued.value = Array.isArray(result) ? result : [];
-    } catch { /* The connection status already reports connectivity failures. */ }
+      if (read === queueRead && active.value?.key === a.key) {
+        queued.value = Array.isArray(result) ? result : [];
+        queueSynced = true;
+      }
+    } catch {
+      if (read === queueRead && active.value?.key === a.key) queueSynced = false;
+    }
   }
-  /** Every agent's queue size, for the sidebar. */
+  /** Every agent's queue size, for the sidebar; fed by the shared directory SSE stream (no extra SSE). */
   const queueSummary = ref<Record<string, { count: number; paused: boolean }>>({});
-  let queueSummaryStream: { close(): void } | null = null;
-  watch(authenticated, signedIn => {
-    queueSummaryStream?.close(); queueSummary.value = {};
-    if (signedIn) queueSummaryStream = openStream({ url: () => '/api/queue/stream', onMessage: data => { queueSummary.value = data as typeof queueSummary.value; } });
+  let queueVersion = -1;
+  const activeQueueKey = (a: AgentSummary) => (a.workspaceId ? `${a.hostId}:${a.workspaceId}` : a.key);
+  const hasQueuedFor = (summary: Record<string, { count: number; paused: boolean }>, a: AgentSummary) =>
+    !!(summary[activeQueueKey(a)]?.count || summary[a.key]?.count);
+  function resetQueueSync() {
+    queueVersion = -1;
+  }
+  function applyQueueSummary(summary: Record<string, { count: number; paused: boolean }>, version: number) {
+    queueSummary.value = summary;
+    const authoritative = queueVersion < 0;
+    if (!authoritative && version === queueVersion) return;
+    queueVersion = version;
+    const a = active.value;
+    if (!a || !authenticated.value) return;
+    if (hasQueuedFor(summary, a)) {
+      queueSynced = false;
+      void refreshQueue();
+    } else {
+      // Invalidate any older in-flight GET /queue so a stale response cannot resurrect a drained item.
+      queueRead++;
+      queued.value = [];
+      queueSynced = true;
+    }
+  }
+  watch(authenticated, (signedIn) => {
+    if (!signedIn) {
+      queueSummary.value = {};
+      queueVersion = -1;
+      queued.value = [];
+      queueSynced = false;
+      queueRead++;
+    }
   });
-  let queueStream: { close(): void } | null = null;
-  watch([selectedKey, authenticated], () => {
-    queueStream?.close(); queueStream = null;
+  watch([() => active.value?.key ?? null, authenticated], () => {
     queueRead++; queued.value = [];
     const a = active.value;
-    if (a && authenticated.value) queueStream = openStream({ url: () => '/api' + path(a) + '/queue/stream', onMessage: data => {
-      if (authenticated.value && active.value?.key === a.key && Array.isArray(data)) { queueRead++; queued.value = data; }
-    } });
+    if (!a || !authenticated.value) {
+      queueSynced = false;
+      return;
+    }
+    if (hasQueuedFor(queueSummary.value, a) || queueVersion < 0) {
+      queueSynced = false;
+      void refreshQueue();
+    } else {
+      queueSynced = true;
+    }
   });
   async function controlQueue(m: QueuedMessage, command: string) {
     const a = active.value; if (!a) return;
@@ -113,6 +160,23 @@ export function useComposer({ active, selectedKey, authenticated, api, action, b
 
   // ---- The draft ----------------------------------------------------------------------------------
   const selectedAttachments = computed(() => selectedKey.value ? attachments.get(selectedKey.value) : []);
+  const pastedBlocks = computed(() => (selectedKey.value ? pastedByAgent.get(selectedKey.value) ?? [] : []));
+  function addPastedBlock(text: string, lines: number) {
+    const key = selectedKey.value;
+    if (!key) return;
+    const list = pastedByAgent.get(key) ?? [];
+    pastedByAgent.set(key, [...list, { id: ++pasteSeq, text, lines, expanded: false }]);
+  }
+  function removePastedBlock(id: number) {
+    const key = selectedKey.value;
+    if (!key) return;
+    const next = (pastedByAgent.get(key) ?? []).filter((b) => b.id !== id);
+    if (next.length) pastedByAgent.set(key, next);
+    else pastedByAgent.delete(key);
+  }
+  function clearPastedBlocks() {
+    if (selectedKey.value) pastedByAgent.delete(selectedKey.value);
+  }
   const prompt = computed({
     get: () => selectedKey.value ? drafts.state(selectedKey.value).text : "",
     set: (text: string) => { if (selectedKey.value) drafts.setText(selectedKey.value, text); },
@@ -147,15 +211,52 @@ export function useComposer({ active, selectedKey, authenticated, api, action, b
       if (active.value?.key === agent.key) deliveryNotice.value = "Unable to check delivery. Your message remains saved.";
     } finally { checkingDelivery.value = false; }
   }
-  const deliveryTimer = setInterval(() => void checkDelivery(), 15_000);
-  watch([selectedKey, busy], () => { deliveryNotice.value = ""; void checkDelivery(); });
+  // Only arm the 15 s delivery poll while an unresolved message actually exists and the tab is visible.
+  let deliveryTimer: ReturnType<typeof setTimeout> | undefined;
+  function syncDeliveryTimer() {
+    clearTimeout(deliveryTimer);
+    deliveryTimer = undefined;
+    if (!uncertain.value || document.hidden || !authenticated.value) return;
+    deliveryTimer = setTimeout(async () => {
+      deliveryTimer = undefined;
+      await checkDelivery();
+      syncDeliveryTimer();
+    }, 15_000);
+  }
+  function onComposerVisibility() {
+    if (document.hidden) {
+      clearTimeout(deliveryTimer);
+      deliveryTimer = undefined;
+    } else {
+      if (uncertain.value) void checkDelivery().finally(syncDeliveryTimer);
+      const a = active.value;
+      if (a && authenticated.value && (queued.value.length > 0 || queueSummary.value[activeQueueKey(a)]?.count || queueSummary.value[a.key]?.count)) {
+        void refreshQueue();
+      }
+    }
+  }
+  document.addEventListener("visibilitychange", onComposerVisibility);
+  watch([selectedKey, busy], () => {
+    deliveryNotice.value = "";
+    if (uncertain.value) void checkDelivery().finally(syncDeliveryTimer);
+    else syncDeliveryTimer();
+  }, { immediate: true });
+  watch([uncertain, authenticated], () => {
+    if (uncertain.value && !checkingDelivery.value) void checkDelivery().finally(syncDeliveryTimer);
+    else syncDeliveryTimer();
+  });
   function acknowledgeMessage() {
     if (selectedKey.value && uncertain.value) drafts.resolve(selectedKey.value, uncertain.value.messageId);
   }
   function onStorage(event: StorageEvent) {
     if (!event.storageArea || event.storageArea !== localStorageOrNull()) return;
-    if (event.key === "litepaseo-composer-signout") drafts.clear();
-    else drafts.onStorage(event.key, event.newValue); // O(1); ignores unrelated keys such as theme
+    if (event.key === "litepaseo-composer-signout") {
+      drafts.clear();
+      attachments.clear();
+      optimistic.clearAll();
+      pastedByAgent.clear();
+      suggestions.clear();
+    } else drafts.onStorage(event.key, event.newValue); // O(1); ignores unrelated keys such as theme
   }
   window.addEventListener("storage", onStorage);
 
@@ -208,6 +309,12 @@ export function useComposer({ active, selectedKey, authenticated, api, action, b
   async function sendText(text: string, fromComposer = false) {
     const a = active.value;
     if (!a || (!text.trim() && (!fromComposer || !selectedAttachments.value.length)) || uncertain.value || busy.value || (fromComposer && !attachmentsReady.value)) return;
+    // If the sidebar reports queued items for this workspace but the detail read hasn't succeeded yet,
+    // refresh first so an idle agent with a paused queue is never bypassed.
+    if (deliveryMode.value === "queue" && turnIdle(a) && !queueSynced && hasQueuedFor(queueSummary.value, a)) {
+      await refreshQueue();
+      if (active.value?.key !== a.key) return;
+    }
     // Queue mode: while a turn runs the message waits above the composer instead of entering
     // the conversation; it goes when the turn ends, or at once if the reader chooses to interrupt.
     if (deliveryMode.value === "queue" && (!turnIdle(a) || queued.value.length > 0)) {
@@ -322,6 +429,7 @@ export function useComposer({ active, selectedKey, authenticated, api, action, b
       queueRead++;
       attachments.clear();
       optimistic.clearAll();
+      pastedByAgent.clear();
       suggestions.clear();
       queueAttempts.clear();
       safeSetItem("litepaseo-composer-signout", newId());
@@ -333,21 +441,21 @@ export function useComposer({ active, selectedKey, authenticated, api, action, b
 
   onUnmounted(() => {
     clearTimeout(noticeTimer);
-    clearInterval(deliveryTimer);
+    clearTimeout(deliveryTimer);
     attachments.clear();
     optimistic.clearAll();
     window.removeEventListener("storage", onStorage);
-    queueSummaryStream?.close();
-    queueStream?.close();
+    document.removeEventListener("visibilitychange", onComposerVisibility);
   });
 
   return {
     element, autosize,
     attachments, selectedAttachments, attachmentsReady,
+    pastedBlocks, addPastedBlock, removePastedBlock, clearPastedBlocks,
     optimistic,
     prompt, composerHasContent, uncertain, savedDrafts, restoreDraft, warning: drafts.warning,
     checkingDelivery, deliveryNotice, checkDelivery, acknowledgeMessage,
-    queued, queueSummary, editingQueued, queuedText, controlQueue, removeQueued, editQueued, interruptWith,
+    queued, queueSummary, applyQueueSummary, resetQueueSync, editingQueued, queuedText, controlQueue, removeQueued, editQueued, interruptWith,
     dictationReady, loadDictation, notice, showNotice,
     behavior, running, deliveryModes, deliveryMode,
     offerSuggestion, composerSuggestion,

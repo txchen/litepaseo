@@ -229,6 +229,7 @@ export function registerWorkspaceRoutes(app: App, { hosts, store, streamValidity
       return c.json({ error: errorMessage(error, "Directory unavailable") }, 404);
     }
   });
+  const isTooLarge = (error: unknown) => /too large|maxBytes|exceeds/i.test(error instanceof Error ? error.message : String(error ?? ""));
   app.get("/api/hosts/:host/fs/read", async (c) => {
     const cwd = path.parse(c.req.query("cwd"));
     const file = path.parse(c.req.query("path"));
@@ -245,6 +246,7 @@ export function registerWorkspaceRoutes(app: App, { hosts, store, streamValidity
         ...(text !== undefined ? { text, truncated: result.size > MAX_TEXT_BYTES } : {}),
       });
     } catch (error) {
+      if (isTooLarge(error)) return c.json({ error: "File is too large to preview" }, 413);
       return c.json({ error: errorMessage(error, "File unavailable") }, 404);
     }
   });
@@ -256,14 +258,16 @@ export function registerWorkspaceRoutes(app: App, { hosts, store, streamValidity
       const result = await driver.readFile(cwd, file, undefined, MAX_DOWNLOAD_BYTES + 1);
       if (result.size > MAX_DOWNLOAD_BYTES) return c.json({ error: "File exceeds 32 MB download limit" }, 413);
       const rawName = (result.path.split("/").pop() || "download").replace(/[\r\n"\\]/g, "_");
+      const asciiName = rawName.replace(/[^\x20-\x7e]/g, "_") || "download";
       const encoded = encodeURIComponent(rawName);
       return c.body(result.bytes as Uint8Array<ArrayBuffer>, 200, {
         "Content-Type": result.mime || "application/octet-stream",
-        "Content-Disposition": `attachment; filename="${rawName}"; filename*=UTF-8''${encoded}`,
+        "Content-Disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encoded}`,
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "private, no-store",
       });
     } catch (error) {
+      if (isTooLarge(error)) return c.json({ error: "File exceeds 32 MB download limit" }, 413);
       return c.json({ error: errorMessage(error, "File unavailable") }, 404);
     }
   });
@@ -341,16 +345,24 @@ export function registerWorkspaceRoutes(app: App, { hosts, store, streamValidity
             send({ t: "reset" });
           } else if (event.replay.type === "data") push(event.replay.data);
         },
-        { restore: { mode: "full-snapshot", scrollbackLines: 2000, size: { rows, cols } } },
+        { restore: { mode: "full-snapshot", scrollbackLines: 5000, size: { rows, cols } } },
       );
+      let exited = false;
+      const finishExit = () => {
+        if (exited) return;
+        exited = true;
+        clearTimeout(timer);
+        flush();
+        send({ t: "exit" });
+      };
       const stop = subscription.subscribe({
         snapshot: () => {},
         update: (message) => {
-          if (message.type === "terminal_stream_exit") send({ t: "exit" });
+          if (message.type === "terminal_stream_exit") finishExit();
         },
-        error: () => send({ t: "exit" }),
+        error: finishExit,
       });
-      subscription.ready.catch(() => send({ t: "exit" }));
+      subscription.ready.catch(finishExit);
       return () => {
         clearTimeout(timer);
         stop();

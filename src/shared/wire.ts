@@ -160,6 +160,7 @@ export interface Change<T> {
 
 export type DirectoryMessage =
   | { type: "project-pins"; pins: Record<string, number> }
+  | { type: "queue-summary"; version: number; summary: Record<string, { count: number; paused: boolean }> }
   | { type: "snapshot"; generation: string; seq: number; agents: AgentSummary[] }
   | { type: "changes"; generation: string; seq: number; changes: Change<AgentSummary>[] }
   | { type: "workspaces-snapshot"; generation: string; seq: number; workspaces: WorkspaceSummary[] }
@@ -196,6 +197,8 @@ export type TimelineOp =
   | {
       type: "reset";
       epoch: string;
+      /** Unique server view instance id so recreated views never collide on revision 1. */
+      view?: string;
       rows: TimelineRow[];
       hasOlder: boolean;
       startCursor: TimelineCursor | null;
@@ -387,9 +390,9 @@ export interface ProjectConfigState {
 }
 
 export interface ForkContextAttachment {
-  id?: string;
-  filename: string;
+  type: "text";
   mimeType: "text/plain";
+  contextKind?: string;
   title?: string | null;
   text: string;
 }

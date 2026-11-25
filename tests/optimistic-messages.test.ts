@@ -117,3 +117,27 @@ test("mobile race: SSE arriving before HTTP response confirms message; epoch res
   store.clearAll();
   assert.ok(revoked.includes("blob:o"));
 });
+
+test("repeated snapshots with one ID-less row never confirm two identical sends", () => {
+  const store = new OptimisticStore({ revoke: () => {} });
+  store.add({ messageId: "dup-1", agentKey: "h:a", text: "ping", baselineSeqEnd: 0 });
+  store.add({ messageId: "dup-2", agentKey: "h:a", text: "ping", baselineSeqEnd: 0 });
+
+  const snapshot = [userRow(1, { text: "ping" })];
+  assert.deepEqual(store.reconcile("h:a", snapshot, "epoch-1"), ["dup-1"]);
+  assert.equal(store.wasConfirmed("dup-1"), true);
+  assert.equal(store.wasConfirmed("dup-2"), false);
+
+  // Re-running reconcile on the exact same snapshot must NOT consume row 1 again for dup-2.
+  assert.deepEqual(store.reconcile("h:a", snapshot, "epoch-1"), []);
+  assert.equal(store.wasConfirmed("dup-2"), false);
+  assert.deepEqual(store.list("h:a").map((m) => m.messageId), ["dup-2"]);
+
+  // Once the second real row arrives, dup-2 confirms cleanly.
+  assert.deepEqual(
+    store.reconcile("h:a", [userRow(1, { text: "ping" }), userRow(2, { text: "ping" })], "epoch-1"),
+    ["dup-2"],
+  );
+  assert.equal(store.wasConfirmed("dup-2"), true);
+  store.clearAll();
+});

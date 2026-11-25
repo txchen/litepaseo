@@ -43,10 +43,11 @@ async function fetchEntries(path: string) {
   } catch (e) {
     if (current === generation) error.value = (e as Error).message;
   } finally {
-    if (current !== generation) return;
-    const next = new Set(loading.value);
-    next.delete(path);
-    loading.value = next;
+    if (current === generation) {
+      const next = new Set(loading.value);
+      next.delete(path);
+      loading.value = next;
+    }
   }
 }
 watch(() => [props.hostId, props.cwd], () => {

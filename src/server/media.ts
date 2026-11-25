@@ -47,7 +47,7 @@ export function isLocalConnection(connection: string) {
     if (target.kind !== "socket") return false;
     if (target.socketPath) return true;
     const host = new URL(target.url ?? "").hostname.replace(/^\[|\]$/g, "");
-    return host === "localhost" || host === "::1" || /^127\./.test(host);
+    return host === "localhost" || host === "::1" || host.startsWith("127.");
   } catch {
     return false;
   }

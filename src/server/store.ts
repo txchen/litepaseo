@@ -3,28 +3,12 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import type { BoardCard as Card, CardComment } from "../shared/wire.ts";
+export type { Card, CardComment };
 export interface Host {
   id: string;
   label: string;
   connection: string;
-}
-export interface CardComment {
-  id: string;
-  text: string;
-  /** Milliseconds. */
-  at: number;
-}
-export interface Card {
-  id: string;
-  title: string;
-  column: string;
-  hostId: string | null;
-  agentId: string | null;
-  /** Markdown; absent on cards from before 0.4.1. */
-  description?: string;
-  comments?: CardComment[];
-  createdAt?: number;
-  updatedAt?: number;
 }
 export interface LoginSession {
   id: string;

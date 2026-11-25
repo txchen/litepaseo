@@ -17,14 +17,26 @@ export function trackViewingPresence(key: () => string | null, signedIn: () => b
   let lastInput = Date.now();
   // One pending heartbeat at most: each report replaces it.
   let timer: ReturnType<typeof setTimeout> | undefined;
-  function report(leaving = false) {
+  function report(leaving = false, forceRenew = false) {
     const foreground = !leaving && !document.hidden && document.hasFocus();
     const current = foreground ? key() : null;
     const active = foreground && Date.now() - lastInput < IDLE_MS;
+    if (!signedIn()) {
+      clearTimeout(timer);
+      timer = undefined;
+      lastKey = null;
+      lastActive = false;
+      return;
+    }
+    const stateChanged = current !== lastKey || active !== lastActive;
+    // Unchanged state (e.g. window resize): keep the existing heartbeat deadline intact.
+    if (!stateChanged && !forceRenew) {
+      if ((current || active) && !timer) timer = setTimeout(() => report(false, true), HEARTBEAT_MS);
+      return;
+    }
     clearTimeout(timer);
     timer = undefined;
-    if (!signedIn()) { lastKey = null; lastActive = false; return; }
-    if (current || lastKey || active || lastActive) {
+    if ((stateChanged && (current || lastKey || active || lastActive)) || (forceRenew && (current || active))) {
       void fetch('/api/presence', {
         method: 'PUT', credentials: 'same-origin', keepalive: true,
         headers: { 'content-type': 'application/json', 'x-litepaseo': '1' },
@@ -34,7 +46,7 @@ export function trackViewingPresence(key: () => string | null, signedIn: () => b
     }
     lastKey = current;
     lastActive = active;
-    if (current || active) timer = setTimeout(() => report(), HEARTBEAT_MS);
+    if (current || active) timer = setTimeout(() => report(false, true), HEARTBEAT_MS);
   }
   const changed = () => report();
   const leaving = () => report(true);

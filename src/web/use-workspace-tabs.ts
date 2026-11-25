@@ -53,7 +53,14 @@ export function useWorkspaceTabs(owner: Readonly<Ref<string>>, compact: MediaQue
     const key = owner.value;
     if (!key) return;
     const entry = fileTabs.get(key) ?? { paths: [], active: null };
-    if (!entry.paths.includes(path)) entry.paths = [...entry.paths, path].slice(-12);
+    if (!entry.paths.includes(path)) {
+      const nextPaths = [...entry.paths, path];
+      if (nextPaths.length > 12) {
+        const evicted = nextPaths.splice(0, nextPaths.length - 12);
+        for (const old of evicted) fileViews.delete(fileViewKey(key, old));
+      }
+      entry.paths = nextPaths;
+    }
     entry.active = path;
     entry.jump = range?.line ? { path, line: range.line, end: range.end, seq: ++jumpSeq } : undefined;
     if (terminalTabs.has(key)) terminalTabs.set(key, false);

@@ -43,28 +43,33 @@ export function registerTimelineRoutes(app: App, { store, hosts, streamValidity,
   app.get("/api/hosts/:host/agents/:agent/timeline/latest", async (c) => {
     const hostId = c.req.param("host"), agentId = c.req.param("agent");
     try {
-      const reset = await hosts.timelineSnapshot(hostId, agentId);
+      const reset = await hosts.timelineSnapshot(hostId, agentId, undefined, c.req.raw.signal);
       return c.json({ ...reset, rows: reset.rows.map(enrichRow(hostId, agentId)) } satisfies TimelineSnapshot);
     } catch (error) {
       if (error instanceof TimelineTimeoutError) return c.json({ error: error.message }, 504);
       throw error;
     }
   });
+  const parseResume = (query: Record<string, string>) => {
+    const parsed = z.object({
+      epoch: z.string().min(1).max(200),
+      view: z.string().min(1).max(200).optional(),
+      seq: z.coerce.number().int().nonnegative(),
+      from: z.coerce.number().int().nonnegative(),
+    }).safeParse(query);
+    return parsed.success ? parsed.data : undefined;
+  };
   app.get("/api/hosts/:host/agents/:agent/timeline/stream", (c) => {
     const hostId = c.req.param("host"), agentId = c.req.param("agent");
     hosts.get(hostId);
     // A browser that holds the conversation says how far: it gets only what changed since.
-    const since = z.object({
-      epoch: z.string().min(1).max(200),
-      seq: z.coerce.number().int().nonnegative(),
-      from: z.coerce.number().int().nonnegative(),
-    }).safeParse(c.req.query());
+    const since = parseResume(c.req.query());
     const enrich = enrichRow(hostId, agentId);
     return eventStream(c.req.raw.signal, (send) => {
       const stop = hosts.watchTimeline(hostId, agentId, (ops) =>
         send({ type: "ops", ops: ops.map((op) =>
           op.type === "reset" ? { ...op, rows: op.rows.map(enrich) } : op.type === "upsert" ? { ...op, row: enrich(op.row) } : op,
-        ) } satisfies TimelineMessage), undefined, since.success ? since.data : undefined);
+        ) } satisfies TimelineMessage), undefined, since);
       // The agent's provider subagents ride the same stream: no extra connection per chat.
       // The first list always goes out, so a reconnecting browser drops subagents that are gone.
       let sent = "";
@@ -150,8 +155,9 @@ export function registerTimelineRoutes(app: App, { store, hosts, streamValidity,
   // ---- Provider subagents: read-only conversations, live like an agent's -----------------------
   app.get("/api/hosts/:host/agents/:agent/subagents/:subagent/timeline/stream", (c) => {
     hosts.get(c.req.param("host"));
+    const since = parseResume(c.req.query());
     return eventStream(c.req.raw.signal, (send) =>
-      hosts.watchTimeline(c.req.param("host"), c.req.param("agent"), (ops) => send({ type: "ops", ops } satisfies TimelineMessage), c.req.param("subagent")),
+      hosts.watchTimeline(c.req.param("host"), c.req.param("agent"), (ops) => send({ type: "ops", ops } satisfies TimelineMessage), c.req.param("subagent"), since),
     streamValidity(c), encodingOf(c));
   });
   app.get("/api/hosts/:host/agents/:agent/subagents/:subagent/timeline", async (c) => {

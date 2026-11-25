@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { HTTPException } from "hono/http-exception";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { z } from "zod";
 import { Attachments, MAX_FILE_BYTES } from "./attachments.ts";
@@ -109,6 +110,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
       : c.req.path.endsWith("/attachments") ? MAX_FILE_BYTES
       : c.req.path === "/api/dictation/transcribe" ? MAX_DICTATION_BYTES
       : 1024 * 1024,
+    onError: (ctx) => ctx.json({ error: "Request body too large" }, 413),
   })(c, next));
   app.use("/api/*", apiAuth(auth));
 
@@ -116,6 +118,7 @@ export function createApp(store: Store, hosts: Hosts, token: string | (() => str
     if (error instanceof UnknownHostError) return c.json({ error: "Unknown host" }, 404);
     if (error instanceof z.ZodError) return c.json({ error: "Invalid request", detail: error.issues }, 400);
     if (error instanceof HttpError) return c.json({ error: error.message }, error.status);
+    if (error instanceof HTTPException) return c.json({ error: error.message || "Request failed" }, error.status);
     const requestId = randomUUID();
     // Enough to diagnose from the private service log: where it failed and what failed. The
     // query string is left out (it can carry cursors and filters), and messages are bounded.

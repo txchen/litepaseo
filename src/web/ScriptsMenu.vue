@@ -14,17 +14,24 @@ const scripts = ref<WorkspaceScriptInfo[]>([]);
 const loading = ref(false);
 const busy = ref<string | null>(null);
 const error = ref("");
+let workspaceGeneration = 0;
+let listGeneration = 0;
 
 async function load() {
+  const wsGen = workspaceGeneration;
+  const gen = ++listGeneration;
+  const hostId = props.hostId;
+  const workspaceId = props.workspaceId;
   loading.value = true;
   error.value = "";
   try {
-    const res = await props.api(`/hosts/${encodeURIComponent(props.hostId)}/workspaces/${encodeURIComponent(props.workspaceId)}/scripts`);
+    const res = await props.api(`/hosts/${encodeURIComponent(hostId)}/workspaces/${encodeURIComponent(workspaceId)}/scripts`);
+    if (wsGen !== workspaceGeneration || gen !== listGeneration) return;
     scripts.value = Array.isArray(res.scripts) ? res.scripts : [];
   } catch (e) {
-    error.value = (e as Error).message || "Could not load scripts.";
+    if (wsGen === workspaceGeneration && gen === listGeneration) error.value = (e as Error).message || "Could not load scripts.";
   } finally {
-    loading.value = false;
+    if (wsGen === workspaceGeneration && gen === listGeneration) loading.value = false;
   }
 }
 
@@ -36,25 +43,36 @@ function toggle() {
 const isRunning = (s: WorkspaceScriptInfo) => s.lifecycle === "running" || s.lifecycle === "starting";
 
 async function runAction(s: WorkspaceScriptInfo, action: "start" | "stop") {
+  const wsGen = workspaceGeneration;
+  const hostId = props.hostId;
+  const workspaceId = props.workspaceId;
   busy.value = s.scriptName;
   error.value = "";
   try {
     const res = await props.api(
-      `/hosts/${encodeURIComponent(props.hostId)}/workspaces/${encodeURIComponent(props.workspaceId)}/scripts/${encodeURIComponent(s.scriptName)}/${action}`,
+      `/hosts/${encodeURIComponent(hostId)}/workspaces/${encodeURIComponent(workspaceId)}/scripts/${encodeURIComponent(s.scriptName)}/${action}`,
       "POST",
       {},
     );
-    if (Array.isArray(res.scripts)) scripts.value = res.scripts;
-    else await load();
+    if (wsGen !== workspaceGeneration) return;
+    if (Array.isArray(res.scripts)) {
+      listGeneration++;
+      scripts.value = res.scripts;
+    } else await load();
   } catch (e) {
-    error.value = (e as Error).message || `Could not ${action} script.`;
+    if (wsGen === workspaceGeneration) error.value = (e as Error).message || `Could not ${action} script.`;
   } finally {
-    busy.value = null;
+    if (wsGen === workspaceGeneration && busy.value === s.scriptName) busy.value = null;
   }
 }
 
 watch(() => [props.hostId, props.workspaceId], () => {
+  workspaceGeneration++;
+  listGeneration++;
   open.value = false;
+  loading.value = false;
+  busy.value = null;
+  error.value = "";
   scripts.value = [];
 });
 </script>

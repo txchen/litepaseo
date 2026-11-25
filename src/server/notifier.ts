@@ -195,7 +195,7 @@ export class Notifier {
 
   async test(sessionId: string) {
     const subs = this.store.pushSubscriptions().filter((s) => s.sessionId === sessionId);
-    await Promise.all(
+    const results = await Promise.all(
       subs.map((s) =>
         this.deliver(s, {
           title: "LitePaseo notifications work",
@@ -207,7 +207,7 @@ export class Notifier {
         }),
       ),
     );
-    return subs.length;
+    return results.filter(Boolean).length;
   }
 
   /** The user dealt with a conversation (opened it, answered, or started a new turn): drop its news. */
@@ -351,20 +351,22 @@ export class Notifier {
     return { ...base, title: `${project} · ${parts.join(", ")}`, body: `${lines.join("\n")}\n— ${host}` };
   }
 
-  private async deliver(subscription: PushSubscriptionRecord, message: PushMessage) {
-    if (this.closed) return;
+  private async deliver(subscription: PushSubscriptionRecord, message: PushMessage): Promise<boolean> {
+    if (this.closed) return false;
     const session = this.store.sessionById(subscription.sessionId);
     if (!session || session.expires <= this.now()) {
       this.store.removePushSubscription(subscription.endpoint, subscription.sessionId);
-      return;
+      return false;
     }
     try {
       await this.sender.send(subscription, JSON.stringify(message));
+      return true;
     } catch (error) {
-      if (this.closed) return;
+      if (this.closed) return false;
       const status = (error as { statusCode?: number }).statusCode;
       // The device unsubscribed or the subscription expired: forget it.
       if (status === 404 || status === 410) this.store.removePushSubscription(subscription.endpoint);
+      return false;
     }
   }
 }

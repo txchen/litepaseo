@@ -203,14 +203,13 @@ test("an event subscription that fails to start is replaced on the next try", as
     rows: [{ item: { type: "user_message", text: "Find the bug" }, timestamp: "t1", seq: 1, seqStart: 1, seqEnd: 1 }],
   };
   const subagents = new HostSubagents(daemon);
-  const sub1 = subagents.timelineDriver("parent", "sub").subscribeAgentTimeline!("parent", () => {});
-  sub1.ready.catch(() => {});
+  const stop1 = subagents.watch("parent", () => {});
   await settle();
   assert.equal(daemon.released, 1, "the failed subscription is let go at once");
-  sub1();
-  const sub2 = subagents.timelineDriver("parent", "sub").subscribeAgentTimeline!("parent", () => {});
+  stop1();
+  const stop2 = subagents.watch("parent", () => {});
   await settle();
   assert.equal(daemon.subscriptions, 2, "the retry subscribes afresh");
-  sub2();
+  stop2();
   await subagents.dispose();
 });

@@ -46,10 +46,30 @@ export function registerMessageRoutes(app: App, { store, hosts, attachments, sen
     return c.json({ ok: true });
   };
   app.get("/api/queue/stream", (c) => eventStream(c.req.raw.signal, (send) => {
-    const publish = () => send(sendQueue.summary());
-    const stop = sendQueue.onChange(publish), stopHosts = hosts.onAgentsChanged(publish);
-    publish();
-    return () => { stop(); stopHosts(); };
+    let lastJson = "";
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const emitNow = (force = false) => {
+      const summary = sendQueue.summary();
+      const json = JSON.stringify(summary);
+      if (!force && json === lastJson) return;
+      lastJson = json;
+      send(summary);
+    };
+    const schedule = () => {
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        emitNow();
+      }, 50);
+      timer.unref?.();
+    };
+    const stop = sendQueue.onChange(() => emitNow()), stopHosts = hosts.onAgentsChanged(schedule);
+    emitNow(true);
+    return () => {
+      clearTimeout(timer);
+      stop();
+      stopHosts();
+    };
   }, streamValidity(c), encodingOf(c)));
   app.get("/api/hosts/:host/agents/:agent/queue/stream", (c) => eventStream(c.req.raw.signal, (send) => {
     const publish = () => send(sendQueue.list(...target(c)));

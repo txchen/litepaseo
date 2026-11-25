@@ -268,12 +268,23 @@ function onScroll() {
     if (element.value) scrollTop.value = element.value.scrollTop;
   });
 }
+function syncAgeTimer() {
+  clearInterval(ageTimer);
+  ageTimer = undefined;
+  if (document.hidden) return;
+  ageTimer = setInterval(() => (now.value = Date.now()), 60_000);
+}
+function onAgeVisibility() {
+  if (!document.hidden) now.value = Date.now();
+  syncAgeTimer();
+}
 onMounted(() => {
   const el = element.value!;
   height.value = el.clientHeight || height.value;
   observer = new ResizeObserver(() => (height.value = el.clientHeight || height.value));
   observer.observe(el);
-  ageTimer = setInterval(() => (now.value = Date.now()), 60_000);
+  syncAgeTimer();
+  document.addEventListener("visibilitychange", onAgeVisibility);
   window.addEventListener("keydown", onWindowKeydown);
 });
 onUnmounted(() => {
@@ -282,6 +293,7 @@ onUnmounted(() => {
   clearTimeout(pressTimer);
   clearTimeout(cardTimer);
   clearInterval(ageTimer);
+  document.removeEventListener("visibilitychange", onAgeVisibility);
   window.removeEventListener("keydown", onWindowKeydown);
 });
 </script>

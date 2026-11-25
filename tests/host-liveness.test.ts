@@ -124,7 +124,8 @@ test("a viewer waiting for rows checks the host and is logged, also when it give
     // A browser coming back to the live view with nothing new to receive is not waiting.
     const waits = logged.filter((l) => l.event === "timeline_wait").length;
     const resumed: TimelineOp[][] = [];
-    const stopResumed = hosts.watchTimeline("h", "a1", (o) => resumed.push(o), undefined, { epoch: "e", seq: 1, from: 1 });
+    const resetOp = ops[0][0] as Extract<TimelineOp, { type: "reset" }>;
+    const stopResumed = hosts.watchTimeline("h", "a1", (o) => resumed.push(o), undefined, { epoch: "e", view: resetOp.view, seq: 1, from: 1 });
     clock = 20_000;
     stopResumed();
     assert.deepEqual(resumed, [], "nothing changed since: nothing sent");

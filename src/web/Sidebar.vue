@@ -27,7 +27,6 @@ const props = defineProps<{
   usageLoading: boolean;
   directoryState: StreamState;
   tab: Tab;
-  availableLabels?: string[];
 }>();
 const query = defineModel<string>("query", { required: true });
 const listMode = defineModel<"projects" | "recent">("listMode", { required: true });
@@ -73,6 +72,15 @@ const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 /** The sidebar count spelled out, e.g. "45 workspaces in 23 projects". */
 const listSummary = computed(() => `${plural(viewSize.value, "workspace")} in ${plural(projectCount.value, "project")}`);
 const connectedHosts = computed(() => props.hosts.filter((h) => h.state === "connected").length);
+const availableLabels = computed(() => {
+  if (!viewMenu.value) return [];
+  props.store.version.value;
+  const set = new Set<string>();
+  for (const w of props.store.range(0, props.store.total)) {
+    for (const l of w.labels ?? []) set.add(l);
+  }
+  return [...set].sort((a, b) => a.localeCompare(b));
+});
 const liveLabel = computed(() =>
   props.directoryState === "live"
     ? "Live"

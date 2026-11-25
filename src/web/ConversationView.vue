@@ -39,6 +39,8 @@ const props = defineProps<{
   suggestionsReady?: boolean;
   /** Optimistic user messages shown at 0 ms until daemon timeline rows replace them. */
   optimistic?: OptimisticStore;
+  /** False when hidden behind a file/terminal tab or compact list view. */
+  paneActive?: boolean;
 }>();
 const emit = defineEmits<{
   /** A failed history read or jump, for the app's error line. */
@@ -79,6 +81,7 @@ if (suggestions)
   });
 /** False while the conversation is cached out of view. */
 let inView = true;
+const isActivePane = () => inView && (props.paneActive ?? true);
 
 const store = shallowRef(new TimelineStore());
 const timelineNotice = ref("");
@@ -103,7 +106,7 @@ const pendingMessages = computed(() => {
   const list = props.optimistic.list(props.agent.key);
   if (!list.length) return [];
   const realRows = visibleRows.value.map((r) => r.row.value);
-  const matched = findMatchedOptimisticIds(list, realRows);
+  const matched = findMatchedOptimisticIds(list, realRows, props.optimistic.consumedSeqs(props.agent.key, store.value.epoch));
   return matched.size ? list.filter((m) => !matched.has(m.messageId)) : list;
 });
 watch(
@@ -154,7 +157,10 @@ let suggestionTimer: ReturnType<typeof setTimeout> | undefined;
 let suggestionRequestedSeq = -1;
 
 const suggestionTarget = computed(() => {
-  if (!props.suggestionsReady || !props.settled || historyRows.value || !store.value.ready) return null;
+  const s = store.value;
+  // Subscribe to membership before checking plain `s.ready` so first-loaded settled chats trigger.
+  s.membership.value;
+  if (!props.suggestionsReady || !props.settled || historyRows.value || !s.ready) return null;
   const rows = visibleRows.value.map((r) => r.row.value);
   if (!rows.length) return null;
   // Skip if the legacy next-input daemon plugin already appended a suggestion row at the tail.
@@ -171,19 +177,22 @@ const suggestionTarget = computed(() => {
   return { seqEnd: lastMsg.seqEnd, seqStart: lastMsg.seqStart, messages: messages.slice(-12) };
 });
 
-watch(suggestionTarget, (target) => {
+function scheduleSuggestion() {
   clearTimeout(suggestionTimer);
+  suggestionTimer = undefined;
+  const target = suggestionTarget.value;
   if (!target) {
     nativeSuggestion.value = null;
     return;
   }
-  if (target.seqEnd === suggestionRequestedSeq) return;
+  if (!isActivePane() || target.seqEnd === suggestionRequestedSeq) return;
   nativeSuggestion.value = null;
   const seqEnd = target.seqEnd;
   const seqStart = target.seqStart;
   const messages = target.messages;
   suggestionTimer = setTimeout(async () => {
-    if (disposed || !inView || suggestionTarget.value?.seqEnd !== seqEnd) return;
+    suggestionTimer = undefined;
+    if (disposed || !isActivePane() || suggestionTarget.value?.seqEnd !== seqEnd) return;
     suggestionRequestedSeq = seqEnd;
     nativeSuggestion.value = { seqEnd, status: "loading", text: "" };
     try {
@@ -199,14 +208,16 @@ watch(suggestionTarget, (target) => {
       if (!disposed && nativeSuggestion.value?.seqEnd === seqEnd) nativeSuggestion.value = null;
     }
   }, 600);
-}, { immediate: true });
+}
+watch(suggestionTarget, scheduleSuggestion, { immediate: true });
 // Finished turns get a footer (copy, completion time, duration), as in Paseo. Recomputed per
 // timeline flush over the rendered window only (≤ RENDER_WINDOW rows).
 const turnMeta = computed(() => {
   const rows = visibleRows.value.map((r) => r.row.value);
+  const displayed = prefs.chatDensity === "full" ? undefined : new Set(displayRows.value.map((r) => r.seqStart));
   const a = props.agent;
   const lastFinished = (!!historyRows.value && historyNewer.value.length > 0) || !(a.turnActive ?? a.state === "running");
-  return turnFooters(rows, lastFinished);
+  return turnFooters(rows, lastFinished, new Date(), displayed);
 });
 const lastTimelineSeq = computed(() => {
   const s = store.value;
@@ -253,7 +264,7 @@ function syncElapsedClock() {
   clearTimeout(elapsedTimer);
   elapsedTimer = undefined;
   const start = turnStartedAt.value;
-  if (!start || document.hidden || disposed || !inView) return;
+  if (!start || document.hidden || disposed || !isActivePane()) return;
   // Tick just after each whole second of the turn, so every tick changes the display once.
   const tick = () => {
     clockNow.value = Date.now();
@@ -290,7 +301,7 @@ void open();
 async function open() {
   await loadLatest();
   loadingLatest = false;
-  if (!disposed && inView && !stream) stream = connect();
+  if (!disposed && isActivePane() && !stream) stream = connect();
 }
 async function loadLatest() {
   opening.via("latest");
@@ -324,7 +335,9 @@ function connect() {
     // Evaluated on every (re)connect: holding the conversation, ask only for what changed since.
     url: () => {
       const at = store.value.resumePoint();
-      const query = at ? `?epoch=${encodeURIComponent(at.epoch)}&seq=${at.seq}&from=${at.from}` : "";
+      const query = at
+        ? `?epoch=${encodeURIComponent(at.epoch)}${at.view ? `&view=${encodeURIComponent(at.view)}` : ""}&seq=${at.seq}&from=${at.from}`
+        : "";
       return "/api" + base() + "/timeline/stream" + query;
     },
     onResponse: (response) => opening.response(response),
@@ -362,11 +375,13 @@ function receive(data: unknown) {
   s.apply(ops);
   if (props.optimistic) {
     if (epoch && epoch !== s.epoch) props.optimistic.clearAgent(props.agent.key, true);
-    props.optimistic.reconcile(props.agent.key, s.rows.map((r) => r.row.value));
+    if (props.optimistic.list(props.agent.key).length) {
+      props.optimistic.reconcile(props.agent.key, s.rows.map((r) => r.row.value), s.epoch);
+    }
   }
   // Rows that land while cached out of view report ready when the conversation comes back.
   if (!wasReady && s.ready && inView) emit("ready", props.agent.key);
-  if (s.epoch && s.epoch !== promptEpoch) void loadPrompts(s);
+  if (s.epoch && s.epoch !== promptEpoch && outlineEnabled.value) void loadPrompts(s);
   if (epoch && epoch !== s.epoch) {
     historyRows.value = null;
     historyNewer.value = [];
@@ -668,6 +683,7 @@ async function moveHistory(direction: "before" | "after") {
 
 // ---- Outline rail: the conversation's prompts, with hover previews and jump-to ---------------
 const canHoverOutline = matchMedia("(hover: hover) and (pointer: fine)").matches;
+const outlineEnabled = computed(() => prefs.showChatOutline && canHoverOutline);
 /** The daemon's prompt index for this conversation (whole history, not just loaded rows). */
 const promptIndex = shallowRef<PromptMarker[] | null>(null);
 let promptEpoch = "";
@@ -681,9 +697,13 @@ async function loadPrompts(s: TimelineStore) {
     if (store.value === s) promptIndex.value = [];
   }
 }
+watch(outlineEnabled, (on) => {
+  if (on && store.value.epoch && store.value.epoch !== promptEpoch) void loadPrompts(store.value);
+});
 const previewOf = (row: TimelineRow) => String(row.item.text ?? "").replace(/\s+/g, " ").trim().slice(0, 240);
 /** Indexed prompts plus any sent since the index was read (from the live store). */
 const outlinePrompts = computed<PromptMarker[]>(() => {
+  if (!outlineEnabled.value) return [];
   const s = store.value;
   s.membership.value;
   const index = promptIndex.value ?? [];
@@ -697,7 +717,7 @@ const outlinePrompts = computed<PromptMarker[]>(() => {
 const activePromptSeq = ref<number | null>(null);
 let activeFrame = 0;
 function scheduleActivePrompt() {
-  if (activeFrame || outlinePrompts.value.length < 2 || !canHoverOutline) return;
+  if (activeFrame || !outlineEnabled.value || outlinePrompts.value.length < 2) return;
   activeFrame = requestAnimationFrame(() => {
     activeFrame = 0;
     const top = screenAnchor("first");
@@ -738,9 +758,12 @@ async function jumpToPrompt(seq: number, exact = false) {
     return revealRow(seq);
   }
   const epoch = s.epoch;
-  const later = outlinePrompts.value.map((p) => p.seq).filter((p) => p > seq && (!rows.length || p < rows[0].seqStart));
   paging.value = "before";
   try {
+    if (s.epoch && s.epoch !== promptEpoch) await loadPrompts(s);
+    if (disposed || !inView || store.value !== s || s.epoch !== epoch) return;
+    const indexed = promptIndex.value ?? [];
+    const later = indexed.map((p) => p.seq).filter((p) => p > seq && (!rows.length || p < rows[0].seqStart));
     let cursor = exact ? seq + 1 : later[0] ?? rows[0]?.seqStart ?? Number.MAX_SAFE_INTEGER;
     let collected: TimelineRow[] = [], hasOlder = false;
     // A turn longer than a page: keep reading back until the prompt itself is in hand.
@@ -780,18 +803,40 @@ async function jumpToPrompt(seq: number, exact = false) {
   }
 }
 
+function pauseLiveWork() {
+  stream?.close();
+  stream = null;
+  clearTimeout(elapsedTimer);
+  elapsedTimer = undefined;
+  clearTimeout(suggestionTimer);
+  cancelAnimationFrame(activeFrame);
+  activeFrame = 0;
+  pagingIntent = null;
+}
+function resumeLiveWork() {
+  if (disposed || !isActivePane()) return;
+  if (!loadingLatest && !stream) stream = connect();
+  syncElapsedClock();
+  scheduleActivePrompt();
+  scheduleSuggestion();
+}
+watch(() => props.paneActive ?? true, (visible) => {
+  if (!inView) return;
+  if (visible) {
+    const el = timelineElement.value;
+    if (el) setScrollTop(el, followLatest && !historyRows.value ? el.scrollHeight : savedTop);
+    resumeLiveWork();
+  } else {
+    pauseLiveWork();
+  }
+});
+
 // Out of view: inert until it comes back. In view again: the reader's place, then a fresh
 // stream (its reset re-renders only rows that changed meanwhile).
 onDeactivated(() => {
   inView = false;
   opening.abandon();
-  stream?.close();
-  stream = null;
-  clearTimeout(elapsedTimer);
-  clearTimeout(suggestionTimer);
-  cancelAnimationFrame(activeFrame);
-  activeFrame = 0;
-  pagingIntent = null;
+  pauseLiveWork();
 });
 onActivated(() => {
   if (inView) return; // the first mount
@@ -804,9 +849,7 @@ onActivated(() => {
   if (subagents.value.length) emit("subagents", props.agent.key, subagents.value);
   emit("backgroundWork", props.agent.key, backgroundWork.value);
   // Still opening: the first rows connect the stream when they land.
-  if (!loadingLatest) stream = connect();
-  syncElapsedClock();
-  scheduleActivePrompt();
+  resumeLiveWork();
 });
 
 onUnmounted(() => {

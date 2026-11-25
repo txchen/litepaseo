@@ -1,8 +1,28 @@
 import test, { mock } from "node:test";
 import assert from "node:assert/strict";
-import { mergeToolCallItems, TimelineView, type TimelineDriver } from "../src/server/timeline-view.ts";
+import { TimelineView, type TimelineDriver } from "../src/server/timeline-view.ts";
 import { TimelineStore } from "../src/web/timeline-store.ts";
 import type { AgentMetric, TimelineItem, TimelineOp, TimelineRow } from "../src/shared/wire.ts";
+
+function mergeToolCallItems(existing: TimelineItem, incoming: TimelineItem): TimelineItem {
+  const a = existing.detail as { type?: string } | undefined;
+  const b = incoming.detail as { type?: string } | undefined;
+  const detail =
+    a?.type === "unknown" && b?.type !== "unknown"
+      ? b
+      : b?.type === "unknown" && a?.type !== "unknown"
+        ? a
+        : b;
+  const metadata =
+    existing.metadata || incoming.metadata
+      ? { ...(existing.metadata as object), ...(incoming.metadata as object) }
+      : undefined;
+  const merged: TimelineItem = { ...existing, ...incoming, detail, metadata };
+  if (incoming.status === "failed") merged.error = incoming.error;
+  else if (incoming.status === "completed" || incoming.status === "canceled") merged.error = null;
+  else if (incoming.error !== undefined) merged.error = incoming.error;
+  return merged;
+}
 
 mock.timers.enable({ apis: ["setTimeout"] });
 const settle = async () => {
@@ -395,5 +415,91 @@ test("wedged remote fetch times out cleanly without locking inFlight, and stale 
   } finally {
     restoreNow.mock.restore();
   }
+  await view.dispose();
+});
+
+test("repeated setActive(true) is idempotent, unwatched views do not pull, and recreated views do not collide on resume", async () => {
+  const daemon = new ReferenceDaemon();
+  daemon.append({ type: "user_message", text: "Start" }, "t1");
+  let fetches = 0;
+  const driver: TimelineDriver = {
+    async fetchAgentTimeline(_id, opts) {
+      fetches++;
+      return daemon.fetch(opts as Parameters<ReferenceDaemon["fetch"]>[0]);
+    },
+  };
+
+  const view1 = new TimelineView(driver, "a1", undefined, 1500);
+  const store = new TimelineStore();
+  const stop1 = view1.watch((ops) => store.apply(ops));
+  view1.start();
+  await settle();
+  assert.equal(fetches, 1);
+
+  // First transition to running pulls once; repeated metadata-driven setActive(true) calls are no-ops.
+  view1.setActive(true);
+  await settle();
+  const afterFirstActive = fetches;
+  assert.equal(afterFirstActive, 2);
+  for (let i = 0; i < 5; i++) view1.setActive(true);
+  await settle();
+  assert.equal(fetches, afterFirstActive, "repeated setActive(true) must not bypass the poll cadence");
+
+  // After all viewers leave, setActive(true) must not trigger background pulls.
+  const resumeFromView1 = store.resumePoint()!;
+  stop1();
+  view1.setActive(false);
+  await settle();
+  const afterIdle = fetches;
+  view1.setActive(true);
+  await settle();
+  assert.equal(fetches, afterIdle, "unwatched view must not pull on setActive(true)");
+  await view1.dispose();
+
+  // A replacement view for the same daemon epoch starts at revision 1 with new content.
+  daemon.append({ type: "assistant_message", text: "New answer while evicted" }, "t1");
+  const view2 = new TimelineView(driver, "a1", undefined, 1500);
+  view2.start();
+  await settle();
+  const received: TimelineOp[] = [];
+  const stop2 = view2.watch((ops) => received.push(...ops), resumeFromView1);
+  assert.equal(received.length, 1);
+  assert.equal(received[0]!.type, "reset", "different view instances must reset instead of colliding on revision 1");
+  stop2();
+  await view2.dispose();
+});
+
+test("initial load failures stop retrying when unwatched and restart when a watcher rejoins", async () => {
+  const daemon = new ReferenceDaemon();
+  daemon.append({ type: "user_message", text: "Hi" }, "t1");
+  let shouldFail = true;
+  let fetches = 0;
+  const driver: TimelineDriver = {
+    async fetchAgentTimeline(_id, opts) {
+      fetches++;
+      if (shouldFail) throw new Error("offline");
+      return daemon.fetch(opts as Parameters<ReferenceDaemon["fetch"]>[0]);
+    },
+  };
+  const view = new TimelineView(driver, "a1", undefined, 1500);
+  const stop = view.watch(() => {});
+  view.start();
+  await settle();
+  assert.equal(view.status, "failed");
+  const failedCount = fetches;
+
+  // Last watcher leaves: retries stop completely.
+  stop();
+  await sleep(6_000);
+  assert.equal(fetches, failedCount, "no retries while unwatched");
+
+  // Next watcher rejoins: immediately restarts and succeeds.
+  shouldFail = false;
+  const got: TimelineOp[] = [];
+  const stop2 = view.watch((ops) => got.push(...ops));
+  await settle();
+  assert.equal(view.status, "live");
+  assert.equal(got.some((o) => o.type === "reset"), true);
+  stop2();
   await view.dispose();
 });

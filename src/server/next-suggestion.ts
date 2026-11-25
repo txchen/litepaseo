@@ -247,13 +247,16 @@ export async function generateNextSuggestion(
 export class NextSuggestionCache {
   private readonly results = new Map<string, string>();
   private readonly inflight = new Map<string, Promise<string>>();
+  private generation = 0;
 
   getOrRun(key: string, fn: () => Promise<string>): Promise<string> {
     if (this.results.has(key)) return Promise.resolve(this.results.get(key)!);
     const existing = this.inflight.get(key);
     if (existing) return existing;
+    const gen = this.generation;
     const promise = fn()
       .then((text) => {
+        if (gen !== this.generation) return text;
         if (this.results.size >= MAX_CACHE_ENTRIES) {
           const oldest = this.results.keys().next().value;
           if (oldest !== undefined) this.results.delete(oldest);
@@ -262,13 +265,15 @@ export class NextSuggestionCache {
         return text;
       })
       .finally(() => {
-        this.inflight.delete(key);
+        if (gen === this.generation && this.inflight.get(key) === promise) this.inflight.delete(key);
       });
     this.inflight.set(key, promise);
     return promise;
   }
 
   clear() {
+    this.generation++;
     this.results.clear();
+    this.inflight.clear();
   }
 }

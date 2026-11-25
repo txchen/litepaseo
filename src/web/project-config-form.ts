@@ -104,9 +104,9 @@ const assign = (target: Json, key: string, value: unknown) => {
 };
 
 export function draftToConfig(draft: ConfigDraft, base: Json | null | undefined): Json {
-  const config: Json = { ...(base ?? {}) };
+  const config: Json = { ...base };
 
-  const worktree: Json = { ...(isObject(config.worktree) ? config.worktree : {}) };
+  const worktree: Json = { ...(isObject(config.worktree) ? config.worktree : undefined) };
   assign(worktree, "setup", writeCommand(draft.setupText, draft.setupKind));
   assign(worktree, "teardown", writeCommand(draft.teardownText, draft.teardownKind));
 
@@ -121,10 +121,10 @@ export function draftToConfig(draft: ConfigDraft, base: Json | null | undefined)
     scripts[name] = entry;
   }
 
-  const metadata: Json = { ...(draft.metadataBase ?? {}) };
+  const metadata: Json = { ...draft.metadataBase };
   for (const key of METADATA_PROMPT_KEYS) {
     const text = draft.prompts[key];
-    const entry: Json = { ...(isObject(draft.metadataBase?.[key]) ? (draft.metadataBase[key] as Json) : {}) };
+    const entry: Json = { ...(isObject(draft.metadataBase?.[key]) ? (draft.metadataBase[key] as Json) : undefined) };
     if (text.trim()) entry.instructions = text;
     else delete entry.instructions;
     assign(metadata, key, Object.keys(entry).length ? entry : undefined);

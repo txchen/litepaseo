@@ -101,7 +101,7 @@ async function moveCard(card: Card, column: string) {
 function cardExcerpt(card: Card) {
   return (card.description ?? "")
     .replace(/```[\s\S]*?```/g, " ")
-    .replace(/[#>*_`~\[\]()|-]+/g, " ")
+    .replace(/[#>*_`~[\]()|-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 160);

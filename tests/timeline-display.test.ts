@@ -268,3 +268,17 @@ test("images Paseo saved on a remote daemon's machine load through that daemon",
   // An unresolvable `~` path still has nowhere to load from.
   assert.equal(parseFileLink(/\]\((\S+)/.exec(rewriteMessageImages("![s](~/x.png)", "/api/hosts/h/agents/a", { ...ctx, cwd: "/srv", workspace: "/srv" }))![1])?.kind, "copy");
 });
+
+test("turnFooters attaches to the last displayed row when trailing tool rows are hidden", () => {
+  const rows = [
+    { seqStart: 1, seqEnd: 1, timestamp: "2026-11-25T10:00:00.000Z", provider: "codex", turnId: "t1", item: { type: "user_message", text: "Hi" } },
+    { seqStart: 2, seqEnd: 2, timestamp: "2026-11-25T10:00:02.000Z", provider: "codex", turnId: "t1", item: { type: "assistant_message", text: "Done" } },
+    { seqStart: 3, seqEnd: 3, timestamp: "2026-11-25T10:00:03.000Z", provider: "codex", turnId: "t1", item: { type: "tool_call", name: "Bash", status: "completed" }, turnMetrics: [{ label: "Cost", value: "$0.01" }] },
+  ];
+  const compactDisplayed = new Set([1, 2]);
+  const footers = turnFooters(rows, true, new Date("2026-11-25T10:05:00.000Z"), compactDisplayed);
+  assert.equal(footers.has(3), false);
+  assert.equal(footers.has(2), true);
+  assert.deepEqual(footers.get(2)?.metrics, [{ label: "Cost", value: "$0.01" }]);
+  assert.deepEqual(footers.get(2)?.messages, [2]);
+});

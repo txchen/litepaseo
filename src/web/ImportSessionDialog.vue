@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import type { HostState, ImportableSessionEntry, ImportableSessionsResponse } from "../shared/wire.ts";
 import Icon from "./Icon.vue";
 import { tildeHome } from "./format.ts";
@@ -91,6 +91,9 @@ watch(query, () => {
     limit.value = 50;
     void load();
   }, 220);
+});
+onUnmounted(() => {
+  clearTimeout(searchTimer);
 });
 
 function loadMore() {

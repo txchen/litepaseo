@@ -3,6 +3,7 @@ import { computed, inject, nextTick, onUnmounted, provide, ref, shallowRef, watc
 import type { TimelineMessage, TimelinePage } from "../shared/wire.ts";
 import { openStream } from "./event-stream.ts";
 import { TimelineStore, type RowRef } from "./timeline-store.ts";
+import { pageHistory, RENDER_WINDOW } from "./timeline-window.ts";
 import { TIMELINE_CONTEXT, type TimelineContext } from "./timeline-display.ts";
 import TimelineRowView from "./TimelineRowView.vue";
 
@@ -28,26 +29,29 @@ provide(TIMELINE_CONTEXT, context);
 
 const store = shallowRef(new TimelineStore());
 const version = ref(0);
-const older = shallowRef<RowRef[]>([]);
-const olderHasMore = ref(false);
+const historyRows = shallowRef<RowRef[] | null>(null);
+const historyHasOlder = ref(false);
 const loadingOlder = ref(false);
 const notice = ref("");
 const element = ref<HTMLElement | null>(null);
 
 const rows = computed(() => {
   version.value;
+  if (historyRows.value) return historyRows.value;
   store.value.membership.value;
-  const live = store.value.rows;
-  if (!older.value.length) return live;
-  // Paged-in rows the live window has since caught up with (a reset, a reconnect) show once.
-  const first = live[0]?.seqStart ?? Infinity;
-  return [...older.value.filter((r) => r.seqStart < first), ...live];
+  return store.value.rows.slice(-RENDER_WINDOW);
 });
 const hasOlder = computed(() => {
   version.value;
-  return older.value.length ? olderHasMore.value : store.value.hasOlder;
+  if (historyRows.value) return historyHasOlder.value;
+  store.value.membership.value;
+  return store.value.rows.length > RENDER_WINDOW || store.value.hasOlder;
 });
-const lastSeq = computed(() => rows.value.at(-1)?.seqStart ?? -1);
+const lastSeq = computed(() => {
+  version.value;
+  store.value.membership.value;
+  return store.value.rows.at(-1)?.seqStart ?? -1;
+});
 
 const nearBottom = () => {
   const el = element.value;
@@ -59,47 +63,71 @@ const toBottom = () =>
     if (el) el.scrollTop = el.scrollHeight;
   });
 
+let historyGeneration = 0;
 const stream = openStream({
-  url: () => "/api" + props.base + "/timeline/stream",
+  url: () => {
+    const at = store.value.resumePoint();
+    const query = at
+      ? `?epoch=${encodeURIComponent(at.epoch)}${at.view ? `&view=${encodeURIComponent(at.view)}` : ""}&seq=${at.seq}&from=${at.from}`
+      : "";
+    return "/api" + props.base + "/timeline/stream" + query;
+  },
   onMessage: (data) => {
     const message = data as TimelineMessage;
     if (message.type !== "ops" || !Array.isArray(message.ops)) return;
     const current = store.value;
-    const stick = nearBottom() || !current.ready;
+    const stick = !historyRows.value && (nearBottom() || !current.ready);
     const failure = message.ops.find((op) => op.type === "error");
     notice.value = failure?.type === "error" ? failure.message : "";
     const epoch = current.epoch, membership = current.membership.value, ready = current.ready;
     current.apply(message.ops);
-    if (epoch && epoch !== current.epoch) older.value = [];
+    if (epoch && epoch !== current.epoch) {
+      historyGeneration++;
+      loadingOlder.value = false;
+      historyRows.value = null;
+    }
     // Text appends re-render only their row (its own ref); the list changes with membership.
     if (membership !== current.membership.value || ready !== current.ready || epoch !== current.epoch) version.value++;
     if (stick) toBottom();
   },
 });
-onUnmounted(() => stream.close());
+onUnmounted(() => {
+  historyGeneration++;
+  stream.close();
+});
+
+function showLatest() {
+  historyGeneration++;
+  loadingOlder.value = false;
+  historyRows.value = null;
+  historyHasOlder.value = false;
+  toBottom();
+}
 
 async function showOlder() {
   const current = store.value;
-  const first = rows.value[0];
+  const currentRows = rows.value.slice();
+  const first = currentRows[0];
   if (!first || loadingOlder.value) return;
+  const gen = ++historyGeneration;
   loadingOlder.value = true;
   notice.value = "";
   try {
     const cursor = JSON.stringify({ epoch: current.epoch, seq: first.seqStart });
     const page: TimelinePage = await props.api(props.base + "/timeline?cursor=" + encodeURIComponent(cursor));
-    if (store.value !== current || page.epoch !== current.epoch) return;
+    if (gen !== historyGeneration || store.value !== current || page.epoch !== current.epoch) return;
     const el = element.value;
     const fromBottom = el ? el.scrollHeight - el.scrollTop : 0;
-    const known = new Set(rows.value.map((r) => r.seqStart));
-    const added = page.rows.filter((row) => !known.has(row.seqStart)).map((row) => ({ seqStart: row.seqStart, row: shallowRef(row) }));
-    older.value = [...added, ...older.value];
-    olderHasMore.value = page.hasOlder;
+    const snapshot = currentRows.map((r) => ({ seqStart: r.seqStart, row: shallowRef(r.row.value) }));
+    const nextWindow = pageHistory(snapshot, page, "before");
+    historyRows.value = nextWindow.rows;
+    historyHasOlder.value = nextWindow.hasOlder;
     await nextTick();
-    if (el) el.scrollTop = el.scrollHeight - fromBottom;
+    if (el) el.scrollTop = Math.max(0, el.scrollHeight - fromBottom);
   } catch (e) {
-    notice.value = (e as Error).message || "Could not load earlier messages.";
+    if (gen === historyGeneration) notice.value = (e as Error).message || "Could not load earlier messages.";
   } finally {
-    loadingOlder.value = false;
+    if (gen === historyGeneration) loadingOlder.value = false;
   }
 }
 </script>
@@ -118,7 +146,10 @@ async function showOlder() {
         :entry="r.row"
         :final="r.seqStart !== lastSeq || !running"
       />
-      <div v-if="running && store.ready" class="timeline-working" role="status"><span class="spinner"></span><span>Working…</span></div>
+      <div v-if="historyRows" class="older">
+        <button class="btn btn-ghost" @click="showLatest">Back to latest</button>
+      </div>
+      <div v-if="running && store.ready && !historyRows" class="timeline-working" role="status"><span class="spinner"></span><span>Working…</span></div>
       <div v-if="!rows.length" class="timeline-empty">
         <span v-if="!store.ready" class="spinner"></span>
         {{ store.ready ? "No messages yet." : "Loading conversation…" }}

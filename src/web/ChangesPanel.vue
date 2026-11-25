@@ -37,6 +37,8 @@ const expanded = ref(new Set<string>());
 const commits = ref<any[]>([]);
 const commitsLoading = ref(false);
 const commitDiffs = ref<Record<string, any>>({});
+const expandedCommitFiles = ref(new Set<string>());
+const MAX_COMMIT_DIFF_CACHE = 30;
 
 // PR & Git actions
 const prStatus = ref<any>(null);
@@ -53,7 +55,11 @@ const activeCommentKey = ref<string | null>(null);
 const commentDraft = ref("");
 let commentSeq = 0;
 
-onUnmounted(() => generation++);
+let contextGeneration = 0;
+onUnmounted(() => {
+  generation++;
+  contextGeneration++;
+});
 
 const hostBase = () => `/hosts/${encodeURIComponent(props.hostId)}`;
 
@@ -80,37 +86,65 @@ async function load() {
 }
 
 async function loadPrStatus() {
+  const ctx = contextGeneration;
   try {
-    prStatus.value = await props.api(`${hostBase()}/git/pr-status?cwd=${encodeURIComponent(props.cwd)}`);
+    const res = await props.api(`${hostBase()}/git/pr-status?cwd=${encodeURIComponent(props.cwd)}`);
+    if (ctx === contextGeneration) prStatus.value = res;
   } catch {
-    prStatus.value = null;
+    if (ctx === contextGeneration) prStatus.value = null;
   }
 }
 
 async function loadCommits() {
+  const ctx = contextGeneration;
   commitsLoading.value = true;
   error.value = "";
   try {
     const res = await props.api(`${hostBase()}/git/commits?cwd=${encodeURIComponent(props.cwd)}`);
+    if (ctx !== contextGeneration) return;
     commits.value = res.commits ?? [];
     if (res.baseRef && !baseRef.value) baseRef.value = res.baseRef;
   } catch (e) {
-    error.value = (e as Error).message;
+    if (ctx === contextGeneration) error.value = (e as Error).message;
   } finally {
-    commitsLoading.value = false;
+    if (ctx === contextGeneration) commitsLoading.value = false;
   }
 }
 
+function pruneCommitDiffCache() {
+  const keys = Object.keys(commitDiffs.value);
+  if (keys.length <= MAX_COMMIT_DIFF_CACHE) return;
+  for (const k of keys) {
+    if (Object.keys(commitDiffs.value).length <= MAX_COMMIT_DIFF_CACHE) break;
+    if (!expandedCommitFiles.value.has(k)) delete commitDiffs.value[k];
+  }
+}
 async function loadCommitFile(sha: string, filePath: string) {
+  const ctx = contextGeneration;
   const key = `${sha}:${filePath}`;
   if (commitDiffs.value[key]) return;
   try {
     const res = await props.api(
       `${hostBase()}/git/commit-diff?cwd=${encodeURIComponent(props.cwd)}&sha=${encodeURIComponent(sha)}&path=${encodeURIComponent(filePath)}`,
     );
+    if (ctx !== contextGeneration) return;
     commitDiffs.value[key] = res.file ?? { status: "empty", hunks: [] };
+    pruneCommitDiffCache();
   } catch (e) {
-    commitDiffs.value[key] = { error: (e as Error).message };
+    if (ctx === contextGeneration) commitDiffs.value[key] = { error: (e as Error).message };
+  }
+}
+function toggleCommitFile(sha: string, filePath: string, open: boolean) {
+  const key = `${sha}:${filePath}`;
+  const next = new Set(expandedCommitFiles.value);
+  if (open) {
+    next.add(key);
+    expandedCommitFiles.value = next;
+    void loadCommitFile(sha, filePath);
+  } else {
+    next.delete(key);
+    expandedCommitFiles.value = next;
+    pruneCommitDiffCache();
   }
 }
 
@@ -230,20 +264,40 @@ const prInfo = computed(() => {
 });
 
 watch(() => [props.hostId, props.cwd], () => {
+  contextGeneration++;
   files.value = [];
   commits.value = [];
   commitDiffs.value = {};
+  expandedCommitFiles.value = new Set();
   comments.value = [];
   prStatus.value = null;
+  baseRef.value = "";
+  editingBase.value = false;
+  baseDraft.value = "";
+  commitOpen.value = false;
+  commitMsg.value = "";
+  prOpen.value = false;
+  prTitle.value = "";
+  prBody.value = "";
+  activeCommentKey.value = null;
+  commentDraft.value = "";
+  error.value = "";
+  notice.value = "";
   void load();
   void loadPrStatus();
+  if (view.value === "commits") void loadCommits();
 }, { immediate: true });
 
 watch(compareMode, () => {
   if (view.value === "diff") void load();
 });
 watch(view, (v) => {
-  if (v === "commits" && !commits.value.length) void loadCommits();
+  if (v === "commits") {
+    if (!commits.value.length) void loadCommits();
+  } else {
+    expandedCommitFiles.value = new Set();
+    pruneCommitDiffCache();
+  }
 });
 </script>
 
@@ -390,13 +444,15 @@ watch(view, (v) => {
           v-for="cf in c.files ?? []"
           :key="cf.path"
           class="commit-file"
-          @toggle="($event.target as HTMLDetailsElement).open && loadCommitFile(c.sha, cf.path)"
+          @toggle="toggleCommitFile(c.sha, cf.path, ($event.target as HTMLDetailsElement).open)"
         >
           <summary>{{ cf.path }} <span class="file-sum-stat"><em class="stat-add">+{{ cf.additions ?? 0 }}</em> <em class="stat-del">−{{ cf.deletions ?? 0 }}</em></span></summary>
-          <p v-if="!commitDiffs[c.sha + ':' + cf.path]" class="row-sub">Loading diff…</p>
-          <p v-else-if="commitDiffs[c.sha + ':' + cf.path].error" class="setting-note is-error">{{ commitDiffs[c.sha + ':' + cf.path].error }}</p>
-          <pre v-else v-for="(hunk, hi) in commitDiffs[c.sha + ':' + cf.path].hunks ?? []" :key="hi"><code><span class="hunk">@@ −{{ hunk.oldStart }},{{ hunk.oldCount }} +{{ hunk.newStart }},{{ hunk.newCount }} @@
+          <template v-if="expandedCommitFiles.has(c.sha + ':' + cf.path)">
+            <p v-if="!commitDiffs[c.sha + ':' + cf.path]" class="row-sub">Loading diff…</p>
+            <p v-else-if="commitDiffs[c.sha + ':' + cf.path].error" class="setting-note is-error">{{ commitDiffs[c.sha + ':' + cf.path].error }}</p>
+            <pre v-else v-for="(hunk, hi) in commitDiffs[c.sha + ':' + cf.path].hunks ?? []" :key="hi"><code><span class="hunk">@@ −{{ hunk.oldStart }},{{ hunk.oldCount }} +{{ hunk.newStart }},{{ hunk.newCount }} @@
 </span><span v-for="(line, lj) in hunk.lines" :key="lj" :class="line.type">{{ line.type === 'add' ? '+' : line.type === 'remove' ? '−' : ' ' }}{{ line.content }}</span></code></pre>
+          </template>
         </details>
       </details>
     </template>

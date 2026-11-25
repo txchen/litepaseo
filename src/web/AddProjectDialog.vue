@@ -61,11 +61,15 @@ const inferredParent = computed(() => {
   return idx > 0 ? first.slice(0, idx) : "";
 });
 
+let suggestionGeneration = 0;
 async function loadSuggestions() {
-  if (!hostId.value) return;
+  const id = hostId.value;
+  if (!id) return;
+  const gen = ++suggestionGeneration;
   loadingSuggestions.value = true;
   try {
-    const res = await props.api(`/hosts/${encodeURIComponent(hostId.value)}/project-suggestions`);
+    const res = await props.api(`/hosts/${encodeURIComponent(id)}/project-suggestions`);
+    if (gen !== suggestionGeneration || id !== hostId.value) return;
     suggestions.value = (res.suggestions ?? [])
       .map((s: any) => ({
         path: s.path ?? s.rootPath ?? s.cwd ?? "",
@@ -78,13 +82,14 @@ async function loadSuggestions() {
       targetDir.value = `${inferredParent.value.replace(/\/+$/, "")}/${repoName}`;
     }
   } catch {
-    suggestions.value = [];
+    if (gen === suggestionGeneration && id === hostId.value) suggestions.value = [];
   } finally {
-    loadingSuggestions.value = false;
+    if (gen === suggestionGeneration) loadingSuggestions.value = false;
   }
 }
 
 watch(hostId, () => {
+  suggestionGeneration++;
   suggestions.value = [];
   if (!parentPathTouched.value) parentPath.value = "";
   if (!targetDirTouched.value) targetDir.value = "";
@@ -198,7 +203,6 @@ async function createNewFolder() {
 }
 
 onMounted(() => {
-  void loadSuggestions();
   void nextTick(() => existingInput.value?.focus());
 });
 </script>

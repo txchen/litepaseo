@@ -85,28 +85,30 @@ function printStarted(state: Status, already: boolean) {
 
 async function start(paths: Paths, args: Parsed) {
   const running = await status(paths);
-  if (running) {
+  if (running?.ready) {
     if (args.flags.json) console.log(JSON.stringify(running));
     else printStarted(running, true);
     return;
   }
   const logStart = existsSync(paths.log) ? statSync(paths.log).size : 0;
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "serve"], { detached: true, stdio: "ignore", env: process.env });
   let exited = false;
-  child.on("error", () => {});
-  child.once("exit", () => { exited = true; });
-  child.unref();
+  if (!running) {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "serve"], { detached: true, stdio: "ignore", env: process.env });
+    child.on("error", () => {});
+    child.once("exit", () => { exited = true; });
+    child.unref();
+  }
   for (let i = 0; i < 100; i++) {
     await sleep(100);
     if (exited) throw new Error(lastFailure(paths.log, logStart) ?? "Startup failed. Run 'litepaseo logs' for details.");
     const ready = await status(paths);
     if (ready?.ready) {
       if (args.flags.json) console.log(JSON.stringify(ready));
-      else printStarted(ready, false);
+      else printStarted(ready, !!running);
       return;
     }
   }
-  throw new Error("Startup not ready after 10 s. Run 'litepaseo status' or 'litepaseo logs'.");
+  throw new Error(running ? "LitePaseo is starting/restarting and not ready after 10 s. Run 'litepaseo status' or 'litepaseo logs'." : "Startup not ready after 10 s. Run 'litepaseo status' or 'litepaseo logs'.");
 }
 
 async function stop(paths: Paths, quiet = false) {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, watch } from "vue";
 import type { AgentSummary, ProviderSubagent } from "../shared/wire.ts";
 import Icon from "./Icon.vue";
 import SubagentConversation from "./SubagentConversation.vue";
@@ -20,6 +20,19 @@ const props = defineProps<{
 const emit = defineEmits<{ "update:opened": [id: string | null]; select: [key: string] }>();
 
 const shown = computed(() => (props.opened ? props.subagents.find((s) => s.id === props.opened) ?? null : null));
+let seenOpened = false;
+watch(
+  [() => props.opened, shown],
+  ([id, current], [prevId]) => {
+    if (id !== prevId) seenOpened = !!current;
+    else if (current) seenOpened = true;
+    else if (id && seenOpened) {
+      seenOpened = false;
+      emit("update:opened", null);
+    }
+  },
+  { immediate: true },
+);
 const agentDot = (a: AgentSummary) =>
   a.attention ? "attention" : a.state === "failed" ? "error" : a.state === "running" ? "running" : a.unread ? "unread" : "idle";
 const agentStatus = (a: AgentSummary) =>

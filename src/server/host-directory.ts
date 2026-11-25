@@ -95,6 +95,8 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
   private readonly collection: VersionedCollection<S>;
   protected readonly changed: () => void;
   private readonly transition: Transition<S>;
+  private readonly onSynced: () => void;
+  private _synced = false;
 
   constructor(
     adapter: Adapter<Raw, Extra, Memo, S>,
@@ -103,6 +105,7 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
     collection: VersionedCollection<S>,
     changed: () => void,
     transition: Transition<S> = () => {},
+    onSynced: () => void = () => {},
   ) {
     this.adapter = adapter;
     this.hostId = hostId;
@@ -110,6 +113,12 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
     this.collection = collection;
     this.changed = changed;
     this.transition = transition;
+    this.onSynced = onSynced;
+  }
+
+  /** True once the current connection has reconciled its initial or incremental snapshot. */
+  get synced() {
+    return this._synced;
   }
 
   /** What the adapter retained for a member, from the latest update; O(1). */
@@ -195,6 +204,7 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
 
   private close() {
     this.token++;
+    this._synced = false;
     clearTimeout(this.retry);
     this.liveTouched = null;
     const subscription = this.subscription;
@@ -229,6 +239,8 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
       // A live update may already have moved the cursor past the snapshot's head.
       this.cursor = { generation: payload.sync.generation, afterSeq: Math.max(this.cursor.afterSeq, payload.sync.headSeq) };
       this.onSnapshotProcessed(payload, false);
+      this._synced = true;
+      this.onSynced();
       return;
     }
     let entries = payload.entries;
@@ -265,6 +277,8 @@ class HostMirror<Raw, Extra, Memo, S extends { key: string }> {
             : payload.sync.headSeq,
         }
       : undefined;
+    this._synced = true;
+    this.onSynced();
   }
 
   private onUpdate(update: Upsert<Raw, Extra> | Remove) {
@@ -479,8 +493,9 @@ export class HostDirectory extends HostMirror<AgentSnapshotPayload, Placement, A
     collection: VersionedCollection<AgentSummary>,
     changed: () => void,
     transition?: Transition<AgentSummary>,
+    onSynced?: () => void,
   ) {
-    super(agentAdapter, hostId, driver, collection, changed, transition);
+    super(agentAdapter, hostId, driver, collection, changed, transition, onSynced);
   }
   /** Provider and capabilities from the live directory; undefined if the agent is not listed. */
   facts(agentId: string) {
@@ -639,14 +654,24 @@ const AGENT_STATE_PRIORITY: Record<AgentState, number> = {
  * `buildWorkspaceAgentActivityIndex` + `deriveEffectiveWorkspaceStatus`: root agents contribute
  * their full state bucket; same-workspace subagents contribute only while running.
  */
-export function deriveWorkspaceAgentState(agents: Iterable<AgentSummary>): AgentState | null {
-  const list = Array.isArray(agents) ? agents : [...agents];
-  if (!list.length) return null;
-  const byId = new Map<string, AgentSummary>();
-  for (const agent of list) byId.set(agent.id, agent);
+export function deriveWorkspaceAgentState(agents: Iterable<AgentSummary> | ReadonlyMap<string, AgentSummary>): AgentState | null {
+  let byId: ReadonlyMap<string, AgentSummary>;
+  let values: Iterable<AgentSummary>;
+  if (agents instanceof Map) {
+    if (!agents.size) return null;
+    byId = agents;
+    values = agents.values();
+  } else {
+    const list = Array.isArray(agents) ? agents : [...agents];
+    if (!list.length) return null;
+    const map = new Map<string, AgentSummary>();
+    for (const agent of list) map.set(agent.id, agent);
+    byId = map;
+    values = list;
+  }
   let best: AgentState | null = null;
   let bestPriority = AGENT_STATE_PRIORITY.done;
-  for (const agent of list) {
+  for (const agent of values) {
     const isRoot = !agent.parentAgentId || !byId.has(agent.parentAgentId);
     let candidate: AgentState;
     if (isRoot) {

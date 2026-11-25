@@ -255,33 +255,41 @@ export function registerProjectRoutes(app: App, { hosts, fetch }: RouteContext) 
     const { driver } = hosts.get(hostId);
     if (typeof driver.fetchAgentHistory !== "function") return c.json([] satisfies ArchivedWorkspaceSummary[]);
     try {
-      const res = await driver.fetchAgentHistory({
-        filter: { includeArchived: true },
-        ...(q?.trim() ? { search: q.trim() } : {}),
-        sort: [{ key: "updated_at", direction: "desc" }],
-        page: { limit: 100 },
-      });
       const seen = new Set<string>();
       const out: ArchivedWorkspaceSummary[] = [];
-      for (const entry of res.entries ?? []) {
-        const agent = entry.agent;
-        if (!agent?.archivedAt) continue;
-        const dedupeKey = agent.workspaceId || agent.id;
-        if (seen.has(dedupeKey)) continue;
-        seen.add(dedupeKey);
-        const project = entry.project?.projectName || agent.cwd.replace(/\/+$/, "").split("/").pop() || agent.cwd;
-        out.push({
-          hostId,
-          id: agent.id,
-          workspaceId: agent.workspaceId ?? null,
-          name: agent.title || project,
-          project,
-          cwd: agent.cwd,
-          branch: null,
-          archivedAt: agent.archivedAt,
-          provider: agent.provider,
-          status: agent.status,
+      let cursor: string | undefined;
+      for (let pageIndex = 0; pageIndex < 10 && out.length < 100; pageIndex++) {
+        const res = await driver.fetchAgentHistory({
+          filter: { includeArchived: true },
+          ...(q?.trim() ? { search: q.trim() } : {}),
+          sort: [{ key: "updated_at", direction: "desc" }],
+          page: { limit: 100, ...(cursor ? { cursor } : {}) },
         });
+        const entries = res.entries ?? [];
+        for (const entry of entries) {
+          const agent = entry.agent;
+          if (!agent?.archivedAt) continue;
+          const dedupeKey = agent.workspaceId || agent.id;
+          if (seen.has(dedupeKey)) continue;
+          seen.add(dedupeKey);
+          const project = entry.project?.projectName || agent.cwd.replace(/\/+$/, "").split("/").pop() || agent.cwd;
+          out.push({
+            hostId,
+            id: agent.id,
+            workspaceId: agent.workspaceId ?? null,
+            name: agent.title || project,
+            project,
+            cwd: agent.cwd,
+            branch: null,
+            archivedAt: agent.archivedAt,
+            provider: agent.provider,
+            status: agent.status,
+          });
+          if (out.length >= 100) break;
+        }
+        const pageInfo = (res as { pageInfo?: { hasMore?: boolean; nextCursor?: string | null } }).pageInfo;
+        if (!pageInfo?.hasMore || !pageInfo.nextCursor || pageInfo.nextCursor === cursor) break;
+        cursor = pageInfo.nextCursor;
       }
       return c.json(out);
     } catch (error) {

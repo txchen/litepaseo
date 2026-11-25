@@ -94,9 +94,9 @@ export function registerAgentRoutes(app: App, { hosts }: RouteContext) {
         attachments: z
           .array(
             z.object({
-              id: z.string().max(200).optional(),
-              filename: z.string().min(1).max(300),
+              type: z.literal("text"),
               mimeType: z.literal("text/plain"),
+              contextKind: z.string().max(100).optional(),
               title: z.string().max(300).nullable().optional(),
               text: z.string().max(500_000),
             }),

@@ -87,6 +87,9 @@ jobs:
         run: npm ci
 
       - if: steps.version.outputs.published != 'true'
+        run: npm run lint
+
+      - if: steps.version.outputs.published != 'true'
         run: npm run typecheck
 
       # The CLI lifecycle tests run the built dist/server/cli.mjs.

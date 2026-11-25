@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.14.1
+
+- **Efficiency & battery-saving fixes**:
+  - Make `TimelineView.setActive(true)` idempotent so running-agent metadata ticks never bypass the 1.5 s pull cadence or pull unwatched views; stop initial-load failure retries when the last viewer leaves, and propagate `/timeline/latest` request aborts.
+  - Eliminate permanent SSE connection leaks when closing `TerminalPanel` during creation; pause terminal and hidden chat streams (and elapsed timers) while hidden behind another workspace pane (keeping the Subagents panel live when open), and align terminal replay scrollback to 5,000 lines.
+  - Consolidate sidebar queue summaries onto the shared `/api/stream` connection (per-stream deduplication, eliminating two permanent SSE streams per tab and empty-queue broadcasts) and guard send-queue synchronization before bypassing a paused queue.
+  - Skip synchronous `highlight.js` tokenization while fenced code blocks are still streaming, highlighting once when closed or settled.
+  - Move `availableLabels` computation on-demand into the open sidebar view menu, gate prompt-outline fetches/scroll measurements on whether the rail is enabled, cap `SubagentConversation` to the 150-row display window, prune collapsed `ChangesPanel` commit-diff DOM/cache, defer Markstream loading until a conversation opens, and pause idle/background timers (`use-composer`, `SessionList`, `App` usage, `HostSettings`, `viewing-presence`, `motion-clock`).
+- **Correctness fixes**:
+  - Fix conversation fork attachment schema to match `@getpaseo/protocol` (`type: "text"`, preserving `contextKind`) so forked sessions round-trip cleanly.
+  - Fix `NewSession` `cwd` TDZ watcher ordering, retry idempotency-key preservation on failed submits, and existing-workspace worktree `cwd` preservation (`App.vue` + `NewSession.vue`).
+  - Fix Command Center workspace selection routing (`selectThread`), cross-workspace isolation in `ChangesPanel` and `ScriptsMenu`, per-agent persistence of collapsed long pastes, cross-reconciliation deduplication of ID-less optimistic messages, cross-view `TimelineView` resume token collisions, compact-mode turn footers, native suggestion initial-load reactivity, `/board` startup isolation, pending notification taps before auth, and `FilesPanel` `finally` cleanup.
+  - Fix `/fs/read` and `/fs/download` `413` size-limit handling, UTF-8 download `Content-Disposition` headers, Hono `bodyLimit` `413` JSON responses, archived-workspace pagination, host-reconnect send-queue sync, `HostBackgroundWork` live-update race, `NextSuggestionCache` in-flight invalidation, `Notifier.test()` delivery counting, terminal exit output flush, and `litepaseo start` readiness waiting.
+- **Cleanup & toolchain**:
+  - Remove dead push-timeline subagent adapters and obsolete attachment-store methods, deduplicate shared wire types and composer input helpers, and add 8 regression tests.
+  - Upgrade `vite-plus` to `1.8.0` (with `tsrs` and `oxlint` 1.94), `vue-tsc` to `3.3.14`, and minor dependencies; add `npm run lint` (wired into `check` and CI), `npm run typecheck:ts` (`tsrs --fast`), and parallelize `scripts/compress-web.mjs`.
+
 ## 0.14.0
 
 - Upgrade `@getpaseo/client` and `@getpaseo/protocol` to `0.17.4`.

@@ -12,7 +12,9 @@ import { useResizableWidth } from "./use-resizable-width.ts";
 import { useThreadActions } from "./use-thread-actions.ts";
 import { useWorkspaceTabs } from "./use-workspace-tabs.ts";
 import ThreadMenu from "./ThreadMenu.vue";
+import AgentTabMenu from "./AgentTabMenu.vue";
 import RenameThread from "./RenameThread.vue";
+import RenameAgent from "./RenameAgent.vue";
 import ProjectMenu from "./ProjectMenu.vue";
 import ProjectSettings from "./ProjectSettings.vue";
 import ImagePreview from "./ImagePreview.vue";
@@ -654,6 +656,7 @@ const commandActions = computed<CommandAction[]>(() => {
     if (a.workspaceId) {
       list.unshift({ id: "new-agent", label: "New agent in workspace", sub: t?.name || a.project, icon: "bot", run: () => startNewAgentInWorkspace() });
     }
+    list.push({ id: "rename-agent", label: "Rename current agent session", sub: a.title || a.provider, icon: "edit", run: () => { renamingAgent.value = a; } });
     if (threadAgents.value.length > 1) {
       list.push({ id: "close-agent", label: "Close current agent session", sub: a.title || a.provider, icon: "close", run: () => void closeAgent(a) });
     }
@@ -776,6 +779,19 @@ function startNewAgentInWorkspace() {
     workspaceName: t?.name || a.title || a.project,
   };
   openDetail();
+}
+const renamingAgent = shallowRef<AgentSummary | null>(null);
+const agentTabMenu = shallowRef<{ agent: AgentSummary; x: number; y: number } | null>(null);
+function openAgentTabMenu(a: AgentSummary, event: MouseEvent) {
+  agentTabMenu.value = { agent: a, x: event.clientX, y: event.clientY };
+}
+async function renameAgent(title: string) {
+  const agent = renamingAgent.value;
+  if (!agent) return;
+  await action(async () => {
+    await api(path(agent) + "/title", "POST", { title });
+    renamingAgent.value = null;
+  });
 }
 async function closeAgent(a: AgentSummary) {
   const name = a.title || a.provider || "this session";
@@ -1083,6 +1099,8 @@ onUnmounted(() => {
           @back="closeDetail"
           @select="select"
           @select-agent="(key) => (selectedKey = key)"
+          @rename-agent="(a) => (renamingAgent = a)"
+          @agent-menu="openAgentTabMenu"
           @close-agent="closeAgent"
           @subagents="openedSubagent = null; togglePanel('subagents')"
           @menu="openHeaderMenu"
@@ -1256,10 +1274,12 @@ onUnmounted(() => {
     <ThreadMenu
       v-if="menu"
       :thread="menu.thread"
+      :agent="menu.fromHeader ? active : null"
       :x="menu.x"
       :y="menu.y"
       @close="menu = null"
       @rename="(t) => (renaming = t)"
+      @rename-agent="(a) => (renamingAgent = a)"
       @pin="pinThread"
       @unread="markThreadUnread"
       @read="markThreadRead"
@@ -1290,8 +1310,19 @@ onUnmounted(() => {
       :request="api"
       @close="projectSettings = null"
     />
+    <AgentTabMenu
+      v-if="agentTabMenu"
+      :agent="agentTabMenu.agent"
+      :can-close="threadAgents.length > 1"
+      :x="agentTabMenu.x"
+      :y="agentTabMenu.y"
+      @close="agentTabMenu = null"
+      @rename="(a) => (renamingAgent = a)"
+      @close-agent="closeAgent"
+    />
     <ImagePreview v-if="lightbox" :src="lightbox" @close="lightbox = null" />
     <RenameThread v-if="renaming" :thread="renaming" :busy="busy" @close="renaming = null" @save="renameThread" />
+    <RenameAgent v-if="renamingAgent" :agent="renamingAgent" :busy="busy" @close="renamingAgent = null" @save="renameAgent" />
     <CommandCenter
       v-if="commandCenterOpen"
       :workspaces="allWorkspaces"

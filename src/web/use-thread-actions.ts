@@ -27,16 +27,16 @@ export function useThreadActions({ api, action, directory, selectedThread, selec
   closeDetail: () => void;
 }) {
   // ---- Threads: the daemon operations Paseo's sidebar uses ---------------------------------------
-  const menu = shallowRef<{ thread: WorkspaceSummary; x: number; y: number } | null>(null);
+  const menu = shallowRef<{ thread: WorkspaceSummary; x: number; y: number; fromHeader?: boolean } | null>(null);
   const renaming = shallowRef<WorkspaceSummary | null>(null);
-  function openMenu(thread: WorkspaceSummary, x: number, y: number) {
-    menu.value = { thread, x, y };
+  function openMenu(thread: WorkspaceSummary, x: number, y: number, fromHeader = false) {
+    menu.value = { thread, x, y, fromHeader };
   }
   function openHeaderMenu(event: MouseEvent) {
     const thread = activeThread.value;
     if (!thread) return;
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    openMenu(thread, rect.right - 200, rect.bottom + 6);
+    openMenu(thread, rect.right - 200, rect.bottom + 6, true);
   }
   async function renameThread(title: string | null) {
     const thread = renaming.value;

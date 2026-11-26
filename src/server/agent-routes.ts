@@ -417,6 +417,11 @@ export function registerAgentRoutes(app: App, { store, hosts, attachments }: Rou
     await hosts.get(c.req.param("host")).driver.clearAgentAttention(c.req.param("agent"));
     return c.json({ ok: true });
   });
+  app.post("/api/hosts/:host/agents/:agent/title", async (c) => {
+    const { title } = z.object({ title: z.string().trim().min(1).max(200) }).parse(await c.req.json());
+    await hosts.get(c.req.param("host")).driver.updateAgent(c.req.param("agent"), { name: title });
+    return c.json({ ok: true });
+  });
   app.post("/api/hosts/:host/agents/:agent/archive", async (c) => {
     await hosts.get(c.req.param("host")).api.agents.ref(c.req.param("agent")).archive();
     return c.json({ ok: true });

@@ -144,6 +144,7 @@ test("thread actions reach the daemon's workspace operations on the right host",
       getLastServerInfoMessage: () => ({ features: { directorySync: true } }),
       observeAgents: () => ({ subscribe: () => () => {}, release: async () => {} }),
       setWorkspaceTitle: async (...args: unknown[]) => void calls.push(["title", ...args]),
+      updateAgent: async (...args: unknown[]) => void calls.push(["updateAgent", ...args]),
       setWorkspacePinned: async (...args: unknown[]) => void calls.push(["pin", ...args]),
       markWorkspaceUnread: async (...args: unknown[]) => void calls.push(["unread", ...args]),
       clearWorkspaceAttention: async (...args: unknown[]) => void calls.push(["read", ...args]),
@@ -180,6 +181,15 @@ test("thread actions reach the daemon's workspace operations on the right host",
       ["archive", "w1"],
     ]);
     assert.equal((await post("/pin", { pinned: "yes" })).status, 400);
+    const renameAgent = (body: unknown) =>
+      app.request("/api/hosts/mac/agents/a1/title", {
+        method: "POST",
+        headers: { authorization: "Bearer t", "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    assert.equal((await renameAgent({ title: "  Debug tests  " })).status, 200);
+    assert.deepEqual(calls.at(-1), ["updateAgent", "a1", { name: "Debug tests" }]);
+    assert.equal((await renameAgent({ title: "   " })).status, 400);
     assert.equal((await app.request("/api/hosts/nope/workspaces/w1/read", { method: "POST", headers: { authorization: "Bearer t" } })).status, 404);
   } finally {
     await hosts.close();

@@ -31,6 +31,10 @@ const emit = defineEmits<{
   select: [key: string];
   /** Shows another of the thread's agents. */
   selectAgent: [key: string];
+  /** Renames one of the thread's agents. */
+  renameAgent: [agent: AgentSummary];
+  /** Opens the context menu for one of the thread's agents. */
+  agentMenu: [agent: AgentSummary, event: MouseEvent];
   /** Closes (archives) one of the thread's agents. */
   closeAgent: [agent: AgentSummary];
   subagents: [];
@@ -171,6 +175,7 @@ function showAgent(key: string) {
         class="file-tab agent-tab"
         :class="{ chosen: a.key === selectedKey && !activeFile && !terminalActive }"
         @auxclick.prevent="$event.button === 1 && emit('closeAgent', a)"
+        @contextmenu.prevent="emit('agentMenu', a, $event)"
       >
         <button
           type="button"
@@ -178,9 +183,20 @@ function showAgent(key: string) {
           :title="a.title || a.provider"
           :aria-current="a.key === selectedKey && !activeFile && !terminalActive ? 'page' : undefined"
           @click="showAgent(a.key)"
+          @dblclick="emit('renameAgent', a)"
         >
           <span class="status-dot" :class="dot(a, true)"></span>
           <span class="agent-tab-name">{{ a.title || a.provider }}</span>
+        </button>
+        <button
+          v-if="a.key === selectedKey && !activeFile && !terminalActive"
+          type="button"
+          class="tab-action"
+          :aria-label="'Rename ' + (a.title || a.provider)"
+          :title="'Rename ' + (a.title || a.provider)"
+          @click="emit('renameAgent', a)"
+        >
+          <Icon name="edit" :size="11" />
         </button>
         <button
           type="button"
@@ -199,6 +215,8 @@ function showAgent(key: string) {
         :key="a.key"
         :class="{ chosen: a.key === selectedKey && !activeFile && !terminalActive }"
         @click="showAgent(a.key)"
+        @dblclick="emit('renameAgent', a)"
+        @contextmenu.prevent="emit('agentMenu', a, $event)"
       >
         <span class="status-dot" :class="dot(a, true)"></span>
         <span class="agent-tab-name">{{ a.title || a.provider }}</span>

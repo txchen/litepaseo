@@ -984,6 +984,7 @@
   border-radius: 8px;
 }
 .file-tab-open:focus-visible,
+.tab-action:focus-visible,
 .tab-close:focus-visible {
   outline-offset: -2px;
 }
@@ -991,6 +992,7 @@
   flex: none;
   color: var(--fg-faint);
 }
+.tab-action,
 .tab-close {
   flex: none;
   display: grid;
@@ -1000,6 +1002,7 @@
   border-radius: 5px;
   color: var(--fg-faint);
 }
+.tab-action:hover,
 .tab-close:hover {
   background: var(--hover);
   color: var(--fg);
@@ -1188,15 +1191,21 @@
     width: 44px;
     height: 44px;
   }
+  .tab-action,
   .tab-close {
     position: relative;
     width: 26px;
     height: 26px;
   }
+  .tab-action::after {
+    content: "";
+    position: absolute;
+    inset: -6px 0;
+  }
   .tab-close::after {
     content: "";
     position: absolute;
-    inset: -6px;
+    inset: -6px -6px -6px 0;
   }
   .head-tool {
     width: 38px;

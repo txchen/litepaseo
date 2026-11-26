@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import type { WorkspaceSummary } from "../shared/wire.ts";
+import type { AgentSummary, WorkspaceSummary } from "../shared/wire.ts";
 import Icon from "./Icon.vue";
 import { useMenu } from "./use-menu.ts";
 
 // The thread actions Paseo's sidebar offers: rename, pin, unread/read, archive.
-const props = defineProps<{ thread: WorkspaceSummary; x: number; y: number }>();
+const props = defineProps<{ thread: WorkspaceSummary; agent?: AgentSummary | null; x: number; y: number }>();
 const emit = defineEmits<{
   close: [];
   rename: [thread: WorkspaceSummary];
+  renameAgent: [agent: AgentSummary];
   pin: [thread: WorkspaceSummary, pinned: boolean];
   unread: [thread: WorkspaceSummary];
   read: [thread: WorkspaceSummary];
@@ -35,7 +36,8 @@ const { position } = useMenu(element, { x: props.x, y: props.y }, () => emit("cl
     :style="{ left: position.left + 'px', top: position.top + 'px' }"
   >
     <div class="menu-title">{{ thread.name }}</div>
-    <button role="menuitem" @click="pick(() => emit('rename', thread))"><Icon name="edit" :size="14" />Rename…</button>
+    <button role="menuitem" @click="pick(() => emit('rename', thread))"><Icon name="edit" :size="14" />{{ agent ? "Rename workspace…" : "Rename…" }}</button>
+    <button v-if="agent" role="menuitem" @click="pick(() => emit('renameAgent', agent!))"><Icon name="edit" :size="14" />Rename session…</button>
     <button role="menuitem" @click="pick(() => emit('pin', thread, !thread.pinnedAt))">
       <Icon name="pin" :size="14" />{{ thread.pinnedAt ? "Unpin" : "Pin to top" }}
     </button>

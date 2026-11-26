@@ -150,6 +150,7 @@ try {
   const timelineOpens = [];
   const creations = [],
     archivedAgents = [],
+    renamedAgents = [],
     predictions = [],
     reads = [];
   await page.route("**/api/usage**", (route) =>
@@ -274,6 +275,10 @@ try {
     if (p.endsWith("/timeline/stream")) {
       timelineOpens.push(host);
       return route.fulfill(sse({ type: "ops", ops: [timelineReset(host)] }));
+    }
+    if (p.includes("/agents/") && p.endsWith("/title")) {
+      renamedAgents.push({ host, agentId: p.split("/")[5], ...(route.request().postDataJSON() ?? {}) });
+      return route.fulfill({ json: { ok: true } });
     }
     if (p.includes("/agents/") && p.endsWith("/archive")) {
       archivedAgents.push({ host, agentId: p.split("/")[5] });
@@ -696,11 +701,25 @@ try {
     { host: "beta", action: "archive" },
   ]);
 
-  // A thread with two agents shows tabs to switch between them, and each can be closed after confirming.
+  // A thread with two agents shows tabs to switch between them, rename, and close after confirming.
   await betaRow.click();
   await page.getByRole("navigation", { name: "Tabs" }).waitFor();
   await page.getByRole("button", { name: "beta helper", exact: true }).click();
   await page.waitForFunction(() => document.querySelector(".agent-tabs .chosen")?.textContent?.includes("beta helper"));
+  await page.getByRole("button", { name: "Rename beta helper" }).click();
+  const renameSessionDialog = page.getByRole("dialog", { name: "Rename session" });
+  await renameSessionDialog.getByRole("textbox", { name: "Name" }).fill("Beta helper, renamed");
+  await renameSessionDialog.getByRole("button", { name: "Save" }).click();
+  await renameSessionDialog.waitFor({ state: "detached" });
+  assert.deepEqual(renamedAgents, [{ host: "beta", agentId: "helper", title: "Beta helper, renamed" }]);
+  await page.getByRole("button", { name: "beta helper", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename session…" }).click();
+  await renameSessionDialog.getByRole("button", { name: "Cancel" }).click();
+  await renameSessionDialog.waitFor({ state: "detached" });
+  await page.getByRole("button", { name: "Thread actions" }).click();
+  await page.getByRole("menuitem", { name: "Rename session…" }).click();
+  await renameSessionDialog.getByRole("button", { name: "Cancel" }).click();
+  await renameSessionDialog.waitFor({ state: "detached" });
   await page.getByRole("button", { name: "Close beta helper" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "Cancel", exact: true }).click();
   assert.equal(archivedAgents.length, 0, "cancelling keeps the agent tab");

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.3
+
+- **Rename individual agent sessions**:
+  - Added `POST /api/hosts/:host/agents/:agent/title` backed by `driver.updateAgent(agentId, { name })`.
+  - Added `RenameAgent.vue` dialog and `AgentTabMenu.vue` context menu for agent tabs, with multi-device entry points: a quick edit button on the active session tab (touch-friendly on mobile), right-click menu and double-click on any session tab, **Rename session…** in the chat header `⋯` menu, and **Rename current agent session** in the Command Center.
+
 ## 0.14.2
 
 - **Paste, drag-and-drop, and attach images/files on the first message of a new session**:

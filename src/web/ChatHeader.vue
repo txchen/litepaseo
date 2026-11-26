@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, nextTick, ref, shallowRef, watch } from "vue";
 import type { AgentSummary, WorkspaceSummary } from "../shared/wire.ts";
+import AgentTabsPicker from "./AgentTabsPicker.vue";
 import Icon from "./Icon.vue";
 import ScriptsMenu from "./ScriptsMenu.vue";
 import type { Api } from "./use-api.ts";
@@ -42,6 +43,8 @@ const emit = defineEmits<{
   newAgent: [];
 }>();
 const statsOpen = ref(false);
+const tabsEl = ref<HTMLElement | null>(null);
+const picker = shallowRef<{ x: number; y: number } | null>(null);
 const { panel, togglePanel, terminalOpen, terminalActive, openTerminal, closeTerminal, showConversation, openFiles, activeFile, closeFile } = props.tabs;
 
 const project = computed(() => {
@@ -54,6 +57,27 @@ function showAgent(key: string) {
   emit("selectAgent", key);
   showConversation();
 }
+function onTabsWheel(event: WheelEvent) {
+  const el = tabsEl.value;
+  if (!el || el.scrollWidth <= el.clientWidth || event.ctrlKey) return;
+  if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+    event.preventDefault();
+    el.scrollLeft += event.deltaY;
+  }
+}
+function togglePicker(event: MouseEvent) {
+  if (picker.value) {
+    picker.value = null;
+    return;
+  }
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  picker.value = { x: rect.right - 280, y: rect.bottom + 6 };
+}
+watch([() => props.selectedKey, activeFile, terminalActive], () => {
+  void nextTick(() => {
+    tabsEl.value?.querySelector<HTMLElement>(".chosen")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
+});
 </script>
 
 <template>
@@ -167,7 +191,8 @@ function showAgent(key: string) {
     </button>
   </header>
   <!-- Tabs: the thread's agents, then files opened from the side panel (Paseo's workspace tabs). -->
-  <nav v-if="agents.length > 1 || openFiles.length || terminalOpen" class="agent-tabs" aria-label="Tabs">
+  <div v-if="agents.length > 1 || openFiles.length || terminalOpen" class="agent-tabs-bar">
+    <nav ref="tabsEl" class="agent-tabs" aria-label="Tabs" @wheel="onTabsWheel">
     <template v-if="agents.length > 1">
       <div
         v-for="a in agents"
@@ -251,5 +276,31 @@ function showAgent(key: string) {
       </button>
       <button type="button" class="tab-close" aria-label="Close terminal tab" title="Close terminal tab" @click="closeTerminal()"><Icon name="close" :size="11" /></button>
     </div>
-  </nav>
+    </nav>
+    <button
+      v-if="agents.length > 1"
+      type="button"
+      class="agent-tabs-picker"
+      :class="{ chosen: !!picker }"
+      :aria-expanded="!!picker"
+      aria-haspopup="dialog"
+      :aria-label="'All ' + agents.length + ' sessions'"
+      :title="'All ' + agents.length + ' sessions'"
+      @click="togglePicker"
+    >
+      <Icon name="list" :size="13" />
+      <span>{{ agents.length }}</span>
+    </button>
+  </div>
+  <AgentTabsPicker
+    v-if="picker"
+    :agents="agents"
+    :selected-key="selectedKey"
+    :x="picker.x"
+    :y="picker.y"
+    @close="picker = null"
+    @select="showAgent"
+    @rename="(a) => emit('renameAgent', a)"
+    @close-agent="(a) => emit('closeAgent', a)"
+  />
 </template>

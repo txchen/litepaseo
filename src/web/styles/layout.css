@@ -935,13 +935,39 @@
   color: var(--danger);
 }
 /* Agents within one thread */
+.agent-tabs-bar {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+}
 .agent-tabs {
+  flex: 1;
+  min-width: 0;
   display: flex;
   gap: 4px;
   padding: 4px 10px;
-  border-bottom: 1px solid var(--border);
   overflow-x: auto;
   scrollbar-width: none;
+}
+.agent-tabs-picker {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  margin: 4px 10px 4px 0;
+  padding: 0 9px;
+  border-radius: 8px;
+  border-left: 1px solid var(--border);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted);
+}
+.agent-tabs-picker:hover,
+.agent-tabs-picker.chosen {
+  background: var(--hover);
+  color: var(--fg);
 }
 .agent-tabs > button,
 .agent-tabs .file-tab {
@@ -1224,7 +1250,8 @@
     padding-right: 44px;
   }
   .agent-tabs > button,
-  .agent-tabs .file-tab {
+  .agent-tabs .file-tab,
+  .agent-tabs-picker {
     height: 34px;
   }
 }

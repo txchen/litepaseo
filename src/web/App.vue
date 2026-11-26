@@ -204,7 +204,7 @@ const subagentSummary = computed(() => {
 /** The open thread's agents, most recent first (tabs when there is more than one). */
 const threadAgents = computed(() => {
   agentDirectory.version.value;
-  return agentDirectory.indexed(selectedThread.value, 50);
+  return agentDirectory.indexed(selectedThread.value, Math.max(50, agentDirectory.indexedSize(selectedThread.value)));
 });
 const sessionCount = computed(() => {
   directory.version.value;

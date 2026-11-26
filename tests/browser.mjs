@@ -720,6 +720,11 @@ try {
   await page.getByRole("menuitem", { name: "Rename session…" }).click();
   await renameSessionDialog.getByRole("button", { name: "Cancel" }).click();
   await renameSessionDialog.waitFor({ state: "detached" });
+  await page.getByRole("button", { name: "All 2 sessions" }).click();
+  const sessionsPicker = page.getByRole("dialog", { name: "Workspace sessions" });
+  await sessionsPicker.getByRole("option", { name: "beta conversation" }).click();
+  await sessionsPicker.waitFor({ state: "detached" });
+  await page.waitForFunction(() => document.querySelector(".agent-tabs .chosen")?.textContent?.includes("beta conversation"));
   await page.getByRole("button", { name: "Close beta helper" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "Cancel", exact: true }).click();
   assert.equal(archivedAgents.length, 0, "cancelling keeps the agent tab");

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.4
+
+- **Accessible session switching when a workspace has many sessions**:
+  - Added a pinned right-side **All sessions** picker (`AgentTabsPicker.vue`) to the tab bar showing the full scrollable list of sessions in the workspace (with search filtering when there are 8+ sessions, plus quick rename and close actions).
+  - Enabled vertical mouse-wheel horizontal scrolling on `.agent-tabs` and auto-scrolling the active tab into view when switching sessions.
+  - Removed the 50-session cap on `threadAgents` so all sessions in a workspace remain reachable.
+
 ## 0.14.3
 
 - **Rename individual agent sessions**:

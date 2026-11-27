@@ -867,6 +867,16 @@
 }
 .session-stats-wrap {
   position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.session-stats-chip {
+  max-width: min(220px, 100%);
+}
+@media (max-width: 760px) {
+  .session-stats-chip {
+    max-width: min(120px, 100%);
+  }
 }
 .session-stats-popover {
   position: absolute;

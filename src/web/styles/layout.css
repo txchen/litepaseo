@@ -14,6 +14,7 @@
   position: relative;
   min-width: 0;
   min-height: 0;
+  overflow: clip;
   display: flex;
   flex-direction: column;
   background: var(--surface-0);
@@ -1124,7 +1125,7 @@
   .shell {
     display: block;
     position: relative;
-    overflow: hidden;
+    overflow: clip;
   }
   .sidebar,
   .main {
@@ -1184,7 +1185,7 @@
     flex: none;
   }
   .chat-head {
-    gap: 4px;
+    gap: 2px;
     padding: max(6px, env(safe-area-inset-top)) max(6px, env(safe-area-inset-right)) 6px max(4px, env(safe-area-inset-left));
   }
   /* Narrow chat header: Changes and Search stay one tap away in the side panel's tabs. */
@@ -1192,8 +1193,12 @@
     display: none;
   }
   .chat-chip {
-    max-width: 140px;
+    max-width: 120px;
     padding: 0 8px;
+  }
+  .chat-subagents {
+    flex: 0 1 auto;
+    min-width: 0;
   }
   .side-panel {
     width: 100%;
@@ -1253,6 +1258,12 @@
   .agent-tabs .file-tab,
   .agent-tabs-picker {
     height: 34px;
+  }
+}
+@media (max-width: 760px) and (pointer: coarse) {
+  .head-tool {
+    width: 34px;
+    height: 38px;
   }
 }
 .kbd-btn {

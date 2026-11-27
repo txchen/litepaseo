@@ -8,6 +8,7 @@ html,
 body {
   margin: 0;
   height: 100%;
+  overflow-x: clip;
   background: var(--surface-0);
   color: var(--fg);
   font: 14px/1.5 var(--font);

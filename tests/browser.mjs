@@ -959,8 +959,25 @@ try {
   // Phone: opening a conversation is a history entry; system back returns to the list.
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, storageState: await page.context().storageState() });
   phone.on("pageerror", (e) => errors.push(e.message));
+  const phoneAgents = [
+    {
+      ...summary("alpha", []),
+      parentAgentId: "parent-id",
+      sessionMetrics: [
+        { label: "Tokens", value: "255.0K ↑" },
+        { label: "Cost", value: "40.4K ↓" },
+      ],
+    },
+    {
+      ...summary("alpha", []),
+      key: "alpha:parent-id",
+      id: "parent-id",
+      title: "Stage 4A: Lift core engine",
+      activityAt: 0,
+    },
+  ];
   await phone.route("**/api/stream**", (route) =>
-    route.fulfill(sse(hostsEvent, workspacesEvent, { type: "snapshot", generation: "gen-1", seq: 1, agents: [summary("alpha", [])] })),
+    route.fulfill(sse(hostsEvent, workspacesEvent, { type: "snapshot", generation: "gen-1", seq: 1, agents: phoneAgents })),
   );
   await phone.route("**/timeline/stream", (route) =>
     route.fulfill(sse({ type: "ops", ops: [{ type: "reset", epoch: "e", hasOlder: false, startCursor: null, rows: [] }] })),
@@ -988,6 +1005,34 @@ try {
   // Reuse the fully authenticated session for the independent mobile navigation checks.
   await phone.locator("button.session", { hasText: "alpha conversation" }).click();
   await phone.waitForFunction(() => document.querySelector(".shell.detail-open"));
+  // Switching tabs while the detail pane slides in, or rendering a crowded chat header on a
+  // narrow phone, must never shift .shell or the viewport horizontally.
+  await phone.locator(".agent-tabs .file-tab-open", { hasText: "Stage 4A" }).click();
+  await phone.locator(".agent-tabs .file-tab-open", { hasText: "alpha conversation" }).click();
+  await phone.waitForTimeout(300);
+  const phoneLayout = await phone.evaluate(() => {
+    const shell = document.querySelector(".shell");
+    const head = document.querySelector(".chat-head");
+    const more = head?.querySelector('button[aria-label="Thread actions"]')?.getBoundingClientRect();
+    const composer = document.querySelector(".composer")?.getBoundingClientRect();
+    return {
+      shellScrollLeft: shell?.scrollLeft ?? -1,
+      windowScrollX: window.scrollX,
+      docScrollWidth: document.documentElement.scrollWidth,
+      innerWidth: window.innerWidth,
+      headScrollWidth: head?.scrollWidth ?? -1,
+      headClientWidth: head?.clientWidth ?? -1,
+      moreRight: more?.right ?? -1,
+      composerLeft: composer?.left ?? -1,
+      composerRight: composer?.right ?? -1,
+    };
+  });
+  assert.equal(phoneLayout.shellScrollLeft, 0, JSON.stringify(phoneLayout));
+  assert.equal(phoneLayout.windowScrollX, 0, JSON.stringify(phoneLayout));
+  assert.ok(phoneLayout.docScrollWidth <= phoneLayout.innerWidth, JSON.stringify(phoneLayout));
+  assert.ok(phoneLayout.headScrollWidth <= phoneLayout.headClientWidth + 1, JSON.stringify(phoneLayout));
+  assert.ok(phoneLayout.moreRight <= phoneLayout.innerWidth + 1, JSON.stringify(phoneLayout));
+  assert.ok(phoneLayout.composerLeft >= 0 && phoneLayout.composerRight <= phoneLayout.innerWidth + 1, JSON.stringify(phoneLayout));
   await phone.getByRole("button", { name: "Voice input" }).waitFor(); // set up on the other device
   // Exercise recording, early upload, provisional text, final replacement and cancellation.
   // Fake only the microphone and socket peer; use the real Vue component and ticket endpoint.

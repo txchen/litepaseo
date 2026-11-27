@@ -75,7 +75,15 @@ function togglePicker(event: MouseEvent) {
 }
 watch([() => props.selectedKey, activeFile, terminalActive], () => {
   void nextTick(() => {
-    tabsEl.value?.querySelector<HTMLElement>(".chosen")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const nav = tabsEl.value;
+    const chosen = nav?.querySelector<HTMLElement>(".chosen");
+    if (!nav || !chosen) return;
+    // Scroll only the horizontal tab strip; scrollIntoView() would also scroll ancestor
+    // containers while the phone detail pane is sliding in.
+    const navRect = nav.getBoundingClientRect();
+    const itemRect = chosen.getBoundingClientRect();
+    if (itemRect.left < navRect.left) nav.scrollLeft -= navRect.left - itemRect.left;
+    else if (itemRect.right > navRect.right) nav.scrollLeft += itemRect.right - navRect.right;
   });
 });
 </script>

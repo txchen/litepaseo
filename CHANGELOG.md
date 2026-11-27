@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.5
+
+- **Fix mobile (iPhone PWA) horizontal viewport shift and chat header overflow**:
+  - Switched `.shell` (compact layout), `.main`, and `html`/`body` (`overflow-x`) to `overflow: clip` so `.shell` is no longer a programmatic scroll container that can get stuck with a non-zero `scrollLeft` across thread switches.
+  - Replaced `scrollIntoView()` in `ChatHeader.vue` with direct `tabsEl.scrollLeft` adjustment so switching sessions while the detail pane slides in never scrolls ancestor containers.
+  - Allowed `.session-stats-wrap`, `.session-stats-chip`, and `.chat-subagents` to shrink cleanly and tightened `.chat-head` spacing on narrow touch screens so the header never overflows the viewport.
+
 ## 0.14.4
 
 - **Accessible session switching when a workspace has many sessions**:
